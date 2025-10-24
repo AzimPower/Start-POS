@@ -1,0 +1,33 @@
+# Configuration CORS pour l'API
+<IfModule mod_headers.c>
+    Header always set Access-Control-Allow-Origin "*"
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+    Header always set Access-Control-Max-Age "3600"
+</IfModule>
+
+# Gestion des requêtes OPTIONS (preflight)
+RewriteEngine On
+RewriteCond %{REQUEST_METHOD} OPTIONS
+RewriteRule ^(.*)$ $1 [R=200,L]
+
+# Configuration PHP
+<IfModule mod_php.c>
+    php_value display_errors 1
+    php_value error_reporting E_ALL
+</IfModule>
+
+# Types MIME
+AddType application/json .json
+AddType text/plain .txt
+
+# Sécurité
+<Files "*.sql">
+    Order allow,deny
+    Deny from all
+</Files>
+
+<Files "config.php">
+    Order allow,deny
+    Deny from all
+</Files>
