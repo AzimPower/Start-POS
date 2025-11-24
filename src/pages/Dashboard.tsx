@@ -4,6 +4,7 @@ import { useNetwork } from '@/hooks/useNetwork';
 import { getDB } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import SalesChart from '@/components/SalesChart';
+import ProductSalesChart from '@/components/ProductSalesChart';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -24,9 +25,11 @@ export default function Dashboard() {
   const [endTime, setEndTime] = useState<string>('23:59');
   const [showPeriodSelector, setShowPeriodSelector] = useState(false);
   const [chartType, setChartType] = useState<'line' | 'bar'>('bar');
+  const [productChartType, setProductChartType] = useState<'bar' | 'pie'>('bar');
   const [groupBy, setGroupBy] = useState<'minutes' | 'hours' | 'days' | 'weeks' | 'months'>('hours');
   // Données dynamiques filtrées par période
   const [chartData, setChartData] = useState<any[]>([]);
+  const [salesByProduct, setSalesByProduct] = useState<any[]>([]);
   const [recapStats, setRecapStats] = useState<any>({
     ventesBrutes: 0,
     remboursements: 0,
@@ -153,18 +156,84 @@ export default function Dashboard() {
       if (!resp.ok) throw new Error('API error');
       const json = await resp.json();
       if (json.chartData) setChartData(json.chartData);
+      if (json.salesByProduct) setSalesByProduct(json.salesByProduct);
       if (json.recapStats) {
-        // Fusionne les valeurs locales de surplus/manque si elles existent
-        setRecapStats((prev: any) => ({
-          ...json.recapStats,
-          surplus: prev.surplus,
-          manque: prev.manque,
-        }));
+        // Calculer surplus/manque localement pour la période sélectionnée
+        try {
+          const local = await computeSurplusManqueForRange(start, end);
+          setRecapStats({
+            ...json.recapStats,
+            surplus: local.surplus,
+            manque: local.manque,
+          });
+        } catch (e) {
+          // Si erreur, fallback aux valeurs du serveur (ou précédentes)
+          console.warn('Failed to compute local surplus/manque for range', e);
+          setRecapStats((prev: any) => ({
+            ...json.recapStats,
+            surplus: prev.surplus,
+            manque: prev.manque,
+          }));
+        }
       }
     } catch (err) {
       console.error('Failed to fetch server stats, falling back to local DB aggregation', err);
-      // Fallback: keep previous local aggregation behavior (not reimplemented here)
+      // Fallback: compute surplus/manque locally for the selected period
+      try {
+        const local = await computeSurplusManqueForRange(start, end);
+        setRecapStats((prev: any) => ({
+          ...prev,
+          surplus: local.surplus,
+          manque: local.manque,
+        }));
+      } catch (e) {
+        console.warn('Failed fallback local surplus/manque computation', e);
+      }
     }
+  }
+
+  // Calcule surplus et manque pour une plage donnée en interrogeant la DB locale.
+  // On filtre les shifts fermés dont `closedAt` est dans l'intervalle [start, end].
+  async function computeSurplusManqueForRange(startTs: number, endTs: number) {
+    const db = await getDB();
+    let allShifts = await db.getAll('shifts');
+    let closedShifts = allShifts.filter((s: any) => s.status === 'closed' && s.closedAt && s.closedAt >= startTs && s.closedAt <= endTs);
+    if (user?.role === 'cashier') {
+      closedShifts = closedShifts.filter((s: any) => s.userId === user.id);
+    } else if (user?.storeId) {
+      closedShifts = closedShifts.filter((s: any) => s.storeId === user.storeId);
+    }
+    let surplus = 0, manque = 0;
+    for (const shift of closedShifts) {
+      const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
+      let salesTotal = 0;
+      let expensesTotal = 0;
+      try {
+        const db2 = await getDB();
+        const sales = await db2.getAllFromIndex('sales', 'by-shift', shift.id);
+        // Exclure les ventes remboursées du calcul du manque
+        const validSales = sales.filter((sale: any) => !sale.refunded);
+        for (const sale of validSales) {
+          salesTotal += (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
+        }
+        const expenses = await db2.getAllFromIndex('expenses', 'by-shift', shift.id);
+        for (const ex of expenses) {
+          expensesTotal += (typeof ex.amount === 'number' && !isNaN(ex.amount)) ? Number(ex.amount) : (Number(ex.amount) || 0);
+        }
+      } catch (e) {
+        // ignore per-shift read errors
+      }
+      const expected = opening + salesTotal - expensesTotal;
+      let difference = null;
+      if (shift.closingAmount !== null && shift.closingAmount !== undefined) {
+        difference = Number(shift.closingAmount) - expected;
+      }
+      if (typeof difference === 'number' && !isNaN(difference)) {
+        if (difference > 0) surplus += difference;
+        if (difference < 0) manque += Math.abs(difference);
+      }
+    }
+    return { surplus, manque };
   }
   const { user } = useAuth();
   const [stats, setStats] = useState({
@@ -174,7 +243,7 @@ export default function Dashboard() {
     activeShift: null as any,
   });
 
-  const { isOnline } = useNetwork();
+  const { isBackendReachable } = useNetwork();
 
   const [cashierStats, setCashierStats] = useState({
     backendSales: 0,
@@ -399,11 +468,11 @@ export default function Dashboard() {
 
   // Recompute local cashier stats whenever connection status changes to offline
   useEffect(() => {
-    if (!isOnline && user?.role === 'cashier') {
+    if (!isBackendReachable && user?.role === 'cashier') {
       loadCashierStats();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline]);
+  }, [isBackendReachable]);
 
   const loadStats = async () => {
     const db = await getDB();
@@ -446,7 +515,9 @@ export default function Dashboard() {
       try {
         const db2 = await getDB();
         const sales = await db2.getAllFromIndex('sales', 'by-shift', shift.id);
-        for (const sale of sales) {
+        // Exclure les ventes remboursées du calcul du manque
+        const validSales = sales.filter((sale: any) => !sale.refunded);
+        for (const sale of validSales) {
           salesTotal += (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
         }
         const expenses = await db2.getAllFromIndex('expenses', 'by-shift', shift.id);
@@ -581,7 +652,7 @@ export default function Dashboard() {
       </div>
 
       {/* Récapitulatif des ventes admin (affiché uniquement en ligne) */}
-  {isOnline && (
+  {isBackendReachable && (
   <div className="grid gap-2 grid-cols-2 md:grid-cols-2 lg:grid-cols-3">
         {/* Optimisé mobile : moins de padding, texte plus petit, chiffres plus compacts */}
         <Card className="p-2 sm:p-4">
@@ -626,10 +697,14 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="px-2 py-1">
               {(() => {
-                const ventes = Number(recapStats.ventesBrutes) || 0;
+                // Exclure les tickets remboursés du calcul du coût des marchandises
+                // On suppose que recapStats.ventesBrutes et recapStats.margeBrute incluent tous les tickets, donc il faut soustraire les remboursés
+                // Si recapStats fournit déjà les montants hors remboursés, il suffit d'utiliser ceux-ci. Sinon, il faut ajuster ici.
+                // Pour une solution simple côté affichage, on suppose que recapStats.ventesBrutes inclut tout, donc on doit ignorer la part remboursée :
+                const ventes = (Number(recapStats.ventesBrutes) || 0) - (Number(recapStats.remboursements) || 0);
                 const marge = Number(recapStats.margeBrute) || 0;
                 const cost = ventes - marge;
-                // Calcul du pourcentage du coût des marchandises par rapport aux ventes brutes
+                // Calcul du pourcentage du coût des marchandises par rapport aux ventes brutes (hors remboursés)
                 const percent = ventes > 0 ? ((cost / ventes) * 100).toFixed(2) : '0.00';
                 return (
                   <>
@@ -646,13 +721,13 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="px-2 py-1">
             <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.margeBrute)} F</div>
-            <div className={`text-[11px] ${recapStats.margeBrutePourcent > 0 ? 'text-success' : 'text-muted-foreground'}`}>{recapStats.margeBrutePourcent > 0 ? `+${(typeof recapStats.margeBrutePourcent === 'number' ? recapStats.margeBrutePourcent : parseFloat(String(recapStats.margeBrutePourcent)) || 0).toFixed(2)}%` : '0%'}</div>
+            <div className={`text-[11px] ${recapStats.margeBrutePourcent > 0 ? 'text-success' : 'text-muted-foreground'}`}>{recapStats.margeBrutePourcent > 0 ? `${(typeof recapStats.margeBrutePourcent === 'number' ? recapStats.margeBrutePourcent : parseFloat(String(recapStats.margeBrutePourcent)) || 0).toFixed(2)}%` : '0%'}</div>
           </CardContent>
         </Card>
     </div>
   )}
 
-  {user?.role === 'cashier' && !isOnline && (
+  {user?.role === 'cashier' && !isBackendReachable && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
           <Card className="p-2">
             <CardHeader className="pb-1 px-2">
@@ -798,6 +873,43 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Graphique des ventes par produit */}
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <CardTitle className="text-base font-semibold">Ventes par produit</CardTitle>
+                <div className="flex gap-2">
+                  <Select value={productChartType} onValueChange={(value: 'bar' | 'pie') => setProductChartType(value)}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="bar">
+                        <div className="flex items-center gap-2">
+                          <BarChart3 className="w-4 h-4" />
+                          <span>Barres</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="pie">
+                        <div className="flex items-center gap-2">
+                          <span className="w-4 h-4 rounded-full bg-orange-500"></span>
+                          <span>Circulaire</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {salesByProduct && salesByProduct.length > 0 ? (
+                <ProductSalesChart data={salesByProduct} chartType={productChartType} />
+              ) : (
+                <div className="text-center text-muted-foreground py-8">Aucune donnée disponible</div>
+              )}
             </CardContent>
           </Card>
 

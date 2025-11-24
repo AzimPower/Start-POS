@@ -316,7 +316,7 @@ export default function CustomerReceipts() {
           <div>
             <h2>${store.name || 'Magasin'}</h2>
             <div>${store.address || ''}</div>
-            <div>Reçu N°: ${receiptNumber}</div>
+            <div>Recu N°: ${receiptNumber}</div>
             <div>Date: ${date.toLocaleString('fr-FR')}</div>
             <hr/>
             ${sale.items.map(it => `<div>${it.name} - ${it.quantity} x ${Math.round(it.price || 0)} = ${Math.round(it.total || 0)}</div>`).join('')}

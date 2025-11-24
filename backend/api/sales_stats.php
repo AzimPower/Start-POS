@@ -83,12 +83,21 @@ $rembStmt->execute($params);
 $rembRow = $rembStmt->fetch(PDO::FETCH_ASSOC);
 $remboursements = (float)($rembRow['remboursements'] ?? 0);
 
-// Calcul de la marge brute (basée sur price - costPrice) pour les articles vendus (exclure les ventes remboursées)
-$margeSql = "SELECT SUM( (CASE WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrute FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0" . ($userId ? ' AND s.userId = ?' : ($storeId ? ' AND s.storeId = ?' : ''));
+$margeSql = "SELECT SUM( (CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrute FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0" . ($userId ? ' AND s.userId = ?' : ($storeId ? ' AND s.storeId = ?' : ''));
 $margeStmt = $pdo->prepare($margeSql);
 $margeStmt->execute($params);
 $margeRow = $margeStmt->fetch(PDO::FETCH_ASSOC);
 $margeBrute = (float)($margeRow['margeBrute'] ?? 0);
+
+// Sales by product
+$productsSql = "SELECT p.name as productName, SUM(COALESCE(si.quantity,0)) as quantity, SUM(CAST(si.price AS DECIMAL(20,2)) * COALESCE(si.quantity,0)) as total FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0" . ($userId ? ' AND s.userId = ?' : ($storeId ? ' AND s.storeId = ?' : '')) . " GROUP BY p.name ORDER BY total DESC LIMIT 10";
+$productsStmt = $pdo->prepare($productsSql);
+$productsStmt->execute($params);
+$productsRows = $productsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+$salesByProduct = array_map(function($r) {
+    return ['name' => $r['productName'] ?? 'Unknown', 'quantity' => (int)$r['quantity'], 'total' => (float)$r['total']];
+}, $productsRows);
 
 // Surplus / Manque from shifts table
 $shiftsWhere = ' WHERE status = "closed" AND closedAt >= ? AND closedAt <= ?';
@@ -149,7 +158,7 @@ $evolSurplus = $surplus - $prevSurplus;
 $evolManque = $manque - $prevManque;
 
 // Calcul marge brute pour la période précédente
-$prevMargeSql = "SELECT SUM( (CASE WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrutePrev FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0" . ($userId ? ' AND s.userId = ?' : ($storeId ? ' AND s.storeId = ?' : ''));
+$prevMargeSql = "SELECT SUM( (CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrutePrev FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0" . ($userId ? ' AND s.userId = ?' : ($storeId ? ' AND s.storeId = ?' : ''));
 $prevMargeStmt = $pdo->prepare($prevMargeSql);
 $prevMargeStmt->execute($prevParams);
 $prevMargeRow = $prevMargeStmt->fetch(PDO::FETCH_ASSOC);
@@ -186,6 +195,6 @@ $recapStats = [
     'evolMargePercent' => $evolMargePercent,
 ];
 
-echo json_encode(['chartData' => $chartData, 'recapStats' => $recapStats]);
+echo json_encode(['chartData' => $chartData, 'recapStats' => $recapStats, 'salesByProduct' => $salesByProduct]);
 
 ?>

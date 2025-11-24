@@ -68,36 +68,88 @@ export default function Shifts() {
 
   // State to store computed expected/difference for closed shifts
   const [computedDiffs, setComputedDiffs] = useState<Record<string, {expected: number|null, difference: number|null}>>({});
+  // State to store total encaissé (cash+mobile) for each shift
+  const [encaisses, setEncaisses] = useState<Record<string, number>>({});
+  // State pour suivre la synchronisation
+  const [syncing, setSyncing] = useState(false);
 
-  // Recalculate expected/difference for all closed shifts when filteredShifts changes
+  // Recalculate expected/difference and encaissé for all shifts when filteredShifts changes
   useEffect(() => {
     let mounted = true;
     async function calcAll() {
+      // helper robust numeric parser to tolerate strings like "5 000"
+      const toNum = (v: any) => {
+        if (v === null || v === undefined) return 0;
+        if (typeof v === 'number' && !isNaN(v)) return v;
+        let s = String(v);
+        s = s.replace(/\u00A0|\u202F/g, '');
+        s = s.replace(/\s+/g, '');
+        s = s.replace(/,/g, '.');
+        s = s.replace(/[^0-9.\-]/g, '');
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
+      };
       const results: Record<string, {expected: number|null, difference: number|null}> = {};
+      const encaissesResults: Record<string, number> = {};
       for (const shift of filteredShifts) {
-        if (shift.status === 'closed' && shift.closingAmount !== null) {
-          try {
-            const db = await getDB();
-            const sales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
-            const expenses = await db.getAllFromIndex('expenses', 'by-shift', shift.id);
-            let salesTotal = 0;
-            let expensesTotal = 0;
-            for (const sale of sales) {
-              salesTotal += (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
+        try {
+          const db = await getDB();
+          const sales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
+          // Calcul encaissé (cash + mobile money) - ignorer les ventes remboursées
+          let cash = 0, mobile = 0;
+          for (const sale of sales) {
+            // Ignorer complètement les ventes remboursées
+            const isRefunded = Boolean(sale.refunded);
+            if (isRefunded) continue;
+            
+            let saleCash = 0, saleMobile = 0;
+            
+            // Priorité aux champs directs cashAmount et mobileMoneyAmount
+            if (sale.cashAmount !== undefined || sale.mobileMoneyAmount !== undefined) {
+              saleCash = toNum(sale.cashAmount || 0);
+              saleMobile = toNum(sale.mobileMoneyAmount || 0);
+            } else if (sale.payments && Array.isArray(sale.payments)) {
+              // Fallback: utiliser le tableau payments
+              for (const p of sale.payments) {
+                if (p.method === 'cash') saleCash += toNum(p.amount);
+                if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
+              }
+            } else {
+              // Dernière fallback: utiliser paymentMethod et total (ancienne logique)
+              if (sale.paymentMethod === 'cash') saleCash = toNum(sale.total);
+              if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
             }
-            for (const ex of expenses) {
-              expensesTotal += (typeof ex.amount === 'number' && !isNaN(ex.amount)) ? Number(ex.amount) : (Number(ex.amount) || 0);
+            
+            // Ajouter au total encaissé (ventes non remboursées seulement)
+            cash += saleCash;
+            mobile += saleMobile;
+          }
+          encaissesResults[shift.id] = cash + mobile;
+          // Calcul expected/difference (pour l'écart) - sans les dépenses
+          if (shift.status === 'closed' && shift.closingAmount !== null) {
+            let salesTotal = 0;
+            for (const sale of sales) {
+              // Ignorer complètement les ventes remboursées
+              const isRefunded = Boolean(sale.refunded);
+              if (isRefunded) continue;
+              salesTotal += toNum(sale.total);
             }
             const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
-            const expected = opening + salesTotal - expensesTotal;
+            const expected = opening + salesTotal; // Pas de déduction des dépenses
             const difference = Number(shift.closingAmount) - expected;
             results[shift.id] = {expected, difference};
-          } catch {
+          }
+        } catch {
+          encaissesResults[shift.id] = 0;
+          if (shift.status === 'closed' && shift.closingAmount !== null) {
             results[shift.id] = {expected: null, difference: null};
           }
         }
       }
-      if (mounted) setComputedDiffs(results);
+      if (mounted) {
+        setComputedDiffs(results);
+        setEncaisses(encaissesResults);
+      }
     }
     calcAll();
     return () => { mounted = false; };
@@ -114,9 +166,65 @@ export default function Shifts() {
     setCashiers(filtered);
   };
 
+  // Fonction pour nettoyer les shifts multiples ouverts d'un même utilisateur dans le même magasin
+  const cleanupMultipleOpenShifts = async () => {
+    try {
+      const db = await getDB();
+      const allShifts = await db.getAll('shifts');
+      
+      // Grouper les shifts ouverts par utilisateur ET par magasin
+      const openShiftsByUserStore: Record<string, any[]> = {};
+      
+      allShifts.forEach(shift => {
+        if (shift.status === 'open') {
+          // Créer une clé unique combinant userId et storeId
+          const key = `${shift.userId}_${shift.storeId}`;
+          if (!openShiftsByUserStore[key]) {
+            openShiftsByUserStore[key] = [];
+          }
+          openShiftsByUserStore[key].push(shift);
+        }
+      });
+      
+      // Pour chaque combinaison utilisateur-magasin ayant plusieurs shifts ouverts, fermer les plus anciens
+      for (const userStoreKey in openShiftsByUserStore) {
+        const userStoreShifts = openShiftsByUserStore[userStoreKey];
+        if (userStoreShifts.length > 1) {
+          const [userId, storeId] = userStoreKey.split('_');
+          console.log(`⚠️ Utilisateur ${userId} a ${userStoreShifts.length} shifts ouverts dans le magasin ${storeId}. Fermeture automatique des plus anciens...`);
+          
+          // Trier par date d'ouverture (le plus récent en premier)
+          userStoreShifts.sort((a, b) => b.openedAt - a.openedAt);
+          
+          // Garder seulement le plus récent, fermer les autres
+          for (let i = 1; i < userStoreShifts.length; i++) {
+            const oldShift = userStoreShifts[i];
+            const closedShift = {
+              ...oldShift,
+              status: 'closed',
+              closedAt: Date.now(),
+              closingAmount: oldShift.openingAmount || 0, // Fermer avec le montant d'ouverture par défaut
+              expectedAmount: oldShift.openingAmount || 0,
+              difference: 0
+            };
+            
+            await db.put('shifts', closedShift);
+            console.log(`Shift automatiquement fermé: ${oldShift.id} pour l'utilisateur ${userId} dans le magasin ${storeId}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erreur lors du nettoyage des shifts multiples:', error);
+    }
+  };
+
   useEffect(() => {
-    loadShifts();
-    loadCashiers();
+    const initializeData = async () => {
+      await cleanupMultipleOpenShifts(); // Nettoyer d'abord les shifts multiples
+      await loadShifts();
+      await loadCashiers();
+    };
+    initializeData();
   }, []);
 
   useEffect(() => {
@@ -148,27 +256,93 @@ export default function Shifts() {
       
       // Si en ligne, charger depuis le backend et synchroniser
       if (isOnline) {
+        setSyncing(true);
         try {
           // Charger les shifts depuis le backend
           let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php';
           if (user?.storeId) url += `?storeId=${user.storeId}`;
           const response = await fetch(url);
+          
           if (response.ok) {
-            const backendShifts = await response.json();
-            // Mettre à jour la base locale
-            const tx = db.transaction('shifts', 'readwrite');
-            await Promise.all([
-              ...backendShifts.map(s => tx.store.put(s)),
-              tx.done
-            ]);
+            // Vérifier que la réponse contient du JSON valide
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+              console.warn('Réponse backend non-JSON:', contentType);
+              throw new Error('Réponse non-JSON du backend');
+            }
+            
+            const text = await response.text();
+            if (!text || text.trim().length === 0) {
+              console.warn('Réponse backend vide');
+              throw new Error('Réponse vide du backend');
+            }
+            
+            let backendShifts;
+            try {
+              backendShifts = JSON.parse(text);
+            } catch (parseError) {
+              console.error('Erreur de parsing JSON:', parseError);
+              console.error('Contenu reçu:', text.substring(0, 200)); // Afficher les premiers 200 caractères
+              throw new Error('JSON invalide du backend');
+            }
+            
+            // Vérifier que c'est un tableau
+            if (!Array.isArray(backendShifts)) {
+              console.warn('Le backend n\'a pas retourné un tableau:', backendShifts);
+              backendShifts = [];
+            }
+            
+            // Mettre à jour la base locale des shifts
+            if (backendShifts.length > 0) {
+              const tx = db.transaction('shifts', 'readwrite');
+              await Promise.all([
+                ...backendShifts.map(s => tx.store.put(s)),
+                tx.done
+              ]);
+            }
+
+            // Synchroniser aussi les ventes pour avoir les bons montants encaissés
+            try {
+              let salesUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php';
+              if (user?.storeId) salesUrl += `?storeId=${user.storeId}`;
+              const salesResponse = await fetch(salesUrl);
+              if (salesResponse.ok) {
+                const salesText = await salesResponse.text();
+                if (salesText && salesText.trim().length > 0) {
+                  try {
+                    const backendSales = JSON.parse(salesText);
+                    if (Array.isArray(backendSales) && backendSales.length > 0) {
+                      const salesTx = db.transaction('sales', 'readwrite');
+                      await Promise.all([
+                        ...backendSales.map(s => salesTx.store.put(s)),
+                        salesTx.done
+                      ]);
+                      console.log(`✅ ${backendSales.length} ventes synchronisées depuis le backend`);
+                    }
+                  } catch (salesParseError) {
+                    console.warn('Erreur parsing JSON ventes:', salesParseError);
+                  }
+                }
+              }
+            } catch (salesError) {
+              console.warn('Erreur sync ventes:', salesError);
+            }
+
+            // Note: Les dépenses ne sont plus synchronisées car non nécessaires pour les calculs de shifts
+            
             setLoadedCount(0);
             setHasMore(true);
             await loadShiftsPage(db, 0, pageSize, true);
+          } else {
+            console.warn(`Réponse backend non-ok: ${response.status} ${response.statusText}`);
+            throw new Error(`Erreur HTTP ${response.status}`);
           }
         } catch (error) {
           console.error('Erreur de synchronisation avec le backend:', error);
           // En cas d'erreur, charger depuis la base locale (paged)
           await loadShiftsPage(db, 0, pageSize, true);
+        } finally {
+          setSyncing(false);
         }
       } else {
         // Hors ligne : charger depuis la base locale (paged)
@@ -289,23 +463,70 @@ export default function Shifts() {
       const user = await db.get('users', shift.userId);
       const cashier = user?.username || '-';
 
-      // compute payments like in ShiftReceiptDetails
+      // Utiliser les montants saisis lors de la fermeture du shift
       const sales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
       const toNum = (v: any) => {
         if (typeof v === 'number' && !isNaN(v)) return v;
         const n = Number(v);
         return !isNaN(n) ? n : 0;
       };
+      
       let cash = 0, mobile = 0;
-      for (const s of sales) {
-        if (s.payments && Array.isArray(s.payments)) {
-          for (const p of s.payments) {
-            if (p.method === 'cash') cash += toNum(p.amount);
-            if (p.method === 'mobile_money') mobile += toNum(p.amount);
+      
+      // Priorité aux montants saisis lors de la fermeture du shift
+      if (shift.cashAmount !== undefined || shift.mobileMoneyAmount !== undefined) {
+        cash = toNum(shift.cashAmount || 0);
+        mobile = toNum(shift.mobileMoneyAmount || 0);
+      } else {
+        // Fallback: calculer à partir des ventes (ancien comportement)
+        for (const s of sales) {
+          const isRefunded = Boolean(s.refunded);
+          if (isRefunded) continue; // Ignorer les ventes remboursées
+          
+          let saleCash = 0, saleMobile = 0;
+          
+          if (s.cashAmount !== undefined || s.mobileMoneyAmount !== undefined) {
+            saleCash = toNum(s.cashAmount || 0);
+            saleMobile = toNum(s.mobileMoneyAmount || 0);
+          } else if (s.payments && Array.isArray(s.payments)) {
+            for (const p of s.payments) {
+              if (p.method === 'cash') saleCash += toNum(p.amount);
+              if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
+            }
+          } else {
+            if (s.paymentMethod === 'cash') saleCash = toNum(s.total);
+            if (s.paymentMethod === 'mobile_money') saleMobile = toNum(s.total);
           }
-        } else {
-          if (s.paymentMethod === 'cash') cash += toNum(s.total);
-          if (s.paymentMethod === 'mobile_money') mobile += toNum(s.total);
+          
+          cash += saleCash;
+          mobile += saleMobile;
+        }
+      }
+
+      // Calculer les remboursements séparément pour affichage
+      let refundsCash = 0, refundsMobile = 0;
+      
+      for (const s of sales) {
+        const isRefunded = Boolean(s.refunded);
+        
+        if (isRefunded) {
+          let saleCash = 0, saleMobile = 0;
+          
+          if (s.cashAmount !== undefined || s.mobileMoneyAmount !== undefined) {
+            saleCash = toNum(s.cashAmount || 0);
+            saleMobile = toNum(s.mobileMoneyAmount || 0);
+          } else if (s.payments && Array.isArray(s.payments)) {
+            for (const p of s.payments) {
+              if (p.method === 'cash') saleCash += toNum(p.amount);
+              if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
+            }
+          } else {
+            if (s.paymentMethod === 'cash') saleCash = toNum(s.total);
+            if (s.paymentMethod === 'mobile_money') saleMobile = toNum(s.total);
+          }
+          
+          refundsCash += saleCash;
+          refundsMobile += saleMobile;
         }
       }
 
@@ -324,16 +545,32 @@ export default function Shifts() {
       lines.push('--------------------------------');
       lines.push(NativePrinter.formatColumns('Montant d\'ouverture :', `${formatMoney(shift.openingAmount)} FCFA`, width));
       lines.push(NativePrinter.formatColumns('Montant de fermeture :', `${shift.closingAmount !== null ? formatMoney(shift.closingAmount) : '-'} FCFA`, width));
+      
+      // Afficher les remboursements s'il y en a
+      const totalRefunds = refundsCash + refundsMobile;
+      if (totalRefunds > 0) {
+        lines.push('');
+        lines.push(NativePrinter.formatColumns('Remboursements :', '', width));
+        if (refundsCash > 0) {
+          lines.push(NativePrinter.formatColumns('  Especes :', `${formatMoney(refundsCash)} FCFA`, width));
+        }
+        if (refundsMobile > 0) {
+          lines.push(NativePrinter.formatColumns('  Mobile Money :', `${formatMoney(refundsMobile)} FCFA`, width));
+        }
+        lines.push(NativePrinter.formatColumns('  Total rembourse :', `${formatMoney(totalRefunds)} FCFA`, width));
+      }
+      
+      lines.push('--------------------------------');
       lines.push(NativePrinter.formatColumns('Montant attendu :', `${shift.expectedAmount !== null ? formatMoney(shift.expectedAmount) : '-'} FCFA`, width));
-      lines.push(NativePrinter.formatColumns('Écart :', `${shift.difference !== null ? (shift.difference >= 0 ? '+' : '') + formatMoney(shift.difference) : '-'} FCFA`, width));
+      lines.push(NativePrinter.formatColumns('Ecart :', `${shift.difference !== null ? (shift.difference >= 0 ? '+' : '') + formatMoney(shift.difference) : '-'} FCFA`, width));
       // Duration
       const durationMs = (shift.closedAt || Date.now()) - shift.openedAt;
       const h = Math.floor(durationMs / (1000*60*60));
       const m = Math.floor((durationMs % (1000*60*60)) / (1000*60));
-      lines.push(NativePrinter.formatColumns('Durée :', `${h}h ${m}min`, width));
-      lines.push('');
+      lines.push(NativePrinter.formatColumns('Duree :', `${h}h ${m}min`, width));
+      lines.push('--------------------------------');
       lines.push(NativePrinter.formatColumns('Montant encaissé :', '', width));
-      lines.push(NativePrinter.formatColumns('Espèces :', `${formatMoney(cash)} FCFA`, width));
+      lines.push(NativePrinter.formatColumns('Especes :', `${formatMoney(cash)} FCFA`, width));
       lines.push(NativePrinter.formatColumns('Mobile Money :', `${formatMoney(mobile)} FCFA`, width));
       lines.push(NativePrinter.formatColumns('Total encaissé :', `${formatMoney(totalPaid)} FCFA`, width));
       lines.push('');
@@ -358,7 +595,7 @@ export default function Shifts() {
             <pre>${lines.join('\n')}</pre>
           </div>
         `;
-        const html = buildReceiptHtml(tmp, 'Rapport shift');
+        const html = buildReceiptHtml(tmp, 'Rapport service');
         const used = await tryNativePrint(html, `Rapport-${shift.id}`);
         if (!used) console.warn('Native print not available');
       }
@@ -393,6 +630,20 @@ export default function Shifts() {
     try {
       setLoading(true);
       const db = await getDB();
+      
+      // Vérifier qu'il n'y a pas déjà un shift ouvert pour cet utilisateur dans ce magasin
+      const existingShifts = await db.getAll('shifts');
+      const userOpenShift = existingShifts.find(s => 
+        s.userId === user!.id && 
+        s.status === 'open' && 
+        s.storeId === user!.storeId
+      );
+      
+      if (userOpenShift) {
+        toast.error('Vous avez déjà un shift ouvert dans ce magasin. Fermez-le avant d\'en ouvrir un nouveau.');
+        setLoading(false);
+        return;
+      }
       const newShift: Shift = {
         id: generateId(),
         userId: user!.id,
@@ -475,12 +726,28 @@ export default function Shifts() {
       const amount = Math.round(cash + mobile + other);
       const db = await getDB();
       
-      // Calculate expected amount
+      // Calculate expected amount - sans les dépenses
       const sales = await db.getAllFromIndex('sales', 'by-shift', activeShift.id);
-      const expenses = await db.getAllFromIndex('expenses', 'by-shift', activeShift.id);
-      const salesTotal = sales.reduce((sum, sale) => sum + sale.total, 0);
-      const expensesTotal = expenses.reduce((sum, expense) => sum + expense.amount, 0);
-      const expectedAmount = activeShift.openingAmount + salesTotal - expensesTotal;
+      // robust numeric parser to tolerate strings like "5 000", null, undefined, etc.
+      const toNum = (v: any) => {
+        if (v === null || v === undefined) return 0;
+        if (typeof v === 'number' && !isNaN(v)) return v;
+        let s = String(v);
+        s = s.replace(/\u00A0|\u202F/g, '');
+        s = s.replace(/\s+/g, '');
+        s = s.replace(/,/g, '.');
+        s = s.replace(/[^0-9.\-]/g, '');
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
+      };
+      let salesTotal = 0;
+      for (const sale of sales) {
+        // Ignorer complètement les ventes remboursées
+        const isRefunded = Boolean(sale.refunded);
+        if (isRefunded) continue;
+        salesTotal += toNum(sale.total ?? 0);
+      }
+      const expectedAmount = (activeShift.openingAmount ? Number(activeShift.openingAmount) : 0) + salesTotal; // Pas de déduction des dépenses
       const difference = amount - expectedAmount;
       
       const updatedShift: Shift = {
@@ -578,7 +845,7 @@ export default function Shifts() {
   <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Gestion des Shifts</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold">Gestion des Services</h1>
           <p className="text-muted-foreground mt-1 text-sm sm:text-base">Suivez vos sessions de caisse</p>
           {/* Network status is shown in the header; duplicated controls removed here. */}
         </div>
@@ -721,7 +988,7 @@ export default function Shifts() {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-3">
-            <CardTitle>Historique des shifts</CardTitle>
+            <CardTitle>Historique des services</CardTitle>
             {loading && (
               <div className="flex items-center text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin mr-1" />
@@ -790,16 +1057,16 @@ export default function Shifts() {
               </Drawer>
             </div>
           ) : (
-            <div className="flex flex-wrap gap-2 mt-4 items-center">
+            <div className="flex gap-2 mt-4 items-center flex-nowrap">
               <Input
                 placeholder="Rechercher par caissier ou date..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-full sm:max-w-xs"
+                className="flex-1 min-w-0"
               />
               {user?.role !== 'cashier' && (
                 <Select value={selectedCashier} onValueChange={setSelectedCashier}>
-                  <SelectTrigger className="w-full sm:max-w-xs">
+                  <SelectTrigger className="w-48 flex-shrink-0">
                     <SelectValue placeholder="Filtrer par caissier" />
                   </SelectTrigger>
                   <SelectContent>
@@ -811,7 +1078,7 @@ export default function Shifts() {
                 </Select>
               )}
               <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                <SelectTrigger className="w-full sm:max-w-xs">
+                <SelectTrigger className="w-40 flex-shrink-0">
                   <SelectValue placeholder="Statut" />
                 </SelectTrigger>
                 <SelectContent>
@@ -829,23 +1096,31 @@ export default function Shifts() {
             {isMobile ? (
               // Mobile: render compact cards instead of wide table
               <div className="space-y-3 p-2">
-                {filteredShifts.length === 0 ? (
-                  loading ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <Loader2 className="w-10 h-10 mx-auto mb-2 animate-spin opacity-60" />
-                      <p>Chargement des shifts...</p>
+                {loading ? (
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <div key={`skeleton-${i}`} className="p-3 border rounded-lg bg-white animate-pulse">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="h-5 bg-gray-200 rounded w-32 mb-2" />
+                          <div className="h-4 bg-gray-200 rounded w-20 mb-2" />
+                          <div className="h-4 bg-gray-200 rounded w-16 mb-2" />
+                        </div>
+                        <div className="ml-3 flex flex-col items-end gap-2">
+                          <div className="h-8 w-8 bg-gray-200 rounded-full" />
+                        </div>
+                      </div>
                     </div>
-                  ) : (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p>Aucun shift enregistré</p>
-                    </div>
-                  )
+                  ))
+                ) : filteredShifts.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>Aucun service enregistré</p>
+                  </div>
                 ) : (
                   filteredShifts.map(shift => {
                     const cashier = cashiers.find(u => u.id === shift.userId);
                     const cashierName = cashier ? cashier.username : (user?.username || '-');
-                    const realAmount = (shift.status === 'closed' && shift.closingAmount !== null) ? shift.closingAmount : shift.openingAmount;
+                    const encaissé = encaisses[shift.id] ?? 0;
                     const computed = computedDiffs[shift.id];
                     return (
                       <div key={shift.id} className="p-3 border rounded-lg bg-white">
@@ -858,7 +1133,7 @@ export default function Shifts() {
                                 {shift.status === 'open' ? 'Ouvert' : 'Fermé'}
                               </Badge>
                             </div>
-                            <div className="text-sm mt-2">{Math.round(realAmount)} FCFA</div>
+                            <div className="text-sm mt-2">{(shift.status === 'open' && user?.role !== 'admin') ? '***' : Math.round(encaissé)} FCFA</div>
                             {/* Ajout de l'écart sur mobile */}
                             {shift.status === 'closed' && shift.closingAmount !== null && computed && typeof computed.difference === 'number' && !isNaN(computed.difference) ? (
                               <div className={computed.difference >= 0 ? 'text-success text-xs mt-1' : 'text-destructive text-xs mt-1'}>
@@ -901,7 +1176,19 @@ export default function Shifts() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredShifts.length === 0 ? (
+                  {loading ? (
+                    Array.from({ length: 6 }).map((_, i) => (
+                      <TableRow key={`skeleton-${i}`}>
+                        <TableCell colSpan={8} className="py-8">
+                          <div className="flex items-center gap-3 animate-pulse">
+                            <div className="h-5 bg-gray-200 rounded w-32" />
+                            <div className="h-4 bg-gray-200 rounded w-20" />
+                            <div className="h-4 bg-gray-200 rounded w-16" />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : filteredShifts.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                         <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
@@ -911,14 +1198,13 @@ export default function Shifts() {
                   ) : (
                     filteredShifts.map((shift) => {
                       const cashier = cashiers.find(u => u.id === shift.userId);
-                      let realAmount = shift.openingAmount;
-                      if (shift.status === 'closed' && shift.closingAmount !== null) {
-                        realAmount = shift.closingAmount;
-                      }
+                      // Montant encaissé = total encaissé (cash + mobile money) sur les ventes du shift
+                      const encaissé = encaisses[shift.id] ?? 0;
                       const cashierName = cashier ? cashier.username : (user?.username || '-');
                       const computed = computedDiffs[shift.id];
                       return (
                         <TableRow key={shift.id}>
+                          {/* ...existing code for shift row... */}
                           <TableCell>
                             <div className="font-medium">{formatDate(shift.openedAt)}</div>
                             {isMobile && (
@@ -926,7 +1212,7 @@ export default function Shifts() {
                                 <div>{shift.closedAt ? formatDate(shift.closedAt) : '-'}</div>
                                 <div className="truncate">{cashierName}</div>
                                 <div className="text-xs">
-                                  {Math.round(realAmount)} FCFA • {shift.status === 'open' ? 'Ouvert' : 'Fermé'}
+                                  {(shift.status === 'open' && user?.role !== 'admin') ? '***' : Math.round(encaissé)} FCFA • {shift.status === 'open' ? 'Ouvert' : 'Fermé'}
                                 </div>
                               </div>
                             )}
@@ -948,7 +1234,7 @@ export default function Shifts() {
                             </Badge>
                           </TableCell>
                           <TableCell className="hidden md:table-cell">{cashierName}</TableCell>
-                          <TableCell>{Math.round(realAmount)} FCFA</TableCell>
+                          <TableCell>{(shift.status === 'open' && user?.role !== 'admin') ? '***' : Math.round(encaissé)} FCFA</TableCell>
                           <TableCell>
                             {shift.status === 'open' && user?.role !== 'admin' ? (
                               <div className="text-xs text-muted-foreground">Accès restreint</div>

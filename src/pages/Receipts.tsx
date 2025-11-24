@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
@@ -54,7 +55,10 @@ interface Sale {
 
 export default function Receipts() {
   const [shifts, setShifts] = useState<any[]>([]);
+  const [activeShift, setActiveShift] = useState<any>(null);
+  const [shiftsChecked, setShiftsChecked] = useState(false);
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { isOnline, manualSync } = useNetwork();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
@@ -74,7 +78,35 @@ export default function Receipts() {
   const [saleToRefund, setSaleToRefund] = useState<Sale | null>(null);
 
   useEffect(() => {
-    loadData();
+    // Check if the user has an active (open) shift, but load data regardless
+    let cancelled = false;
+    const checkShiftAndLoad = async () => {
+      setShiftsChecked(false);
+      let userShift: any = null;
+      try {
+        const db = await getDB();
+        const shiftsOpen = await db.getAllFromIndex('shifts', 'by-status', 'open');
+        userShift = shiftsOpen.find((s: any) => s.userId === user?.id);
+        if (!cancelled) setActiveShift(userShift);
+      } catch (e) {
+        console.error('Erreur vérification shift:', e);
+        if (!cancelled) setActiveShift(null);
+      } finally {
+        if (!cancelled) setShiftsChecked(true);
+      }
+
+      // Load data regardless of shift status to show existing receipts
+      try {
+        if (!cancelled) {
+          await loadData();
+        }
+      } catch (e) {
+        console.error('Erreur lors du chargement initial:', e);
+      }
+    };
+
+    checkShiftAndLoad();
+    return () => { cancelled = true; };
   }, [user]);
 
   // we'll lazy-import getPendingSyncCount when needed to avoid circular imports
@@ -135,8 +167,16 @@ export default function Receipts() {
   };
 
   const loadFromLocal = async (db: any) => {
-    // by default load the first page
-    return loadSalesPage(db, 0, pageSize, true);
+    // by default load the first page, ensuring we have data
+    const result = await loadSalesPage(db, 0, pageSize, true);
+    // If no results from pagination, try loading all and filtering
+    if (result.length === 0) {
+      const allSales = await db.getAll('sales');
+      if (allSales.length > 0) {
+        await processSales(allSales, db);
+      }
+    }
+    return result;
   };
 
   const loadSalesPage = async (db: any, offset: number, limit: number, reset = false) => {
@@ -494,7 +534,6 @@ export default function Receipts() {
       default: return method;
     }
   };
-
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <Card>
@@ -544,16 +583,8 @@ export default function Receipts() {
           </div>
         </CardHeader>
         <CardContent className="p-0 sm:p-6">
-          {loading ? (
-            <div className="p-6 flex items-center justify-center">
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                <div className="animate-spin h-5 w-5 border-2 border-gray-300 border-t-transparent rounded-full" />
-                <div>Chargement des reçus...</div>
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-                <Table>
+          <div className="overflow-x-auto">
+            <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>N° Reçu</TableHead>
@@ -567,102 +598,127 @@ export default function Receipts() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredSales.map((sale) => {
-                  const store = stores.find(s => s.id === sale.storeId);
-                  const cashier = users.find(u => u.id === sale.userId);
-                  const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
-                  
-                  return (
-                    <TableRow key={sale.id} className={sale.refunded ? 'opacity-50' : ''}>
-                      <TableCell className="font-medium">
-                        <div>
-                          <div className="font-medium">{receiptNumber}</div>
-                          {isMobile && (
-                            <div className="text-sm text-muted-foreground mt-1 space-y-1">
-                              <div>
-                                {new Date(sale.createdAt).toLocaleDateString('fr-FR', {
-                                  day: '2-digit',
-                                  month: '2-digit',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}
-                              </div>
-                              {store && <div className="text-xs">{store.name}</div>}
-                              <div className="text-xs">
-                                {sale.items?.length || 0} article{(sale.items?.length || 0) > 1 ? 's' : ''} • {getPaymentMethodText(sale.paymentMethod)}
-                              </div>
-                              {sale.refunded ? (
-                                <div className="text-xs text-destructive font-medium">Remboursé</div>
-                              ) : null}
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        {new Date(sale.createdAt).toLocaleDateString('fr-FR', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">{cashier?.username || cashier?.phone || '-'}</TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        {sale.items?.length || 0} article{(sale.items?.length || 0) > 1 ? 's' : ''}
-                      </TableCell>
-                      {user?.role !== 'cashier' && (
-                        <TableCell className="font-medium">{Number(sale.total).toFixed(0)} FCFA</TableCell>
-                      )}
-                      <TableCell className="hidden md:table-cell">{getPaymentMethodText(sale.paymentMethod)}</TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        {sale.refunded ? (
-                          <span className="text-destructive font-medium">Remboursé</span>
-                        ) : (
-                          <span className="text-green-600 font-medium">Payé</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          {user?.role !== 'cashier' && (
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => printSaleDirect(sale)}
-                              title="Imprimer"
-                            >
-                              <Printer className="w-4 h-4" />
-                            </Button>
-                          )}
-                          {!sale.refunded && (() => {
-                            const shift = shifts.find(s => s.id === sale.shiftId);
-                            const isClosed = shift && shift.status === 'closed';
-                            return (
-                              <Button
-                                variant="destructive"
-                                size="icon"
-                                disabled={isClosed || loading}
-                                title={isClosed ? 'Impossible : shift fermé' : 'Rembourser'}
-                                onClick={() => {
-                                  if (!isClosed) {
-                                    setSaleToRefund(sale);
-                                    setShowRefundDialog(true);
-                                  }
-                                }}
-                              >
-                                <Undo2 className="w-4 h-4" />
-                              </Button>
-                            );
-                          })()}
+                {loading ? (
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <TableRow key={`skeleton-${i}`}>
+                      <TableCell colSpan={8} className="py-8">
+                        <div className="flex items-center gap-3 animate-pulse">
+                          <div className="h-5 bg-gray-200 rounded w-32" />
+                          <div className="h-4 bg-gray-200 rounded w-20" />
+                          <div className="h-4 bg-gray-200 rounded w-16" />
                         </div>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
+                  ))
+                ) : filteredSales.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                      <Search className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <p>{search ? 'Aucun reçu trouvé pour cette recherche' : 'Aucun reçu enregistré'}</p>
+                      {!search && shiftsChecked && !activeShift && (
+                        <p className="text-sm mt-2">
+                          Les nouveaux reçus nécessitent un shift ouvert
+                        </p>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredSales.map((sale) => {
+                    const store = stores.find(s => s.id === sale.storeId);
+                    const cashier = users.find(u => u.id === sale.userId);
+                    const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
+                    // ...existing code for receipt row...
+                    return (
+                      <TableRow key={sale.id} className={sale.refunded ? 'opacity-50' : ''}>
+                        <TableCell className="font-medium">
+                          <div>
+                            <div className="font-medium">{receiptNumber}</div>
+                            {isMobile && (
+                              <div className="text-sm text-muted-foreground mt-1 space-y-1">
+                                <div>
+                                  {new Date(sale.createdAt).toLocaleDateString('fr-FR', {
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </div>
+                                {store && <div className="text-xs">{store.name}</div>}
+                                <div className="text-xs">
+                                  {sale.items?.length || 0} article{(sale.items?.length || 0) > 1 ? 's' : ''} • {getPaymentMethodText(sale.paymentMethod)}
+                                </div>
+                                {sale.refunded ? (
+                                  <div className="text-xs text-destructive font-medium">Remboursé</div>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          {new Date(sale.createdAt).toLocaleDateString('fr-FR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">{cashier?.username || cashier?.phone || '-'}</TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          {sale.items?.length || 0} article{(sale.items?.length || 0) > 1 ? 's' : ''}
+                        </TableCell>
+                        {user?.role !== 'cashier' && (
+                          <TableCell className="font-medium">{Number(sale.total).toFixed(0)} FCFA</TableCell>
+                        )}
+                        <TableCell className="hidden md:table-cell">{getPaymentMethodText(sale.paymentMethod)}</TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          {sale.refunded ? (
+                            <span className="text-destructive font-medium">Remboursé</span>
+                          ) : (
+                            <span className="text-green-600 font-medium">Payé</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            {user?.role !== 'cashier' && (
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => printSaleDirect(sale)}
+                                title="Imprimer"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {!sale.refunded && (() => {
+                              const shift = shifts.find(s => s.id === sale.shiftId);
+                              const isClosed = shift && shift.status === 'closed';
+                              return (
+                                <Button
+                                  variant="destructive"
+                                  size="icon"
+                                  disabled={isClosed || loading}
+                                  title={isClosed ? 'Impossible : shift fermé' : 'Rembourser'}
+                                  onClick={() => {
+                                    if (!isClosed) {
+                                      setSaleToRefund(sale);
+                                      setShowRefundDialog(true);
+                                    }
+                                  }}
+                                >
+                                  <Undo2 className="w-4 h-4" />
+                                </Button>
+                              );
+                            })()}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
               </TableBody>
-              </Table>
-            </div>
-          )}
+            </Table>
+          </div>
         </CardContent>
       </Card>
 

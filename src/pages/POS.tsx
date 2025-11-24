@@ -83,13 +83,14 @@ export default function POS() {
   const [newCustomerEmail, setNewCustomerEmail] = useState('');
   const [newCustomerAddress, setNewCustomerAddress] = useState('');
   const [newCustomerNotes, setNewCustomerNotes] = useState('');
+  const [addCustomerSubmitting, setAddCustomerSubmitting] = useState(false);
   const [stockWarning, setStockWarning] = useState<{ open: boolean, products: string[] }>({ open: false, products: [] });
   const [customPriceDialog, setCustomPriceDialog] = useState<{ open: boolean, product: Product | null }>({ open: false, product: null });
   const [variablePriceDialog, setVariablePriceDialog] = useState<{ open: boolean, product: Product | null }>({ open: false, product: null });
   const [customPrice, setCustomPrice] = useState('');
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { isOnline, manualSync } = useNetwork();
+  const { isBackendReachable, manualSync } = useNetwork();
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
@@ -145,18 +146,18 @@ export default function POS() {
   useEffect(() => {
     // Only load data when we have a logged-in user. Avoid reloading on every
     // navigation: use loadedOnceRef to load only once per session. If the app
-    // goes offline -> online, reload to sync changes.
+    // goes offline -> backend reachable, reload to sync changes.
     if (!user) return;
 
-    const shouldReload = !loadedOnceRef.current || isOnline;
+    const shouldReload = !loadedOnceRef.current || isBackendReachable;
     if (!shouldReload) return;
 
-    // If we're reloading due to going online, allow it. If first load, set flag.
+    // If we're reloading due to going backend reachable, allow it. If first load, set flag.
     loadData();
     loadCategories();
     loadDraftSales();
     loadedOnceRef.current = true;
-  }, [user, isOnline]);
+  }, [user, isBackendReachable]);
 
   // When payment dialog opens, keep client input readonly to avoid automatic
   // focusing/keyboard on mobile. It will be enabled when the user explicitly
@@ -197,7 +198,7 @@ export default function POS() {
       const db = await getDB();
       // If local DB seems empty (user deleted it), and we're online, fetch all
       // main tables from backend to repopulate the local DB before using it.
-      if (isOnline) {
+    if (isBackendReachable) {
         try {
           const productsCount = await db.count('products');
           const customersCount = await db.count('customers');
@@ -219,8 +220,8 @@ export default function POS() {
       await loadLocalData(db);
       await updatePendingSyncCount();
 
-      // 2. Synchroniser en arrière-plan si en ligne
-      if (isOnline) {
+  // 2. Synchroniser en arrière-plan si backend reachable
+  if (isBackendReachable) {
         // Afficher un indicateur de synchronisation si besoin
         setLoading(true);
         try {
@@ -267,6 +268,8 @@ export default function POS() {
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
       console.error('Erreur:', error);
+    } finally {
+      // Ensure loading is cleared regardless of online/offline and errors.
       setLoading(false);
     }
   };
@@ -309,9 +312,9 @@ export default function POS() {
     }
     setProductSalesCount(salesCount);
 
-    // Check for active shift
+    // Check for active shift - filter by both userId and storeId
     const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-    const userShift = shifts.find(s => s.userId === user?.id);
+    const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
     setActiveShift(userShift);
   // Indicate that we've finished checking for shifts (used to avoid flashing the
   // "no active shift" message before the DB/backend check completes)
@@ -547,8 +550,8 @@ export default function POS() {
         }
       }
 
-      // Si en ligne, synchroniser immédiatement avec le backend
-      if (isOnline) {
+  // Si backend reachable, synchroniser immédiatement avec le backend
+  if (isBackendReachable) {
         try {
           // Synchroniser la vente
           const salesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
@@ -660,7 +663,7 @@ export default function POS() {
       };
 
   setLastSale(receiptData);
-  const syncMessage = isOnline ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)';
+  const syncMessage = isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)';
   setCart([]);
   setCashAmount('');
   setMobileAmount('');
@@ -1249,14 +1252,36 @@ export default function POS() {
             <Label>Nom</Label>
             <Input type="text" value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="Nom du client" />
             <Label>Téléphone (8 chiffres)</Label>
-            <Input type="tel" value={newCustomerPhone} onChange={e => setNewCustomerPhone(e.target.value.replace(/[^0-9]/g, '').slice(0,8))} placeholder="XXXXXXXX" />
-            <div className="flex gap-2 justify-end">
-              <Button variant="outline" onClick={() => setShowAddCustomer(false)}>Annuler</Button>
-              <Button onClick={async () => {
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{
+                background: '#f3f4f6',
+                border: '1px solid #e5e7eb',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                fontWeight: 'bold',
+                color: '#374151',
+                fontSize: '1rem',
+                minWidth: '60px',
+                textAlign: 'center',
+              }}>+226</span>
+              <Input
+                type="tel"
+                value={newCustomerPhone}
+                onChange={e => setNewCustomerPhone(e.target.value.replace(/[^0-9]/g, '').slice(0,8))}
+                placeholder="XXXXXXXX"
+                maxLength={8}
+                style={{ flex: 1 }}
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="w-1/2" onClick={() => setShowAddCustomer(false)} disabled={addCustomerSubmitting}>Annuler</Button>
+              <Button className="w-1/2" disabled={addCustomerSubmitting} onClick={async () => {
+                if (addCustomerSubmitting) return;
+                setAddCustomerSubmitting(true);
                 const name = (newCustomerName || '').trim();
                 const phone = (newCustomerPhone || '').trim();
-                if (!name) { toast.error('Nom requis'); return; }
-                if (!phone || phone.length !== 8) { toast.error('Téléphone: 8 chiffres requis'); return; }
+                if (!name) { toast.error('Nom requis'); setAddCustomerSubmitting(false); return; }
+                if (!phone || phone.length !== 8) { toast.error('Téléphone: 8 chiffres requis'); setAddCustomerSubmitting(false); return; }
                 try {
                   setLoading(true);
                   const db = await getDB();
@@ -1272,7 +1297,7 @@ export default function POS() {
                     storeId: user?.storeId || '',
                   };
                   await db.add('customers', newCustomer);
-                  if (isOnline) {
+                  if (isBackendReachable) {
                     try {
                       const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCustomer)
@@ -1291,13 +1316,12 @@ export default function POS() {
                   setClientSearch('');
                   setNewCustomerPhone('');
                   setNewCustomerName('');
-                  const syncMessage = isOnline ? 'Client ajouté et synchronisé' : 'Client ajouté (mode hors ligne)';
-                  toast.success(syncMessage);
+                  toast.success(isBackendReachable ? 'Client ajouté et synchronisé' : 'Client ajouté (mode hors ligne)');
                 } catch (err) {
                   console.error('Erreur ajout client', err);
                   toast.error('Erreur lors de l\'ajout du client');
-                } finally { setLoading(false); }
-              }}>Ajouter</Button>
+                } finally { setLoading(false); setAddCustomerSubmitting(false); }
+              }}>{addCustomerSubmitting ? 'Traitement...' : 'Ajouter'}</Button>
             </div>
           </div>
         </DialogContent>

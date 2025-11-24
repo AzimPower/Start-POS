@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
+import { backendAvailable } from '@/lib/backend';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -46,24 +47,49 @@ export default function Products() {
   function calculateMargin(sale: string, cost: string) {
     const salePrice = parseFloat(sale.replace(/\s/g, ''));
     const costPrice = parseFloat(cost.replace(/\s/g, ''));
-    if (!costPrice || isNaN(salePrice) || isNaN(costPrice) || costPrice === 0) return '';
-    const margin = ((salePrice - costPrice) / costPrice) * 100;
+    // New logic: margin as percentage of sale price (gain / salePrice)
+    // Requires both salePrice and costPrice and salePrice !== 0
+    if (isNaN(salePrice) || isNaN(costPrice) || salePrice === 0) return '';
+    const margin = ((salePrice - costPrice) / salePrice) * 100;
     return margin.toFixed(2);
   }
   // Formate un nombre avec espace entre les milliers
   function formatNumberWithSpaces(value: string) {
-    const num = value.replace(/\D/g, "");
-    if (!num) return "";
-    return num.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    if (!value && value !== '0') return "";
+    // Normalize to string
+    let s = String(value);
+    // Replace non-breaking spaces
+    s = s.replace(/\u00A0|\u202F/g, '');
+    // Allow comma as decimal separator
+    s = s.replace(/,/g, '.');
+    // Remove any characters except digits and dot and minus
+    s = s.replace(/[^0-9.\-]/g, '');
+    // Split integer and fractional parts
+    const parts = s.split('.');
+    const intPart = parts[0] || '';
+    let fracPart = parts[1] || '';
+    // Format integer part with spaces every 3 digits
+    const intDigits = intPart.replace(/[^0-9\-]/g, '');
+    if (!intDigits) return fracPart ? `0.${fracPart}` : '';
+    const sign = intDigits.startsWith('-') ? '-' : '';
+    const absInt = sign ? intDigits.slice(1) : intDigits;
+    const formattedInt = absInt.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    // Clean fractional part: keep up to 2 decimals, trim trailing zeros
+    if (fracPart) {
+      fracPart = fracPart.replace(/[^0-9]/g, '').slice(0, 2).replace(/0+$/,'');
+    }
+    return fracPart ? `${sign}${formattedInt}.${fracPart}` : `${sign}${formattedInt}`;
   }
-  const { user, isLoading } = useAuth();
+  const { user } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
   const isMobile = useIsMobile();
-  const { isOnline: connectionState, manualSync } = useNetwork();
+  const { isBackendReachable, manualSync } = useNetwork();
   const [products, setProducts] = useState<Product[]>([]);
   const [categoryAddStatus, setCategoryAddStatus] = useState<'idle'|'success'|'error'>('idle');
   const [categories, setCategories] = useState<Category[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productSubmitting, setProductSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
@@ -87,13 +113,10 @@ export default function Products() {
 
   useEffect(() => {
     if (user?.storeId) {
-      loadData();
+      setIsLoading(true);
+      loadData().finally(() => setIsLoading(false));
     }
   }, [user]);
-
-  if (isLoading) {
-    return <div className="p-4">Chargement des données utilisateur...</div>;
-  }
 
   if (!user) {
     return <div className="p-4">Veuillez vous connecter pour voir les produits.</div>;
@@ -105,8 +128,8 @@ export default function Products() {
       return;
     }
 
-    // Tentative : récupérer toujours les produits depuis le backend si on est en ligne.
-    if (connectionState) {
+  // Récupérer toujours les produits depuis le backend si le ping backend est OK.
+  if (isBackendReachable) {
       try {
         const [productsResponse, categoriesResponse] = await Promise.all([
           fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?storeId=${user.storeId}`),
@@ -184,12 +207,15 @@ export default function Products() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (productSubmitting) return;
+    setProductSubmitting(true);
+
     try {
       let categoryId;
       if (formData.categoryName) {
         let cat = categories.find(c => c.name.toLowerCase() === formData.categoryName.trim().toLowerCase());
         if (!cat) {
-          // Ajout catégorie directement au backend
+          // Create category locally and queue sync operation instead of requiring immediate backend availability.
           const newCategory = {
             id: generateId(),
             name: formData.categoryName.trim(),
@@ -198,25 +224,24 @@ export default function Products() {
             createdAt: Date.now(),
           };
 
-          const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', {
+          try {
+            const dbLocal = await getDB();
+            // persist locally so the product can reference it immediately
+            await dbLocal.add('categories', { ...newCategory, storeId: user.storeId });
+            // update UI immediately
+            setCategories(prev => [...prev, newCategory]);
+          } catch (e) {
+            console.warn('Impossible d\'enregistrer la catégorie localement:', e);
+          }
+
+          // Queue the remote creation via performSyncOp (will attempt direct call only if backendAvailable)
+          await performSyncOp({
+            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php',
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(newCategory)
+            data: newCategory,
           });
 
-          if (response.ok) {
-            cat = newCategory;
-            // Recharger les catégories depuis le backend
-            const categoriesResponse = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php?storeId=${user.storeId}`);
-            if (categoriesResponse.ok) {
-              const updatedCategories = await categoriesResponse.json();
-              setCategories(updatedCategories);
-            }
-          } else {
-            throw new Error('Erreur lors de la création de la catégorie');
-          }
+          cat = newCategory;
         }
         categoryId = cat.id;
       }
@@ -226,6 +251,11 @@ export default function Products() {
       let uploadedImageUrl = formData.imageUrl || '';
       if (formData.pendingImage) {
         try {
+          // Only attempt image upload when backend is reachable. If unreachable, keep pendingImage for later upload.
+          const backendUpForUpload = await backendAvailable().catch(() => false);
+          if (!backendUpForUpload) {
+            toast.error('Serveur indisponible — upload de l\'image différé jusqu\'à la reconnexion.');
+          } else {
           // If editing an existing product and it has an image, delete the old image first
           // to avoid accumulating orphan files on the server.
           if (editingProduct && editingProduct.imageUrl) {
@@ -270,24 +300,25 @@ export default function Products() {
             }
           }
 
-          const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: formData.pendingImage })
-          });
-          const result = await res.json();
-          if (result && result.success) {
-            const fullUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/${result.url}`;
-            uploadedImageUrl = fullUrl;
-            // still update the form state for UI consistency
-            setFormData(f => ({ ...f, imageUrl: fullUrl, pendingImage: '' }));
-          } else {
-            toast.error('Erreur lors de l\'upload de l\'image: ' + (result?.error || ''));
-            // continue without blocking save
+            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: formData.pendingImage })
+            });
+            const result = await res.json();
+            if (result && result.success) {
+              const fullUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/${result.url}`;
+              uploadedImageUrl = fullUrl;
+              // still update the form state for UI consistency
+              setFormData(f => ({ ...f, imageUrl: fullUrl, pendingImage: '' }));
+            } else {
+              toast.error('Erreur lors de l\'upload de l\'image: ' + (result?.error || ''));
+              // continue without blocking save
+            }
           }
         } catch (err) {
           console.error('Upload image failed', err);
-          toast.error('Erreur réseau lors de l\'upload de l\'image');
+          toast.error('Erreur réseau lors de l\'upload de l\'image — upload différé');
         }
       }
   if (editingProduct) {
@@ -373,6 +404,8 @@ export default function Products() {
     } catch (error) {
       toast.error('Erreur lors de l\'enregistrement: ' + (error as Error).message);
       console.error('Erreur:', error);
+    } finally {
+      setProductSubmitting(false);
     }
   };
 
@@ -754,7 +787,7 @@ export default function Products() {
                     placeholder="Calculé auto ou saisissez manuellement"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Se remplit automatiquement avec le calcul prix vente/prix revient, mais modifiable
+                    Se remplit automatiquement : le pourcentage est calculé en % du prix de vente (gain / prix de vente), mais modifiable
                   </p>
                 </div>
 
@@ -857,12 +890,12 @@ export default function Products() {
                 </div>
               </div>
               
-              <div className="flex flex-col sm:flex-row gap-2 justify-center sm:justify-end">
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} className="w-full sm:w-auto">
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="w-1/2" onClick={() => setIsDialogOpen(false)} disabled={productSubmitting}>
                   Annuler
                 </Button>
-                <Button type="submit" className="w-full sm:w-auto">
-                  {editingProduct ? 'Mettre à jour' : 'Créer'}
+                <Button type="submit" className="w-1/2" disabled={productSubmitting}>
+                  {productSubmitting ? 'Traitement...' : (editingProduct ? 'Mettre à jour' : 'Créer')}
                 </Button>
               </div>
             </form>
@@ -902,7 +935,20 @@ export default function Products() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {getFilteredProducts().length === 0 ? (
+                {isLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <TableRow key={`skeleton-${i}`}>
+                      <TableCell colSpan={6} className="py-8">
+                        <div className="flex items-center gap-3 animate-pulse">
+                          <div className="w-10 h-10 bg-gray-200 rounded-md" />
+                          <div className="h-5 bg-gray-200 rounded w-32" />
+                          <div className="h-5 bg-gray-200 rounded w-16" />
+                          <div className="h-5 bg-gray-200 rounded w-20" />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : getFilteredProducts().length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                       <Package className="w-12 h-12 mx-auto mb-2 opacity-50" />
@@ -916,6 +962,7 @@ export default function Products() {
                 ) : (
                   getFilteredProducts().map((product) => (
                     <TableRow key={product.id}>
+                      {/* ...existing code for product row... */}
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
                           {product.imageUrl && (

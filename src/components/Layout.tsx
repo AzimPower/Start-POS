@@ -3,6 +3,8 @@ import { useNetwork } from '@/hooks/useNetwork';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
+import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
+
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -18,6 +20,7 @@ import {
   Shield,
   DollarSign,
   AlertTriangle,
+  Wifi,
 } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
@@ -28,6 +31,25 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth();
   const network = useNetwork();
+  const [isFullSyncing, setIsFullSyncing] = useState(false);
+
+  // Handler pour synchronisation complète (queue + refresh)
+  const handleFullSync = async () => {
+    if (!network.isOnline || isFullSyncing) return;
+    setIsFullSyncing(true);
+    try {
+      await forceSyncNow(); // flush la queue d'abord
+      const maybeRefresher = await refreshAllFromBackend();
+      if (typeof maybeRefresher === 'function') {
+        await maybeRefresher();
+      }
+    } catch (e) {
+      // Optionnel: toast ou log d'erreur
+      console.warn('Erreur lors de la synchronisation complète', e);
+    } finally {
+      setIsFullSyncing(false);
+    }
+  };
   const navigate = useNavigate();
   const location = useLocation();
   // Save the last active path so we can restore it after PIN unlock.
@@ -46,13 +68,13 @@ export default function Layout({ children }: LayoutProps) {
 
   const menuItems = [
   { icon: LayoutDashboard, label: 'Tableau de bord', path: '/dashboard', roles: ['admin', 'super_admin'] },
-  { icon: ShoppingCart, label: 'Caisse', path: '/pos', roles: ['admin', 'cashier'] },
-  { icon: Clock, label: 'Shifts', path: '/shifts', roles: ['admin', 'cashier'] },
+  { icon: ShoppingCart, label: 'Vente', path: '/pos', roles: ['admin', 'cashier'] },
+  { icon: Clock, label: 'Services', path: '/shifts', roles: ['admin', 'cashier'] },
   { icon: FileText, label: 'Reçus', path: '/receipts', roles: ['admin', 'cashier'] },
   { icon: Users, label: 'Clients', path: '/customers', roles: ['admin', 'cashier'] },
-  { icon: AlertTriangle, label: 'Signalement Stock', path: '/stock-signals', roles: ['admin', 'cashier'] },
-  { icon: Package, label: 'Produits', path: '/products', roles: ['admin'] },
   { icon: DollarSign, label: 'Dépenses', path: '/expenses', roles: ['admin', 'cashier'] },
+  { icon: AlertTriangle, label: 'Stock', path: '/stock-signals', roles: ['admin', 'cashier'] },
+  { icon: Package, label: 'Produits', path: '/products', roles: ['admin'] },
   { icon: Building2, label: 'Catégories', path: '/categories', roles: ['admin', 'super_admin'] },
   { icon: UserCircle, label: 'Utilisateurs', path: '/users', roles: ['admin', 'super_admin'] }, 
   { icon: Store, label: 'Magasins', path: '/stores', roles: ['admin', 'super_admin'] },
@@ -83,23 +105,27 @@ export default function Layout({ children }: LayoutProps) {
             </p>
           </div>
         </div>
-        {/* État réseau et bouton sync pour desktop */}
+        {/* État réseau pour desktop */}
         <div className="hidden lg:flex flex-col gap-2 mt-4">
+          
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${network.isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`} title={network.isOnline ? 'En ligne' : 'Hors ligne'} aria-live="polite">
-              {network.isOnline ? 'En ligne' : 'Hors ligne'}
+            <span
+              title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
+              aria-live="polite"
+            >
+              <Wifi className={`w-4 h-4 mr-1 ${network.isBackendReachable ? 'text-green-700' : 'text-red-700'}`} />
             </span>
             <Button
               variant="outline"
               size="sm"
-              onClick={network.manualSync}
-              disabled={!network.isOnline || network.isSyncing}
-              title={network.isSyncing ? 'Synchronisation...' : 'Synchroniser'}
+              onClick={handleFullSync}
+              disabled={!network.isBackendReachable || network.isSyncing || isFullSyncing}
+              title={network.isSyncing || isFullSyncing ? 'Synchronisation...' : 'Synchroniser'}
               aria-label="Synchroniser"
               className="ml-2"
             >
-              <svg className="w-4 h-4 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 10-9 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 3v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              {network.isSyncing ? 'Sync...' : 'Synchroniser'}
+              <svg className={`w-4 h-4 mr-1 animate-spin ${isFullSyncing ? '' : 'hidden'}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.2"/><path d="M22 12a10 10 0 01-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/></svg>
+              {isFullSyncing ? 'Synchronisation...' : (network.isSyncing ? 'Sync...' : 'Synchroniser')}
             </Button>
           </div>
           {network.pendingCount > 0 && (
@@ -158,8 +184,9 @@ export default function Layout({ children }: LayoutProps) {
   <header className="lg:hidden border-b border-border bg-card px-3 py-2 flex items-center justify-between gap-2 sticky top-0 z-30">
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <Menu className="w-5 h-5" />
+              <Button variant="ghost" className="flex items-center gap-2 px-3 py-2" style={{ minWidth: 48, minHeight: 48 }}>
+                <Menu className="w-7 h-7" />
+                <span className="font-semibold text-base">Menu</span>
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-64 p-0 bg-sidebar" style={{ height: '100vh', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overflowY: 'auto' }}>
@@ -167,29 +194,30 @@ export default function Layout({ children }: LayoutProps) {
             </SheetContent>
           </Sheet>
           
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center">
-              <ShoppingCart className="w-4 h-4 text-primary-foreground" />
-            </div>
-            <h1 className="font-bold text-sm">POS</h1>
-          </div>
+
           
-          {/* Statut réseau et bouton sync pour mobile uniquement */}
+          {/* Statut réseau pour mobile */}
           <div className="flex lg:hidden items-center gap-2">
-            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${network.isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`} title={network.isOnline ? 'En ligne' : 'Hors ligne'} aria-live="polite">
-              {network.isOnline ? 'En ligne' : 'Hors ligne'}
+            
+            <span
+              className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${network.isBackendReachable ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+              title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
+              aria-live="polite"
+            >
+              <Wifi className={`w-4 h-4 mr-1 ${network.isBackendReachable ? 'text-green-700' : 'text-red-700'}`} />
+              {network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
             </span>
             <Button
               variant="outline"
               size="sm"
-              onClick={network.manualSync}
-              disabled={!network.isOnline || network.isSyncing}
-              title={network.isSyncing ? 'Synchronisation...' : 'Synchroniser'}
+              onClick={handleFullSync}
+              disabled={!network.isBackendReachable || network.isSyncing || isFullSyncing}
+              title={network.isSyncing || isFullSyncing ? 'Synchronisation...' : 'Synchroniser'}
               aria-label="Synchroniser"
               className="ml-2"
             >
-              <svg className="w-4 h-4 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 10-9 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 3v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              {network.isSyncing ? 'Sync...' : 'Synchroniser'}
+              <svg className={`w-4 h-4 mr-1 animate-spin ${isFullSyncing ? '' : 'hidden'}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.2"/><path d="M22 12a10 10 0 01-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/></svg>
+              {isFullSyncing ? 'Synchronisation...' : (network.isSyncing ? 'Sync...' : 'Synchroniser')}
             </Button>
             {network.pendingCount > 0 && (
               <span className="inline-flex items-center justify-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800 font-semibold">{network.pendingCount}</span>

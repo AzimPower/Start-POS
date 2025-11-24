@@ -106,6 +106,8 @@ interface Sale {
 
 export default function StockSignals() {
   const { user } = useAuth();
+  // treat super_admin as admin for UI purposes
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const { isOnline, manualSync } = useNetwork();
   const [activeStocks, setActiveStocks] = useState<ExpenseAdvanced[]>([]);
   const [completedSignals, setCompletedSignals] = useState<StockSignal[]>([]);
@@ -116,10 +118,13 @@ export default function StockSignals() {
   const [showSignalDialog, setShowSignalDialog] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<ExpenseAdvanced | null>(null);
   const [marginCalculation, setMarginCalculation] = useState<any>(null);
+  const [showEndDateDialog, setShowEndDateDialog] = useState(false);
+  const [endDateInput, setEndDateInput] = useState<string>('');
   
   // Filtres pour l'historique
   const [searchTerm, setSearchTerm] = useState('');
-  const [periodFilter, setPeriodFilter] = useState<'all' | 'day' | 'week' | 'month'>('all');
+  // Afficher par défaut l'historique d'aujourd'hui dans l'onglet "Historique"
+  const [periodFilter, setPeriodFilter] = useState<'all' | 'day' | 'week' | 'month'>('day');
   const [typeFilter, setTypeFilter] = useState<'all' | 'surplus' | 'manque'>('all');
   // Filter by expense type for active stocks (direct / indirect)
   const [expenseTypeFilter, setExpenseTypeFilter] = useState<'all' | 'direct' | 'indirect'>('all');
@@ -141,6 +146,134 @@ export default function StockSignals() {
       console.error('Erreur lors du comptage des synchronisations en attente:', error);
       setPendingSyncCount(0);
     }
+  };
+
+  const computeMarginForEnd = async (endIso?: string) => {
+    if (!selectedExpense) return;
+    const endTime = endIso ? new Date(endIso).getTime() : Date.now();
+    const startTime = selectedExpense.type === 'direct' && selectedExpense.directProduct
+      ? selectedExpense.directProduct.startDate
+      : selectedExpense.date;
+
+    // Validate endTime is not before startTime
+    if (endTime < startTime) {
+      toast.error('La date de fin doit être postérieure ou égale à la date de début / date d\'achat. Choisissez une autre date.');
+      // keep the end-date dialog open for correction
+      setShowEndDateDialog(true);
+      return;
+    }
+    // Chercher la marge visée depuis la fiche du produit
+    let targetMargin: number | null = null;
+    let product: Product | undefined;
+    if (selectedExpense.type === 'direct' && selectedExpense.directProduct) {
+      product = products.find(p => p.id === selectedExpense.directProduct.productId);
+      if (product && (product as any).targetMargin != null) {
+        const parsed = Number((product as any).targetMargin);
+        if (!isNaN(parsed)) targetMargin = parsed;
+      }
+      if (targetMargin === null && product && typeof product.salePrice === 'number' && typeof product.costPrice === 'number' && product.costPrice > 0) {
+        const inferred = ((product.salePrice - product.costPrice) / product.costPrice) * 100;
+        if (!isNaN(inferred)) targetMargin = inferred;
+      }
+    }
+    if (targetMargin === null && (selectedExpense as any).targetMargin != null) {
+      const parsed = Number((selectedExpense as any).targetMargin);
+      if (!isNaN(parsed)) targetMargin = parsed;
+    }
+
+    // (startTime already defined and validated)
+
+    let periodSalesData: any;
+    let totalSalesData: any;
+
+    if (selectedExpense.type === 'direct' && selectedExpense.directProduct) {
+      periodSalesData = await calculateSalesBetween(startTime, endTime, selectedExpense.directProduct.productId, true);
+      totalSalesData = await calculateSalesBetween(periodSalesData.adjustedStartDate || startTime, endTime, selectedExpense.directProduct.productId, false);
+    } else if (selectedExpense.type === 'indirect' && selectedExpense.categoryId) {
+      const category = expenseCategories.find(cat => cat.id === selectedExpense.categoryId);
+      if (!category || !category.productIds || category.productIds.length === 0) {
+        toast.error(`Aucun produit lié à cette catégorie de dépense indirecte.`);
+        return;
+      }
+      periodSalesData = await calculateSalesForMultipleProducts(startTime, endTime, category.productIds, true);
+      totalSalesData = await calculateSalesForMultipleProducts(periodSalesData.adjustedStartDate || startTime, endTime, category.productIds, false);
+    } else {
+      toast.error('Type de dépense non supporté pour le calcul');
+      return;
+    }
+
+    const effectiveStartDate = periodSalesData.adjustedStartDate || startTime;
+    const totalRevenue = Number(totalSalesData?.totalRevenue) || 0;
+    const periodRevenue = Number(periodSalesData.totalRevenue) || 0;
+    const totalQuantity = Number(periodSalesData.totalQuantity) || 0;
+    const purchaseAmount = Number(selectedExpense.amount) || 0;
+    const quantityBought = selectedExpense.type === 'direct' && selectedExpense.directProduct
+      ? Number(selectedExpense.directProduct.quantity) || 0
+      : 1;
+
+    let realMargin = periodRevenue - purchaseAmount;
+    let margin = realMargin;
+    let marginPercentage = 0;
+    let expectedRevenue: number | null = null;
+    if (typeof targetMargin === 'number') {
+      if (targetMargin >= 100) {
+        expectedRevenue = null;
+        margin = null as any;
+        marginPercentage = 0;
+      } else {
+        expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
+        margin = periodRevenue - expectedRevenue;
+        realMargin = periodRevenue - purchaseAmount;
+        marginPercentage = expectedRevenue > 0 ? (margin / expectedRevenue) * 100 : 0;
+      }
+    } else {
+      marginPercentage = periodRevenue > 0 ? (margin / periodRevenue) * 100 : 0;
+    }
+
+    // Historique des marges
+    const marginHistory = completedSignals.filter(s => s.productId === (selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.productId : selectedExpense.categoryId)).map(s => s.marginPercentage);
+    let averageMargin = null;
+    if (marginHistory.length > 0) averageMargin = marginHistory.reduce((a, b) => a + b, 0) / marginHistory.length;
+
+    // Calcul surplus/manque
+    let surplusMargin = null;
+    let missingMargin = null;
+    if (typeof targetMargin === 'number' && targetMargin < 100) {
+      expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
+      if (periodRevenue > expectedRevenue) {
+        surplusMargin = periodRevenue - expectedRevenue;
+        missingMargin = 0;
+      } else if (periodRevenue < expectedRevenue) {
+        surplusMargin = 0;
+        missingMargin = expectedRevenue - periodRevenue;
+      } else {
+        surplusMargin = 0;
+        missingMargin = 0;
+      }
+    }
+
+    setMarginCalculation({
+      totalRevenue,
+      periodRevenue,
+      totalQuantity,
+      margin,
+      realMargin,
+      marginPercentage,
+      purchaseAmount,
+      quantityBought,
+      effectiveStartDate,
+      duration: Math.ceil((endTime - effectiveStartDate) / (1000 * 60 * 60 * 24)),
+      averageMargin,
+      marginHistory,
+      targetMargin,
+      expectedRevenue,
+      surplusMargin,
+      missingMargin,
+      endTime
+    });
+
+    setShowEndDateDialog(false);
+    setShowSignalDialog(true);
   };
 
   const loadData = async () => {
@@ -239,10 +372,47 @@ export default function StockSignals() {
     try {
       const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php');
       if (response.ok) {
-        const backendSignals = await response.json();
+        let backendSignals: any = await response.json();
+
+        // Defensive normalization: some backends return an object wrapper
+        // (e.g. { data: [...] }) or an object of records instead of a plain array.
+        if (!backendSignals) return;
+        if (!Array.isArray(backendSignals)) {
+          if (backendSignals.data && Array.isArray(backendSignals.data)) {
+            backendSignals = backendSignals.data;
+          } else if (typeof backendSignals === 'object') {
+            // If the object looks like a map of id -> record, convert to values
+            const values = Object.values(backendSignals).filter(v => v && typeof v === 'object');
+            if (values.length > 0) {
+              backendSignals = values;
+            } else {
+              // Fallback: wrap single object into an array
+              backendSignals = [backendSignals];
+            }
+          } else {
+            // Primitive response — wrap it so code below can treat it as array
+            backendSignals = [backendSignals];
+          }
+        }
+
+        if (!Array.isArray(backendSignals)) return;
+
         const tx = db.transaction('stockSignals', 'readwrite');
+        // Ensure every record has an id (IndexedDB keyPath = 'id')
+        const prepared = backendSignals.map((s: any) => {
+          if (!s) return s;
+          // if server used numeric id or different key, try to normalize
+          if (!s.id && (s.uid || s._id || s.id === 0)) {
+            s.id = s.uid || s._id || s.id;
+          }
+          if (!s.id) {
+            s.id = generateId();
+          }
+          return s;
+        });
+
         await Promise.all([
-          ...backendSignals.map(s => tx.store.put(s)),
+          ...prepared.map((s: any) => tx.store.put(s)),
           tx.done
         ]);
       }
@@ -277,27 +447,49 @@ export default function StockSignals() {
     // Load products
     const productsData = await db.getAll('products');
     setProducts(productsData);
-    
+
     // Load expense categories
     const categoriesData = await db.getAll('expenseCategories');
     setExpenseCategories(categoriesData);
-    
-    // Load active expenses (stocks non signalés) - inclure directes et indirectes
-    const expensesData = await db.getAll('expensesAdvanced');
-    const activeExpenses = expensesData.filter(expense => 
-      (expense.type === 'direct' || expense.type === 'indirect') &&
-      expense.storeId === user?.storeId &&
-      ((expense.type === 'direct' && expense.directProduct && !expense.directProduct.endDate) ||
-       (expense.type === 'indirect' && !expense.directProduct?.endDate)) // Pour les indirectes, on utilise aussi directProduct.endDate comme marqueur
-    );
-    setActiveStocks(activeExpenses);
-    
-    // Load completed signals
+
+    // Load completed signals (first, for filtering)
     const signalsData = await db.getAll('stockSignals');
     const userSignals = signalsData.filter(signal => 
       signal.storeId === user?.storeId
     ).sort((a, b) => b.createdAt - a.createdAt);
     setCompletedSignals(userSignals);
+
+    // Load active expenses (stocks non signalés) - inclure directes et indirectes
+    const expensesData = await db.getAll('expensesAdvanced');
+    // Exclude expenses that already have a completed signal for their product/category and period
+    const activeExpenses = expensesData.filter(expense => {
+      if (!(expense.type === 'direct' || expense.type === 'indirect')) return false;
+      if (expense.storeId !== user?.storeId) return false;
+
+      // For direct: check if a signal exists for this product and expense period
+      if (expense.type === 'direct' && expense.directProduct) {
+        if (expense.directProduct.endDate) return false;
+        // Check if a signal exists for this product and expenseId
+        const hasSignal = userSignals.some(signal =>
+          signal.expenseId === expense.id &&
+          signal.productId === expense.directProduct.productId
+        );
+        if (hasSignal) return false;
+        return true;
+      }
+      // For indirect: check if a signal exists for this category and expenseId
+      if (expense.type === 'indirect') {
+        if (expense.directProduct?.endDate) return false;
+        const hasSignal = userSignals.some(signal =>
+          signal.expenseId === expense.id &&
+          signal.productId === (expense.categoryId || 'indirect')
+        );
+        if (hasSignal) return false;
+        return true;
+      }
+      return false;
+    });
+    setActiveStocks(activeExpenses);
   };
 
   const calculateSalesBetween = async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
@@ -414,172 +606,34 @@ export default function StockSignals() {
   };
 
   const handleStockEnd = async (expense: ExpenseAdvanced) => {
-    // Chercher la marge visée depuis la fiche du produit
-    // Supporte targetMargin stocké comme number ou string (ex: "100" ou 100)
-    let targetMargin: number | null = null;
-    let product: Product | undefined;
-    if (expense.type === 'direct' && expense.directProduct) {
-      product = products.find(p => p.id === expense.directProduct.productId);
-      // Prefer explicit targetMargin on product (accept string or number)
-      if (product && (product as any).targetMargin != null) {
-        const parsed = Number((product as any).targetMargin);
-        if (!isNaN(parsed)) targetMargin = parsed;
-      }
-      // If none, try to infer from product salePrice/costPrice (if present)
-      if (targetMargin === null && product && typeof product.salePrice === 'number' && typeof product.costPrice === 'number' && product.costPrice > 0) {
-        const inferred = ((product.salePrice - product.costPrice) / product.costPrice) * 100;
-        if (!isNaN(inferred)) targetMargin = inferred;
-      }
-    }
-    // Si pas trouvé dans le produit, essayer depuis la dépense (ancien système), en tolérant string/number
-    if (targetMargin === null && (expense as any).targetMargin != null) {
-      const parsed = Number((expense as any).targetMargin);
-      if (!isNaN(parsed)) targetMargin = parsed;
-    }
+    // Show end-date picker dialog before computing margins
     setSelectedExpense(expense);
-    // Calculer les ventes pendant la période
-    const endTime = Date.now();
-    const startTime = expense.date;
-    let periodSalesData;
-    let totalSalesData;
-    let marginHistory = [];
-    let averageMargin = null;
-
-    if (expense.type === 'direct' && expense.directProduct) {
-      periodSalesData = await calculateSalesBetween(
-        startTime,
-        endTime,
-        expense.directProduct.productId,
-        true
-      );
-      // Historique des marges pour ce produit
-      marginHistory = completedSignals.filter(s => s.productId === expense.directProduct.productId).map(s => s.marginPercentage);
-    } else if (expense.type === 'indirect' && expense.categoryId) {
-      const category = expenseCategories.find(cat => cat.id === expense.categoryId);
-      
-      if (!category) {
-        toast.error('Catégorie de dépense introuvable');
-        return;
-      }
-      
-      if (!category.productIds || !Array.isArray(category.productIds) || category.productIds.length === 0) {
-        toast.error(`Aucun produit lié à cette catégorie de dépense indirecte: "${category.name}". Veuillez configurer les produits liés dans la page Catégories de Dépenses.`);
-        return;
-      }
-      
-      periodSalesData = await calculateSalesForMultipleProducts(
-        startTime,
-        endTime,
-        category.productIds,
-        true
-      );
-      // Historique des marges pour cette catégorie
-      marginHistory = completedSignals.filter(s => s.productId === expense.categoryId).map(s => s.marginPercentage);
-    } else {
-      toast.error('Type de dépense non supporté pour le signalement');
-      return;
-    }
-
-    const effectiveStartDate = periodSalesData.adjustedStartDate || startTime;
-    if (expense.type === 'direct' && expense.directProduct) {
-      totalSalesData = await calculateSalesBetween(
-        effectiveStartDate,
-        endTime,
-        expense.directProduct.productId,
-        false
-      );
-    } else if (expense.type === 'indirect' && expense.categoryId) {
-      const category = expenseCategories.find(cat => cat.id === expense.categoryId);
-      if (category && category.productIds && category.productIds.length > 0) {
-        totalSalesData = await calculateSalesForMultipleProducts(
-          effectiveStartDate,
-          endTime,
-          category.productIds,
-          false
-        );
-      } else {
-        // Utiliser des valeurs par défaut pour éviter l'erreur
-        totalSalesData = { totalQuantity: 0, totalRevenue: 0, adjustedStartDate: effectiveStartDate };
-      }
-    }
-
-    const totalRevenue = Number(totalSalesData?.totalRevenue) || 0;
-    const periodRevenue = Number(periodSalesData.totalRevenue) || 0;
-    const totalQuantity = Number(periodSalesData.totalQuantity) || 0;
-    const purchaseAmount = Number(expense.amount) || 0;
-    const quantityBought = expense.type === 'direct' && expense.directProduct
-      ? Number(expense.directProduct.quantity) || 0
-      : 1;
-    
-    // Calcul de la marge en fonction de l'objectif visé
-    const realMargin = periodRevenue - purchaseAmount; // Marge brute réelle (pour l'historique)
-    let margin = realMargin; // Marge affichée (par défaut = marge réelle)
-    let marginPercentage = 0;
-    
-    if (typeof targetMargin === 'number') {
-      // Si on a une marge cible, calculer par rapport à l'objectif
-      // Formule : CA réel - CA attendu (négatif si manque, positif si surplus)
-      const expectedRevenue = purchaseAmount * (1 + targetMargin / 100);
-      margin = periodRevenue - expectedRevenue; // Négatif si en dessous de l'objectif, positif si au-dessus
-      marginPercentage = expectedRevenue > 0 ? (margin / expectedRevenue) * 100 : 0;
-    } else {
-      // Sinon, calcul classique
-      marginPercentage = periodRevenue > 0 ? (margin / periodRevenue) * 100 : 0;
-    }
-
-    // Calcul de la moyenne des marges
-    if (marginHistory.length > 0) {
-      averageMargin = marginHistory.reduce((a, b) => a + b, 0) / marginHistory.length;
-    }
-
-    // Calcul du chiffre d'affaires attendu et du surplus/manque
-    // Marge est en % du prix d'achat, donc prix de vente attendu = prix d'achat × (1 + marge/100)
-    let expectedRevenue = null;
-    let surplusMargin = null;
-    let missingMargin = null;
-    if (typeof targetMargin === 'number') {
-      // Marge appliquée sur le prix d'achat (ex: 100% du prix d'achat = prix de vente = 2 × prix d'achat)
-      expectedRevenue = purchaseAmount * (1 + targetMargin / 100);
-      if (periodRevenue > expectedRevenue) {
-        surplusMargin = periodRevenue - expectedRevenue;
-        missingMargin = 0;
-      } else if (periodRevenue < expectedRevenue) {
-        surplusMargin = 0;
-        missingMargin = expectedRevenue - periodRevenue;
-      } else {
-        surplusMargin = 0;
-        missingMargin = 0;
-      }
-    }
-    setMarginCalculation({
-      totalRevenue,
-      periodRevenue,
-      totalQuantity,
-      margin,
-      realMargin, // Marge brute réelle pour l'historique
-      marginPercentage,
-      purchaseAmount,
-      quantityBought,
-      effectiveStartDate,
-      duration: Math.ceil((endTime - effectiveStartDate) / (1000 * 60 * 60 * 24)),
-      averageMargin,
-      marginHistory,
-      targetMargin,
-      expectedRevenue,
-      surplusMargin,
-      missingMargin,
-    });
-    setShowSignalDialog(true);
+    // Compute a sensible default for the end date: prefer now, but never before the stock start
+    const startTime = expense.type === 'direct' && expense.directProduct ? expense.directProduct.startDate : expense.date;
+    const startIso = new Date(startTime).toISOString().slice(0,16);
+    const nowIso = new Date().toISOString().slice(0,16);
+    // If now is before the start (clock skew or long future-dated start), default to start
+    const defaultIso = nowIso < startIso ? startIso : nowIso;
+    setEndDateInput(defaultIso);
+    setShowEndDateDialog(true);
   };
 
   const confirmStockEnd = async () => {
     if (!selectedExpense || !marginCalculation || !user?.storeId) return;
+    // Ensure chosen end date is valid (not before start)
+    const chosenEndDate = marginCalculation?.endTime || (endDateInput ? new Date(endDateInput).getTime() : Date.now());
+    const startTime = selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.startDate : selectedExpense.date;
+    if (chosenEndDate < startTime) {
+      toast.error('La date de fin sélectionnée est antérieure à la date d\'achat / début du stock. Veuillez choisir une date valide.');
+      return;
+    }
     
     setLoading(true);
     try {
       const db = await getDB();
       
       // S'assurer que toutes les valeurs sont des nombres valides avant de sauvegarder
+      const chosenEndDate = marginCalculation.endTime || (endDateInput ? new Date(endDateInput).getTime() : Date.now());
       const stockSignal: StockSignal = {
         id: generateId(),
         expenseId: selectedExpense.id,
@@ -589,7 +643,7 @@ export default function StockSignals() {
         userId: user.id,
         storeId: user.storeId,
         startDate: Number(marginCalculation.effectiveStartDate) || selectedExpense.date,
-        endDate: Date.now(),
+        endDate: chosenEndDate,
         purchaseAmount: Number(marginCalculation.purchaseAmount) || 0,
         quantityBought: Number(marginCalculation.quantityBought) || 0,
         quantitySold: Number(marginCalculation.totalQuantity) || 0,
@@ -609,13 +663,13 @@ export default function StockSignals() {
         directProduct: selectedExpense.type === 'direct' && selectedExpense.directProduct
           ? {
               ...selectedExpense.directProduct,
-              endDate: Date.now(),
+              endDate: chosenEndDate,
             }
           : {
               productId: 'indirect', // Marqueur pour les dépenses indirectes
               quantity: 1,
               startDate: selectedExpense.date,
-              endDate: Date.now(),
+              endDate: chosenEndDate,
             },
         updatedAt: Date.now(),
         userId: user.id,
@@ -708,6 +762,113 @@ export default function StockSignals() {
     }
   };
 
+  // Annuler un signalement et remettre le stock dans les stocks actifs
+  const cancelSignal = async (signal: StockSignal) => {
+    if (!signal) return;
+    const name = signal.productId === 'indirect'
+      ? (expenseCategories.find(cat => cat.id === signal.productId)?.name || 'Dépense indirecte')
+      : getProductName(signal.productId);
+
+    const ok = window.confirm(`Confirmer l'annulation du signalement pour "${name}" ? Le stock redeviendra actif et devra être signalé à nouveau.`);
+    if (!ok) return;
+
+    setLoading(true);
+    try {
+      const db = await getDB();
+
+      // Supprimer le signalement localement
+      try {
+        await db.delete('stockSignals', signal.id);
+      } catch (err) {
+        console.error('Erreur suppression locale du signal:', err);
+        // On continue pour tenter la suite
+      }
+
+      // Récupérer l'expense associée et supprimer sa date de fin pour la remettre active
+      try {
+        const expense = await db.get('expensesAdvanced', signal.expenseId);
+        if (expense) {
+          const updatedExpense = {
+            ...expense,
+            directProduct: expense.directProduct ? {
+              ...expense.directProduct,
+              endDate: undefined // Supprimer la date de fin pour remettre le stock actif
+            } : expense.directProduct,
+            updatedAt: Date.now()
+          };
+          
+          await db.put('expensesAdvanced', updatedExpense);
+
+          // Si en ligne, synchroniser l'expense mise à jour avec le backend
+          if (isOnline) {
+            try {
+              const expenseResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(updatedExpense)
+              });
+
+              if (!expenseResponse.ok) {
+                throw new Error('Erreur mise à jour expense backend');
+              }
+            } catch (err) {
+              console.error('Impossible de mettre à jour l\'expense côté backend, ajout à la file:', err);
+              await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                method: 'PUT',
+                data: updatedExpense,
+              });
+            }
+          } else {
+            // Hors ligne -> queue pour l'expense
+            await performSyncOp({
+              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+              method: 'PUT',
+              data: updatedExpense,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Erreur lors de la remise en stock actif:', err);
+      }
+
+      // Supprimer le signalement côté backend si en ligne, sinon mettre en queue
+      const url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+      if (isOnline) {
+        try {
+          const resp = await fetch(`${url}?id=${encodeURIComponent(signal.id)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (!resp.ok) {
+            throw new Error('Erreur suppression signalement backend');
+          }
+        } catch (err) {
+          console.error('Impossible de supprimer le signalement côté backend, ajout à la file:', err);
+          await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+        }
+      } else {
+        // Hors ligne -> queue pour le signalement
+        await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+      }
+
+      // Mettre à jour l'état local pour rafraîchir l'UI
+      setCompletedSignals(prev => prev.filter(s => s.id !== signal.id));
+      await updatePendingSyncCount();
+      toast.success('Signalement annulé - Le stock est de nouveau actif');
+      
+      // Recharger les données pour mettre à jour la liste des stocks actifs
+      await loadData();
+    } catch (error) {
+      console.error('Erreur lors de l\'annulation du signalement:', error);
+      toast.error('Erreur lors de l\'annulation du signalement');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getProductStockCount = (productId: string) => {
     return activeStocks.filter(stock => stock.directProduct?.productId === productId).length;
   };
@@ -737,6 +898,11 @@ export default function StockSignals() {
     if (margin >= 0) return 'text-green-600';
     return 'text-red-600';
   };
+
+  // Format amount as '2 900 FCFA' (blue)
+  const formatAmountBlue = (amount: number) => (
+    <span className="text-blue-600 font-bold">{Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+  );
 
   const getMarginBadgeVariant = (percentage: number) => {
     if (percentage < 20) return 'destructive';
@@ -883,7 +1049,24 @@ export default function StockSignals() {
 
         <TabsContent value="active" className="space-y-4">
           {loading ? (
-            <div className="text-center py-8">Chargement...</div>
+            <div className="space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Card key={`skeleton-active-${i}`} className="border-l-4 border-l-primary animate-pulse">
+                  <CardContent className="p-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <div className="h-5 bg-gray-200 rounded w-48 mb-2" />
+                        <div className="h-4 bg-gray-200 rounded w-28 mb-2" />
+                        <div className="h-4 bg-gray-200 rounded w-20" />
+                      </div>
+                      <div className="flex items-center justify-end">
+                        <div className="h-10 w-32 bg-gray-200 rounded" />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           ) : (
             <>
               <Card>
@@ -941,16 +1124,33 @@ export default function StockSignals() {
                     const daysSince = getDaysSince(startDate);
                     const isOld = daysSince > 7;
 
-                    // Pour les dépenses directes, vérifier les stocks multiples
+                    // Pour les dépenses directes et indirectes, vérifier les stocks multiples
                     let productStockCount = 1;
                     let isOldestForProduct = true;
                     let hasMultipleStocks = false;
+                    let categoryStockCount = 1;
+                    let isOldestForCategory = true;
+                    let hasMultipleCategoryStocks = false;
 
                     if (expense.type === 'direct' && expense.directProduct) {
                       productStockCount = getProductStockCount(expense.directProduct.productId);
                       isOldestForProduct = getOldestStockForProduct(expense.directProduct.productId)?.id === expense.id;
                       hasMultipleStocks = productStockCount > 1;
                     }
+
+                    if (expense.type === 'indirect' && expense.categoryId) {
+                      categoryStockCount = activeStocks.filter(stock => stock.type === 'indirect' && stock.categoryId === expense.categoryId).length;
+                      // Trouver la plus ancienne dépense indirecte de cette catégorie
+                      const oldest = activeStocks
+                        .filter(stock => stock.type === 'indirect' && stock.categoryId === expense.categoryId)
+                        .sort((a, b) => (a.date || 0) - (b.date || 0))[0];
+                      isOldestForCategory = oldest?.id === expense.id;
+                      hasMultipleCategoryStocks = categoryStockCount > 1;
+                    }
+
+                    // Désactiver le bouton si ce n'est pas le plus ancien stock pour le produit (direct) ou la catégorie (indirect)
+                    const disableSignal = (expense.type === 'direct' && hasMultipleStocks && !isOldestForProduct)
+                      || (expense.type === 'indirect' && hasMultipleCategoryStocks && !isOldestForCategory);
 
                     return (
                       <Card key={expense.id} className={`border-l-4 ${isOld ? 'border-l-red-500' : 'border-l-blue-500'}`}>
@@ -965,12 +1165,23 @@ export default function StockSignals() {
                                     Stock ancien
                                   </Badge>
                                 )}
-                                {hasMultipleStocks && (
+                                {expense.type === 'direct' && hasMultipleStocks && (
                                   <Badge variant="outline" className="bg-yellow-50 border-yellow-200">
                                     {productStockCount} stocks actifs
                                   </Badge>
                                 )}
-                                {hasMultipleStocks && !isOldestForProduct && (
+                                {expense.type === 'direct' && hasMultipleStocks && !isOldestForProduct && (
+                                  <Badge variant="destructive">
+                                    <AlertTriangle className="w-3 h-3 mr-1" />
+                                    Signaler l'ancien d'abord
+                                  </Badge>
+                                )}
+                                {expense.type === 'indirect' && hasMultipleCategoryStocks && (
+                                  <Badge variant="outline" className="bg-yellow-50 border-yellow-200">
+                                    {categoryStockCount} stocks actifs
+                                  </Badge>
+                                )}
+                                {expense.type === 'indirect' && hasMultipleCategoryStocks && !isOldestForCategory && (
                                   <Badge variant="destructive">
                                     <AlertTriangle className="w-3 h-3 mr-1" />
                                     Signaler l'ancien d'abord
@@ -995,7 +1206,7 @@ export default function StockSignals() {
                                 <div>
                                   <p className="text-muted-foreground">Coût</p>
                                   <p className="font-medium text-lg">
-                                    {expense.amount.toLocaleString()} FCFA
+                                    {Number(expense.amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
                                   </p>
                                 </div>
                                 <div>
@@ -1033,18 +1244,25 @@ export default function StockSignals() {
                                   Veuillez signaler les stocks dans l'ordre chronologique.
                                 </div>
                               )}
+                              {expense.type === 'indirect' && hasMultipleCategoryStocks && !isOldestForCategory && (
+                                <div className="text-sm text-amber-600 bg-amber-50 p-2 rounded border border-amber-200 mt-2">
+                                  <AlertTriangle className="w-4 h-4 inline mr-1" />
+                                  Ce stock ne peut pas être signalé car il y a un stock plus ancien du même produit. 
+                                  Veuillez signaler les stocks dans l'ordre chronologique.
+                                </div>
+                              )}
                             </div>
                             <Button 
                               onClick={() => handleStockEnd(expense)}
                               variant={isOld ? "destructive" : "default"}
                               size="lg"
-                              disabled={hasMultipleStocks && !isOldestForProduct}
-                              className={hasMultipleStocks && !isOldestForProduct ? "opacity-50" : ""}
+                              disabled={disableSignal}
+                              className={disableSignal ? "opacity-50" : ""}
                             >
                               <Package className="w-4 h-4 mr-2" />
-                              {hasMultipleStocks && !isOldestForProduct 
-                                ? "Signaler l'ancien d'abord" 
-                                : expense.type === 'direct' 
+                              {disableSignal
+                                ? "Signaler l'ancien d'abord"
+                                : expense.type === 'direct'
                                 ? "Stock Fini"
                                 : "Signaler Dépense"
                               }
@@ -1104,9 +1322,10 @@ export default function StockSignals() {
                 <div className="flex items-end">
                   <Button 
                     variant="outline" 
-                    onClick={() => {
+                      onClick={() => {
+                      // Réinitialiser la recherche et remettre la période par défaut sur "Aujourd'hui"
                       setSearchTerm('');
-                      setPeriodFilter('all');
+                      setPeriodFilter('day');
                       setTypeFilter('all');
                     }}
                   >
@@ -1117,7 +1336,23 @@ export default function StockSignals() {
             </CardContent>
           </Card>
 
-          {getFilteredSignals().length === 0 ? (
+          {loading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Card key={`skeleton-completed-${i}`} className="animate-pulse">
+                  <CardContent className="p-4">
+                    <div className="flex justify-between items-start">
+                      <div className="space-y-2 w-3/4">
+                        <div className="h-5 bg-gray-200 rounded w-48" />
+                        <div className="h-4 bg-gray-200 rounded w-32" />
+                      </div>
+                      <div className="h-8 w-8 bg-gray-200 rounded-full" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : getFilteredSignals().length === 0 ? (
             <Card>
               <CardContent className="text-center py-12">
                 <CheckCircle className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
@@ -1142,7 +1377,7 @@ export default function StockSignals() {
                             }
                           </h3>
                           <Badge variant={getMarginBadgeVariantByAmount(signal.margin)}>
-                            {signal.margin >= 0 ? 'Surplus' : 'Manque'}: {signal.margin >= 0 ? '+' : ''}{signal.margin.toLocaleString()} FCFA
+                            {signal.margin >= 0 ? 'Surplus' : 'Manque'}: {signal.margin >= 0 ? '+' : ''}{Number(signal.margin).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
                           </Badge>
                         </div>
                         
@@ -1156,19 +1391,19 @@ export default function StockSignals() {
                           <div>
                             <p className="text-muted-foreground">Coût d'achat</p>
                             <p className="font-medium">
-                              {signal.purchaseAmount.toLocaleString()} FCFA
+                              {Number(signal.purchaseAmount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
                             </p>
                           </div>
                           <div>
                             <p className="text-muted-foreground">Chiffre d'affaires</p>
                             <p className="font-medium">
-                              {signal.revenue.toLocaleString()} FCFA
+                              {Number(signal.revenue).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
                             </p>
                           </div>
                           <div>
                             <p className="text-muted-foreground">{signal.margin >= 0 ? 'Surplus' : 'Manque'}</p>
                             <p className={`font-medium ${getMarginColorByAmount(signal.margin)}`}>
-                              {signal.margin >= 0 ? '+' : ''}{signal.margin.toLocaleString()} FCFA
+                              {signal.margin >= 0 ? '+' : ''}{Number(signal.margin).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
                             </p>
                           </div>
                           {(() => {
@@ -1200,11 +1435,16 @@ export default function StockSignals() {
                       </div>
                       
                       <div className="text-right">
-                        {signal.margin < 0 ? (
-                          <TrendingDown className="w-8 h-8 text-red-500" />
-                        ) : (
-                          <TrendingUp className="w-8 h-8 text-green-500" />
-                        )}
+                        <div className="flex flex-col items-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => cancelSignal(signal)} disabled={loading}>
+                            Annuler signalement
+                          </Button>
+                          {signal.margin < 0 ? (
+                            <TrendingDown className="w-8 h-8 text-red-500" />
+                          ) : (
+                            <TrendingUp className="w-8 h-8 text-green-500" />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </CardContent>
@@ -1216,6 +1456,40 @@ export default function StockSignals() {
         )}
       </Tabs>
 
+      {/* Dialog pour choisir la date/heure de fin avant calcul */}
+      <Dialog open={showEndDateDialog} onOpenChange={setShowEndDateDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Choisir la date de fin</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Veuillez choisir la date et l'heure de fin pour calculer les ventes et la marge.</p>
+              <div>
+                <Label>Date et heure de fin</Label>
+                {/* compute startIso for min attribute so user cannot pick earlier times */}
+                {selectedExpense && (
+                  (() => {
+                    const start = selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.startDate : selectedExpense.date;
+                    const startIso = new Date(start).toISOString().slice(0,16);
+                    return (
+                      <Input type="datetime-local" value={endDateInput} min={startIso} onChange={(e: any) => setEndDateInput(e.target.value)} />
+                    );
+                  })()
+                )}
+              </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" onClick={() => setShowEndDateDialog(false)}>Annuler</Button>
+              <Button onClick={async () => {
+                // compute and open confirmation
+                await computeMarginForEnd(endDateInput);
+              }}>
+                Calculer et continuer
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Dialog de confirmation */}
       <Dialog open={showSignalDialog} onOpenChange={setShowSignalDialog}>
         <DialogContent className="max-w-lg">
@@ -1224,112 +1498,146 @@ export default function StockSignals() {
           </DialogHeader>
           {marginCalculation && selectedExpense && (
             <div className="space-y-4">
-              {/* Objectif CA et marge */}
-              {typeof marginCalculation.expectedRevenue === 'number' && typeof marginCalculation.targetMargin === 'number' && (
-                <div className="bg-yellow-50 p-2 rounded-lg border border-yellow-200 text-center">
-                  <div className="text-xs text-muted-foreground mb-1">Chiffre d'affaires attendu (objectif)</div>
-                  <div className="text-xl font-bold text-yellow-700">{marginCalculation.expectedRevenue.toLocaleString()} FCFA</div>
-                  <div className="text-xs text-muted-foreground mt-1">Marge visée : {marginCalculation.targetMargin}%</div>
-                </div>
-              )}
-              {/* Titre et durée */}
-              <div className="text-center space-y-1">
-                <h3 className="text-base font-semibold">
-                  {selectedExpense.type === 'direct' && selectedExpense.directProduct
-                    ? getProductName(selectedExpense.directProduct.productId)
-                    : selectedExpense.type === 'indirect' && selectedExpense.categoryId
-                    ? expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Catégorie inconnue'
-                    : 'Dépense'
-                  }
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Stock actif depuis {marginCalculation.duration} jour{marginCalculation.duration > 1 ? 's' : ''}
-                </p>
-                {marginCalculation.effectiveStartDate && 
-                 marginCalculation.effectiveStartDate !== (selectedExpense.directProduct?.startDate || selectedExpense.date) && (
-                  <p className="text-xs text-blue-600">
-                    Calcul depuis le dernier signalement ({new Date(marginCalculation.effectiveStartDate).toLocaleDateString('fr-FR')} à {new Date(marginCalculation.effectiveStartDate).toLocaleTimeString('fr-FR', {
-                      hour: '2-digit', minute: '2-digit', second: '2-digit'
-                    })})
-                  </p>
-                )}
-              </div>
-              {/* Indicateurs principaux */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
-                <div className="bg-blue-50 p-3 rounded-lg flex flex-col items-center">
-                  <DollarSign className="w-5 h-5 mb-1 text-blue-600" />
-                  <span className="text-xs text-muted-foreground">Coût d'achat</span>
-                  <span className="text-lg font-bold text-blue-600">{marginCalculation.purchaseAmount.toLocaleString()} FCFA</span>
-                </div>
-                <div className="bg-green-50 p-3 rounded-lg flex flex-col items-center">
-                  <TrendingUp className="w-5 h-5 mb-1 text-green-600" />
-                  <span className="text-xs text-muted-foreground">Chiffre d'affaires total</span>
-                  <span className="text-lg font-bold text-green-600">{marginCalculation.totalRevenue.toLocaleString()} FCFA</span>
-                  <span className="text-[10px] text-muted-foreground mt-1">
-                    {marginCalculation.effectiveStartDate && 
-                     marginCalculation.effectiveStartDate !== (selectedExpense.directProduct?.startDate || selectedExpense.date) ? (
-                      <>Depuis le dernier signalement ({new Date(marginCalculation.effectiveStartDate).toLocaleDateString('fr-FR')} à {new Date(marginCalculation.effectiveStartDate).toLocaleTimeString('fr-FR', {
-                        hour: '2-digit', minute: '2-digit', second: '2-digit'
-                      })})</>
-                    ) : (
-                      <>Depuis le {new Date(selectedExpense.directProduct?.startDate || selectedExpense.date).toLocaleDateString('fr-FR')} à {new Date(selectedExpense.directProduct?.startDate || selectedExpense.date).toLocaleTimeString('fr-FR', {
-                        hour: '2-digit', minute: '2-digit', second: '2-digit'
-                      })}</>
-                    )}
-                  </span>
-                </div>
-                <div className="bg-gray-50 p-3 rounded-lg flex flex-col items-center">
-                  <span className="text-xs text-muted-foreground">Marge réalisée</span>
-                  <span className={`text-lg font-bold ${getMarginColorByAmount(marginCalculation.margin)}`}>
-                    {marginCalculation.margin > 0 ? '+' : ''}{marginCalculation.margin.toLocaleString()} FCFA
-                  </span>
-                  <span className={`text-xs ${getMarginColorByAmount(marginCalculation.margin)}`}>({marginCalculation.marginPercentage.toFixed(1)}%)</span>
-                </div>
-              </div>
-              {/* Revenus de la période */}
-              {marginCalculation.periodRevenue !== marginCalculation.totalRevenue && (
-                <div className="bg-amber-50 p-2 rounded-lg border border-amber-200 text-center">
-                  <span className="text-xs font-medium text-amber-800">Revenus de cette période</span>
-                  <span className="text-base font-bold text-amber-600">{marginCalculation.periodRevenue.toLocaleString()} FCFA</span>
-                  <span className="text-[10px] text-amber-600">Utilisé pour le calcul de marge (exclut les ventes déjà signalées)</span>
-                </div>
-              )}
-              {/* Quantités */}
-              {selectedExpense.type === 'direct' && (() => {
-                let showQuantity = false;
-                let prod = null;
-                if (selectedExpense.directProduct) {
-                  prod = products.find(p => p.id === selectedExpense.directProduct.productId);
-                  showQuantity = (prod && (prod as any).trackQuantity === true) || marginCalculation.quantityBought > 1;
-                }
-                return showQuantity ? (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-white rounded-lg p-2 border">
-                      <span className="text-muted-foreground">Quantité achetée</span>
-                      <span className="font-medium block">{marginCalculation.quantityBought}</span>
+              {/*
+                Security/UX change: most margin/revenue details are sensitive and
+                must be visible only to administrators. Cashiers should only see
+                the purchase cost to allow them to confirm the stock end without
+                exposing business-sensitive KPIs.
+              */}
+              {isAdmin ? (
+                <>
+                  {/* Objectif CA et marge */}
+                  {typeof marginCalculation.expectedRevenue === 'number' && typeof marginCalculation.targetMargin === 'number' && (
+                    <div className="bg-yellow-50 p-2 rounded-lg border border-yellow-200 text-center">
+                      <div className="text-xs text-muted-foreground mb-1">Chiffre d'affaires attendu (objectif)</div>
+                      <div className="text-xl font-bold text-yellow-700">{Number(marginCalculation.expectedRevenue).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</div>
+                      <div className="text-xs text-muted-foreground mt-1">Marge visée : {marginCalculation.targetMargin}%</div>
                     </div>
-                    <div className="bg-white rounded-lg p-2 border">
-                      <span className="text-muted-foreground">Quantité vendue</span>
-                      <span className="font-medium block">{marginCalculation.totalQuantity}</span>
+                  )}
+
+                  {/* Titre et durée */}
+                  <div className="text-center space-y-1">
+                    <h3 className="text-base font-semibold">
+                      {selectedExpense.type === 'direct' && selectedExpense.directProduct
+                        ? getProductName(selectedExpense.directProduct.productId)
+                        : selectedExpense.type === 'indirect' && selectedExpense.categoryId
+                        ? expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Catégorie inconnue'
+                        : 'Dépense'
+                      }
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Stock actif depuis {marginCalculation.duration} jour{marginCalculation.duration > 1 ? 's' : ''}
+                    </p>
+                    {marginCalculation.effectiveStartDate && 
+                     marginCalculation.effectiveStartDate !== (selectedExpense.directProduct?.startDate || selectedExpense.date) && (
+                      <p className="text-xs text-blue-600">
+                        Calcul depuis le dernier signalement ({new Date(marginCalculation.effectiveStartDate).toLocaleDateString('fr-FR')} à {new Date(marginCalculation.effectiveStartDate).toLocaleTimeString('fr-FR', {
+                          hour: '2-digit', minute: '2-digit', second: '2-digit'
+                        })})
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Indicateurs principaux */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
+                    <div className="bg-blue-50 p-3 rounded-lg flex flex-col items-center">
+                      <DollarSign className="w-5 h-5 mb-1 text-blue-600" />
+                      <span className="text-xs text-muted-foreground">Coût d'achat</span>
+                      <span className="text-lg font-bold text-blue-600">{Number(marginCalculation.purchaseAmount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+                    </div>
+                    <div className="bg-green-50 p-3 rounded-lg flex flex-col items-center">
+                      <TrendingUp className="w-5 h-5 mb-1 text-green-600" />
+                      <span className="text-xs text-muted-foreground">Chiffre d'affaires total</span>
+                      <span className="text-lg font-bold text-green-600">{Number(marginCalculation.totalRevenue).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+                      <span className="text-[10px] text-muted-foreground mt-1">
+                        {marginCalculation.effectiveStartDate && 
+                         marginCalculation.effectiveStartDate !== (selectedExpense.directProduct?.startDate || selectedExpense.date) ? (
+                          <>Depuis le dernier signalement ({new Date(marginCalculation.effectiveStartDate).toLocaleDateString('fr-FR')} à {new Date(marginCalculation.effectiveStartDate).toLocaleTimeString('fr-FR', {
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                          })})</>
+                        ) : (
+                          <>Depuis le {new Date(selectedExpense.directProduct?.startDate || selectedExpense.date).toLocaleDateString('fr-FR')} à {new Date(selectedExpense.directProduct?.startDate || selectedExpense.date).toLocaleTimeString('fr-FR', {
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                          })}</>
+                        )}
+                      </span>
+                    </div>
+                    <div className="bg-gray-50 p-3 rounded-lg flex flex-col items-center">
+                      <span className="text-xs text-muted-foreground">Marge réalisée</span>
+                      <span className={`text-lg font-bold ${getMarginColorByAmount(marginCalculation.margin)}`}>
+                        {marginCalculation.margin > 0 ? '+' : ''}{Number(marginCalculation.margin).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
+                      </span>
+                      <span className={`text-xs ${getMarginColorByAmount(marginCalculation.margin)}`}>({marginCalculation.marginPercentage.toFixed(1)}%)</span>
                     </div>
                   </div>
-                ) : null;
-              })()}
-              {/* Alerte marge historique */}
-              {marginCalculation.averageMargin !== null && (
-                <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg p-2 text-xs">
-                  <AlertTriangle className="h-4 w-4 text-orange-500" />
-                  <span>
-                    {marginCalculation.marginPercentage < marginCalculation.averageMargin
-                      ? `Attention : Marge plus basse que la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
-                      : marginCalculation.marginPercentage > marginCalculation.averageMargin
-                      ? `Attention : Marge plus haute que la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
-                      : `Marge égale à la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
+
+                  {/* Revenus de la période */}
+                  {marginCalculation.periodRevenue !== marginCalculation.totalRevenue && (
+                    <div className="bg-amber-50 p-2 rounded-lg border border-amber-200 text-center">
+                      <span className="text-xs font-medium text-amber-800">Revenus de cette période</span>
+                      <span className="text-base font-bold text-amber-600">{Number(marginCalculation.periodRevenue).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+                      <span className="text-[10px] text-amber-600">Utilisé pour le calcul de marge (exclut les ventes déjà signalées)</span>
+                    </div>
+                  )}
+
+                  {/* Quantités (admin-only) */}
+                  {selectedExpense.type === 'direct' && (() => {
+                    let showQuantity = false;
+                    let prod = null;
+                    if (selectedExpense.directProduct) {
+                      prod = products.find(p => p.id === selectedExpense.directProduct.productId);
+                      showQuantity = (prod && (prod as any).trackQuantity === true) || marginCalculation.quantityBought > 1;
                     }
-                  </span>
+                    return showQuantity ? (
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="bg-white rounded-lg p-2 border">
+                          <span className="text-muted-foreground">Quantité achetée</span>
+                          <span className="font-medium block">{marginCalculation.quantityBought}</span>
+                        </div>
+                        <div className="bg-white rounded-lg p-2 border">
+                          <span className="text-muted-foreground">Quantité vendue</span>
+                          <span className="font-medium block">{marginCalculation.totalQuantity}</span>
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+
+                  {/* Alerte marge historique */}
+                  {marginCalculation.averageMargin !== null && (
+                    <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg p-2 text-xs">
+                      <AlertTriangle className="h-4 w-4 text-orange-500" />
+                      <span>
+                        {marginCalculation.marginPercentage < marginCalculation.averageMargin
+                          ? `Attention : Marge plus basse que la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
+                          : marginCalculation.marginPercentage > marginCalculation.averageMargin
+                          ? `Attention : Marge plus haute que la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
+                          : `Marge égale à la moyenne historique (${marginCalculation.averageMargin.toFixed(1)}%)`
+                        }
+                      </span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                // Minimal view for non-admin (cashiers): only show purchase cost
+                <div className="space-y-4 text-center">
+                  <h3 className="text-base font-semibold">
+                    {selectedExpense.type === 'direct' && selectedExpense.directProduct
+                      ? getProductName(selectedExpense.directProduct.productId)
+                      : selectedExpense.type === 'indirect' && selectedExpense.categoryId
+                      ? expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Catégorie'
+                      : 'Dépense'
+                    }
+                  </h3>
+                  <div className="bg-blue-50 p-3 rounded-lg flex flex-col items-center">
+                    <DollarSign className="w-5 h-5 mb-1 text-blue-600" />
+                    <span className="text-xs text-muted-foreground">Coût d'achat</span>
+                    <span className="text-lg font-bold text-blue-600">{Number(marginCalculation.purchaseAmount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">Détails supplémentaires réservés à l'administrateur</div>
                 </div>
               )}
-              {/* Boutons d'action */}
+
+              {/* Boutons d'action (visible to both roles) */}
               <div className="flex gap-2 justify-center pt-2">
                 <Button variant="outline" onClick={() => setShowSignalDialog(false)}>
                   Annuler

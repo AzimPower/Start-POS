@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { getDB } from '@/lib/db';
 import * as secureStorage from '@/lib/secureStorage';
+import { refreshAllFromBackend } from '@/lib/sync';
+import { backendAvailable } from '@/lib/backend';
 
 interface User {
   id: string;
@@ -8,6 +10,7 @@ interface User {
   phone: string; // Téléphone unique pour la connexion
   role: 'super_admin' | 'admin' | 'cashier';
   storeId: string;
+  storeIds?: string[]; // liste des magasins liés à l'utilisateur
   active?: boolean;
 }
 
@@ -27,6 +30,7 @@ interface AuthContextType {
   getPinFailedCount: () => number;
   isPinLocked: () => boolean;
   resetPinFailures: () => void;
+  setActiveStore: (storeId: string) => Promise<void>;
   isLocked: boolean;
   isLoading: boolean;
   setPendingUser: (u: User | null) => void;
@@ -44,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Check for existing session in secure storage (preferred). Mirror to localStorage
     // so synchronous PIN logic keeps working.
-    (async () => {
+  (async () => {
       try {
         // Prefer secure storage, but fall back to localStorage if secure read fails
         let storedUser: string | null = null;
@@ -63,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        if (storedUser) {
+  if (storedUser) {
           try {
             const parsed = JSON.parse(storedUser);
             // On cold start, restore the user object but mark the session as locked.
@@ -97,6 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.warn('restore pos-user parse error', e);
           }
         }
+
+        // Rafraîchissement complet désactivé au démarrage : il doit être déclenché explicitement par l'utilisateur (bouton Synchroniser dans le layout)
       } catch (e) {
         console.warn('secureStorage read pos-user error', e);
       } finally {
@@ -117,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       candidatePhones.push(raw.replace(/^\+/, ''));
 
       let userRecord: UserRecord | undefined = undefined;
-      for (const p of candidatePhones) {
+  for (const p of candidatePhones) {
         try {
           // db.getFromIndex may return unknown; cast to UserRecord
           userRecord = (await db.getFromIndex('users', 'by-phone', p)) as UserRecord | undefined;
@@ -125,15 +131,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           console.warn('getFromIndex error', e);
         }
-      }
-
+    }
+    // Check backend reachability once and reuse the result for subsequent decisions
+  const backendIsUp = await backendAvailable();
   if (userRecord && userRecord.password === password) {
         // Vérifier si l'utilisateur est actif
         if (userRecord.active === false) {
           return false; // Utilisateur désactivé
         }
-        // If we have network, verify coherence with backend user (ensure server didn't change password/active)
-        if (navigator.onLine) {
+  // If backend is reachable, verify coherence with backend user (ensure server didn't change password/active)
+  if (backendIsUp) {
           try {
             const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
             if (res.ok) {
@@ -158,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           phone: userRecord.phone,
           role: userRecord.role,
           storeId: userRecord.storeId,
+          storeIds: (userRecord as any).storeIds || (userRecord.storeId ? [userRecord.storeId] : []),
           active: userRecord.active,
         };
   // successful local login (either offline or coherence verified)
@@ -182,8 +190,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
   setPinFailState({ userId: userData.id, count: 0 });
   localStorage.removeItem('pos-login-last-error');
-        // If online, refresh user record from backend to get up-to-date PIN
-        if (navigator.onLine) {
+  // If backend is reachable, refresh user record from backend to get up-to-date PIN
+  if (backendIsUp) {
           try {
             const localDb = await getDB();
             const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
@@ -200,6 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     pin: remote.pin || '',
                     role: remote.role,
                     storeId: remote.storeId,
+                    storeIds: (remote as any).storeIds || (remote.storeId ? [remote.storeId] : []),
                     active: remote.active,
                     createdAt: (remote.createdAt as number) || Date.now(),
                   } as any;
@@ -224,14 +233,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return true;
       }
 
-      // If no local user, require internet for first-time login
-      if (!userRecord && !navigator.onLine) {
+      // If no local user, require backend access for first-time login
+      if (!userRecord && !backendIsUp) {
         localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
         return false;
       }
 
-      // Try to verify against backend when online
-      if (!userRecord && navigator.onLine) {
+      // Try to verify against backend when reachable
+      if (!userRecord && backendIsUp) {
         try {
           const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
           if (res.ok) {
@@ -248,6 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   pin: found.pin || '',
                   role: found.role,
                   storeId: found.storeId,
+                  storeIds: (found as any).storeIds || (found.storeId ? [found.storeId] : []),
                   active: found.active,
                   createdAt: found.createdAt || Date.now(),
                 } as any;
@@ -261,6 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 phone: found.phone,
                 role: found.role,
                 storeId: found.storeId,
+                storeIds: (found as any).storeIds || (found.storeId ? [found.storeId] : []),
                 active: found.active,
               };
               setUser(userData);
@@ -306,6 +317,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // remove from secure storage and localStorage (fire-and-forget)
     secureStorage.removeItem('pos-user').catch(() => {});
     try { localStorage.removeItem('pos-user'); } catch (e) {}
+  };
+
+  const setActiveStore = async (storeId: string) => {
+    // update in-memory user and persist to secure/local storage and local DB
+    try {
+      if (!user) return;
+      const newUser = { ...user, storeId } as User;
+      setUser(newUser);
+      try {
+        await secureStorage.setItem('pos-user', JSON.stringify(newUser));
+        try { localStorage.setItem('pos-user', JSON.stringify(newUser)); } catch (e) {}
+      } catch (e) {
+        try { localStorage.setItem('pos-user', JSON.stringify(newUser)); } catch (e) {}
+      }
+      // Also update local DB primary storeId for this user (for compatibility)
+      try {
+        const db = await getDB();
+        const rec = await db.get('users', newUser.id);
+        if (rec) {
+          await db.put('users', { ...rec, storeId });
+        }
+      } catch (e) {
+        console.warn('setActiveStore db update failed', e);
+      }
+    } catch (e) {
+      console.warn('setActiveStore error', e);
+    }
   };
 
   // Verify PIN: the PINs are expected to be stored in the local DB users table
@@ -474,7 +512,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, pendingUser, login, logout, verifyPin, getPinFailedCount, isPinLocked, resetPinFailures, isLocked, isLoading, setPendingUser }}>
+    <AuthContext.Provider value={{ user, pendingUser, login, logout, verifyPin, getPinFailedCount, isPinLocked, resetPinFailures, isLocked, isLoading, setPendingUser, setActiveStore }}>
       {children}
     </AuthContext.Provider>
   );

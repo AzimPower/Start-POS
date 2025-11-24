@@ -11,23 +11,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-require_once '../config.php';
-$method = $_SERVER['REQUEST_METHOD'];
+try {
+    require_once '../config.php';
+    $method = $_SERVER['REQUEST_METHOD'];
 
-switch ($method) {
-    case 'GET':
-        $storeId = $_GET['storeId'] ?? null;
-        $sql = 'SELECT * FROM shifts';
-        if ($storeId) {
-            $sql .= ' WHERE storeId = ?';
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$storeId]);
-        } else {
-            $stmt = $pdo->query($sql);
-        }
-        $shifts = $stmt->fetchAll();
-        echo json_encode($shifts);
-        break;
+    switch ($method) {
+        case 'GET':
+            $storeId = $_GET['storeId'] ?? null;
+            $sql = 'SELECT * FROM shifts';
+            if ($storeId) {
+                $sql .= ' WHERE storeId = ?';
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([$storeId]);
+            } else {
+                $stmt = $pdo->query($sql);
+            }
+            $shifts = $stmt->fetchAll();
+            echo json_encode($shifts ?: []);
+            break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
         $sql = 'INSERT INTO shifts (id, userId, storeId, openingAmount, closingAmount, expectedAmount, difference, cashAmount, mobileMoneyAmount, otherAmount, openedAt, closedAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -92,5 +93,14 @@ switch ($method) {
         http_response_code(405);
         echo json_encode(['error' => 'Méthode non autorisée']);
         break;
+    }
+} catch (PDOException $e) {
+    http_response_code(500);
+    error_log('Erreur BD shifts: ' . $e->getMessage());
+    echo json_encode(['error' => 'Erreur de base de données', 'message' => $e->getMessage()]);
+} catch (Exception $e) {
+    http_response_code(500);
+    error_log('Erreur shifts: ' . $e->getMessage());
+    echo json_encode(['error' => 'Erreur serveur', 'message' => $e->getMessage()]);
 }
 ?>

@@ -16,9 +16,11 @@ interface UserData {
   id: string;
   username: string;
   phone: string;
+  email?: string;
   password: string;
   role: 'super_admin' | 'admin' | 'cashier';
   storeId: string;
+  storeIds?: string[];
   createdAt: number;
   pin?: string;
 }
@@ -32,11 +34,13 @@ export default function Users() {
   const { user } = useAuth();
   const [users, setUsers] = useState<UserData[]>([]);
   const [stores, setStores] = useState<StoreData[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [formData, setFormData] = useState({
     username: '',
     phone: '',
+    email: '',
     password: '',
     role: 'cashier' as 'admin' | 'cashier',
     storeId: '',
@@ -50,13 +54,18 @@ export default function Users() {
   }, [user]);
 
   const loadData = async () => {
+    setIsLoading(true);
     const db = await getDB();
 
     // Load stores
     const storesData = await db.getAll('stores');
     setStores(storesData);
 
-    loadUsers();
+    try {
+      await loadUsers();
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const loadUsers = async () => {
@@ -87,7 +96,11 @@ export default function Users() {
           // Filtrage et affichage
           let filteredUsers = remoteUsers.filter(u => u.role !== 'super_admin');
           if (user?.role === 'admin') {
-            filteredUsers = filteredUsers.filter(u => u.storeId === user.storeId);
+            // For admin viewers, only show users that belong to at least one of the admin's stores
+            filteredUsers = filteredUsers.filter(u => {
+              const uStoreIds: string[] = (u as any).storeIds || ((u as any).storeId ? [(u as any).storeId] : []);
+              return uStoreIds.includes(user.storeId);
+            });
           }
           setUsers(filteredUsers.sort((a, b) => b.createdAt - a.createdAt));
           return;
@@ -101,11 +114,15 @@ export default function Users() {
     const data: any[] = await db.getAll('users');
     const normalizedUsers = data.map((u: unknown) => ({
       ...(u as any),
-      storeId: (u as any).storeId || ''
+      storeId: (u as any).storeId || '',
+      storeIds: (u as any).storeIds || ((u as any).storeId ? [(u as any).storeId] : []),
     }));
     let filteredUsers = normalizedUsers.filter(u => u.role !== 'super_admin');
     if (user?.role === 'admin') {
-      filteredUsers = filteredUsers.filter(u => u.storeId === user.storeId);
+      filteredUsers = filteredUsers.filter((u: any) => {
+        const ids: string[] = (u as any).storeIds || [];
+        return ids.includes(user.storeId);
+      });
     }
   setUsers(filteredUsers.sort((a: any, b: any) => b.createdAt - a.createdAt));
   };
@@ -135,6 +152,7 @@ export default function Users() {
           ...editingUser,
           username: formData.username,
           phone: `+226${formData.phone}`,
+          email: formData.email.trim() || null,
           password: formData.password,
           role: finalRole,
           storeId: finalStoreId,
@@ -172,10 +190,18 @@ export default function Users() {
           toast.error('Ce numéro de téléphone existe déjà');
           return;
         }
+        if (formData.email && formData.email.trim()) {
+          const existingEmail = await db.getFromIndex('users', 'by-email', formData.email.trim());
+          if (existingEmail) {
+            toast.error('Cette adresse email existe déjà');
+            return;
+          }
+        }
         const newUser = {
           id: generateId(),
           username: formData.username,
           phone: `+226${formData.phone}`,
+          email: formData.email.trim() || null,
           password: formData.password,
           role: finalRole,
           storeId: finalStoreId,
@@ -205,7 +231,7 @@ export default function Users() {
       }
       setShowDialog(false);
       setEditingUser(null);
-      setFormData({ username: '', phone: '', password: '', role: 'cashier', storeId: '', pin: '' });
+      setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier', storeId: '', pin: '' });
       loadUsers();
     } catch (error) {
       console.error('User save error:', error);
@@ -222,10 +248,11 @@ export default function Users() {
     setFormData({
       username: editUser.username,
       phone: phone8,
+      email: editUser.email || '',
       password: '',
       role: editUser.role === 'super_admin' ? 'admin' : editUser.role,
       storeId: editUser.storeId,
-      pin: '',
+      pin: editUser.pin || '',
     });
     setShowDialog(true);
   };
@@ -255,12 +282,18 @@ export default function Users() {
 
   const openNewDialog = () => {
     setEditingUser(null);
-    setFormData({ username: '', phone: '', password: '', role: 'cashier', storeId: stores[0]?.id || '', pin: '' });
+    setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier', storeId: stores[0]?.id || '', pin: '' });
     setShowDialog(true);
   };
 
   const getStoreName = (storeId: string) => {
     return stores.find(s => s.id === storeId)?.name || 'Inconnu';
+  };
+
+  const getStoreNames = (u: UserData) => {
+    const ids = (u.storeIds && u.storeIds.length > 0) ? u.storeIds : (u.storeId ? [u.storeId] : []);
+    const names = ids.map(id => stores.find(s => s.id === id)?.name || 'Inconnu');
+    return names; // return array of names; rendering will handle empty case
   };
 
   return (
@@ -311,6 +344,16 @@ export default function Users() {
                     placeholder="XXXXXXXX"
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="utilisateur@exemple.com"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Mot de passe *</Label>
@@ -380,51 +423,100 @@ export default function Users() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {users.map(user => (
-          <Card key={user.id}>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center justify-between text-lg">
-                <div className="flex items-center gap-2">
-                  {user.role === 'admin' ? (
-                    <Shield className="w-5 h-5 text-primary" />
-                  ) : (
-                    <User className="w-5 h-5 text-primary" />
-                  )}
-                  {user.username}
+        {isLoading ? (
+          // show skeleton cards while loading
+          Array.from({ length: 6 }).map((_, i) => (
+            <Card key={`skeleton-${i}`}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center justify-between text-lg">
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 bg-gray-200 rounded" />
+                    <div className="h-4 bg-gray-200 rounded w-32 animate-pulse" />
+                  </div>
+                  <div className="h-4 bg-gray-200 rounded w-12 animate-pulse" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-muted-foreground mb-4">
+                  <div className="h-3 bg-gray-200 rounded w-24 animate-pulse mb-2" />
+                  <div className="flex flex-wrap gap-2">
+                    <div className="h-6 w-20 bg-gray-200 rounded animate-pulse" />
+                    <div className="h-6 w-16 bg-gray-200 rounded animate-pulse" />
+                    <div className="h-6 w-24 bg-gray-200 rounded animate-pulse" />
+                  </div>
                 </div>
-                <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                  {user.role === 'admin' ? 'Admin' : 'Caissier'}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
-                Magasin: {getStoreName(user.storeId)}
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => handleEdit(user)}
-                >
-                  <Edit className="w-4 h-4 mr-2" />
-                  Modifier
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleDelete(user.id)}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                <div className="flex gap-2">
+                  <div className="h-9 flex-1 bg-gray-200 rounded animate-pulse" />
+                  <div className="h-9 w-12 bg-gray-200 rounded animate-pulse" />
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        ) : (
+          users.map(user => (
+            <Card key={user.id}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center justify-between text-lg">
+                  <div className="flex items-center gap-2">
+                    {user.role === 'admin' ? (
+                      <Shield className="w-5 h-5 text-primary" />
+                    ) : (
+                      <User className="w-5 h-5 text-primary" />
+                    )}
+                    {user.username}
+                  </div>
+                  <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+                    {user.role === 'admin' ? 'Admin' : 'Caissier'}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-muted-foreground mb-4">
+                  {user.email && (
+                    <div className="mb-2">
+                      <span className="font-medium">Email:</span> {user.email}
+                    </div>
+                  )}
+                  <div>Magasins:</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(() => {
+                      const names = getStoreNames(user);
+                      if (!names || names.length === 0) {
+                        return <span className="text-muted-foreground">Aucun magasin</span>;
+                      }
+                      return names.map((n, idx) => (
+                        <Badge key={idx} className="text-xs">
+                          {n}
+                        </Badge>
+                      ));
+                    })()}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleEdit(user)}
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Modifier
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDelete(user.id)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        )}
       </div>
 
-      {users.length === 0 && (
+      {!isLoading && users.length === 0 && (
         <Card className="p-12 text-center">
           <UserCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground">Aucun utilisateur.</p>

@@ -286,13 +286,11 @@ export default function Receipt({
         </div>
 
         <div className="flex gap-2">
-          {!getAutoPrintEnabled() && (
-            <Button onClick={handlePrint} className="flex-1">
-              <Printer className="w-4 h-4 mr-2" />
-              Imprimer
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button onClick={handlePrint} className="flex-1">
+            <Printer className="w-4 h-4 mr-2" />
+            Imprimer
+          </Button>
+          <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>
             Fermer
           </Button>
         </div>

@@ -1,5 +1,6 @@
 // Module de synchronisation hors-ligne avec IndexedDB
 import { openDB } from 'idb';
+import { backendAvailable } from './backend';
 
 export const SYNC_DB_NAME = 'pos_sync_db';
 export const SYNC_STORE = 'pending_ops';
@@ -65,9 +66,21 @@ export async function removeSyncOp(id) {
 
 // Synchroniser toutes les opérations en attente avec le serveur
 export async function syncWithServer() {
-	if (!navigator.onLine) return { success: false, reason: 'offline' };
-	connectionState.isSyncing = true;
+	// Vérifier la connexion internet et le backend (ping)
+	if (!navigator.onLine) {
+		return { success: false, reason: 'offline' };
+	}
+	const backendUp = await backendAvailable();
+	if (!backendUp) {
+		return { success: false, reason: 'backend_unreachable' };
+	}
+	// Récupérer les opérations en attente
 	const ops = await getPendingSyncOps();
+	if (!ops.length) {
+		// Rien à synchroniser, ne pas appeler le backend
+		return { success: true, itemsCount: 0, skipped: true };
+	}
+	connectionState.isSyncing = true;
 	let successCount = 0;
 	for (const op of ops) {
 		try {
@@ -102,7 +115,21 @@ export async function syncWithServer() {
  		 }
  		 const res = await fetch(url);
 		 if (!res.ok) return;
-		 const backendItems = await res.json();
+		 let backendItems: any = await res.json();
+		 // If backend returned an object with a wrapper (e.g. { data: [...] })
+		 if (!Array.isArray(backendItems)) {
+			 // try common wrapper fields
+			 if (backendItems && Array.isArray(backendItems.data)) {
+				 backendItems = backendItems.data;
+			 } else if (backendItems && Array.isArray(backendItems.items)) {
+				 backendItems = backendItems.items;
+			 } else {
+				 console.warn(`fetchAndMerge: unexpected response for ${endpoint}, expected array but got`, backendItems);
+				 writeSyncLog({ level: 'warn', message: `Unexpected response shape from ${endpoint}`, entity: storeName, details: { endpoint, responseType: typeof backendItems } });
+				 // Avoid throwing — treat as empty list to avoid crashing the whole refresh
+				 backendItems = [];
+			 }
+		 }
 		 const { getDB } = await import('./db');
 		 const db = await getDB();
 		 const pending = await db.getAll('syncQueue');
@@ -188,6 +215,17 @@ export async function syncWithServer() {
 	 // Accept optional storeId param via arguments if caller wants to scope requests
 	 // We expose storeId by letting callers pass params into refreshAllFromBackend
 	 return async function innerRefresh(storeId?: string) {
+		 // Double-check backend reachability before attempting the full refresh
+		 try {
+			 const backendUp = await backendAvailable();
+			 if (!backendUp) {
+				 console.log('refreshAllFromBackend: backend ping failed — skipping refresh');
+				 return;
+			 }
+		 } catch (e) {
+			 console.log('refreshAllFromBackend: backendAvailable check error, skipping refresh', e);
+			 return;
+		 }
 		 const params = storeId ? { storeId } : undefined;
 		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params);
 		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', 'customers', 'customers', undefined, params);
@@ -223,12 +261,17 @@ window.addEventListener('online', async () => {
 	connectionState.isOnline = true;
 	connectionState.lastCheck = Date.now();
 	listeners.forEach(l => l(connectionState));
-	await syncWithServer();
-	// Synchronisation intelligente : rafraîchir les données locales depuis le backend
-	// We delegate to a reusable function so it can be called on startup as well
+	// Only attempt network sync if backend is reachable
 	try {
-		const maybeRefresher = await refreshAllFromBackend();
-		if (typeof maybeRefresher === 'function') await maybeRefresher();
+		const backendUp = await backendAvailable();
+		if (!backendUp) {
+			console.log('Online event: internet available but backend ping failed — skipping sync');
+			return;
+		}
+		// First try to flush pending operations
+		await syncWithServer();
+		// Ne rafraîchit plus automatiquement les données locales depuis le backend
+		// L'utilisateur doit cliquer sur un bouton ou déclencher manuellement refreshAllFromBackend
 	} catch (e) {
 		console.log('Erreur lors de la synchronisation initiale depuis le backend:', e);
 	}

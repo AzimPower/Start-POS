@@ -6,6 +6,8 @@ import { refreshAllFromBackend } from '@/lib/sync';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { toast } from 'sonner';
 import * as secureStorage from '@/lib/secureStorage';
+import { versionManager } from '@/lib/versionManager';
+import '@/lib/versionDebug';
 // Early back button handler: register before React mounts so we intercept native back immediately
 (async function registerEarlyBackHandler(){
 	try {
@@ -44,25 +46,40 @@ import * as secureStorage from '@/lib/secureStorage';
 	}
 })();
 
-createRoot(document.getElementById("root")!).render(<App />);
+
+function renderApp() {
+	createRoot(document.getElementById("root")!).render(<App />);
+}
+
+// Gestion d'erreurs globales
+window.onerror = function (message, source, lineno, colno, error) {
+	showGlobalError(message);
+	return false;
+};
+window.onunhandledrejection = function (event) {
+	showGlobalError(event.reason || 'Erreur inconnue');
+};
+
+function showGlobalError(errorMsg: any) {
+	const root = document.getElementById("root");
+	if (root) {
+		root.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#fff;color:#d32f2f;font-size:1.2rem;text-align:center;">
+			<h1>Une erreur critique est survenue</h1>
+			<pre style="white-space:pre-wrap;word-break:break-all;max-width:90vw;">${(errorMsg && errorMsg.toString()) || 'Erreur inconnue'}</pre>
+			<button onclick="window.location.reload()" style="margin-top:2rem;padding:0.5rem 1.5rem;font-size:1rem;">Recharger l'application</button>
+		</div>`;
+	}
+}
+
+renderApp();
+
+// Initialiser le gestionnaire de versions
+console.log('Version de l\'application:', versionManager.getVersionString());
 
 // register the service worker for PWA behavior (no-op in browsers that don't support it)
 registerServiceWorker();
 
-// On startup, if online, try to refresh core data from backend (stores, users, products...)
-if (navigator.onLine) {
-	// don't block rendering
-	(async () => {
-		try {
-			const maybeFn = await refreshAllFromBackend();
-			if (typeof maybeFn === 'function') {
-				await maybeFn();
-			}
-		} catch (e) {
-			console.warn('refreshAllFromBackend error', e);
-		}
-	})();
-}
+// Rafraîchissement complet désactivé au démarrage : il doit être déclenché explicitement par l'utilisateur (bouton Synchroniser dans le layout)
 
 // Attempt to auto-connect to stored printer on every app start so the app stays
 // connected to the thermal printer when possible. Non-blocking and tolerant to

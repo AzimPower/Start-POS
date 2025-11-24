@@ -28,7 +28,7 @@ interface Customer {
 }
 export default function Customers() {
   const { user } = useAuth();
-  const { isOnline, manualSync } = useNetwork();
+  const { isBackendReachable, manualSync } = useNetwork();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -93,7 +93,7 @@ export default function Customers() {
       const db = await getDB();
       
       // Si en ligne, charger depuis le backend et synchroniser
-      if (isOnline) {
+  if (isBackendReachable) {
         try {
           // Charger les clients depuis le backend (n'ajouter storeId que s'il est défini)
           let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
@@ -245,7 +245,7 @@ export default function Customers() {
         await db.put('customers', updated);
         
         // Si en ligne, synchroniser immédiatement avec le backend
-        if (isOnline) {
+  if (isBackendReachable) {
           try {
             const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
               method: 'PUT',
@@ -304,7 +304,7 @@ export default function Customers() {
         await db.add('customers', newCustomer);
         
         // Si en ligne, synchroniser immédiatement avec le backend
-        if (isOnline) {
+  if (isBackendReachable) {
           try {
             const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
               method: 'POST',
@@ -380,7 +380,7 @@ export default function Customers() {
       await db.delete('customers', id);
       
       // Si en ligne, synchroniser immédiatement avec le backend
-      if (isOnline) {
+  if (isBackendReachable) {
         try {
           const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php?id=${id}`, {
             method: 'DELETE',
@@ -536,11 +536,11 @@ export default function Customers() {
                   rows={3}
                 />
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 justify-center sm:justify-end">
-                <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsDialogOpen(false)}>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="w-1/2" onClick={() => setIsDialogOpen(false)} disabled={loading}>
                   Annuler
                 </Button>
-                <Button type="submit" className="w-full sm:w-auto" disabled={loading}>
+                <Button type="submit" className="w-1/2" disabled={loading}>
                   {loading ? 'Traitement...' : (editingCustomer ? 'Mettre à jour' : 'Créer')}
                 </Button>
               </div>
@@ -579,11 +579,17 @@ export default function Customers() {
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8">
-                      Chargement des clients...
-                    </TableCell>
-                  </TableRow>
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <TableRow key={`skeleton-${i}`}>
+                      <TableCell colSpan={7} className="py-8">
+                        <div className="flex items-center gap-3 animate-pulse">
+                          <div className="h-5 bg-gray-200 rounded w-32" />
+                          <div className="h-4 bg-gray-200 rounded w-20" />
+                          <div className="h-4 bg-gray-200 rounded w-16" />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
                 ) : filteredCustomers.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">

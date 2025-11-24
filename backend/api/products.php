@@ -95,7 +95,7 @@ switch ($method) {
             $data['storeId'] ?? '',
             isset($data['trackStock']) ? (int)$data['trackStock'] : 0
         ]);
-        // Un seul bloc d'insertion product_stock avec log dans la réponse JSON
+        // Gérer product_stock : insérer/mettre à jour si trackStock true, sinon supprimer toute entrée existante
         $productStockResult = null;
         if (isset($data['trackStock']) && $data['trackStock'] && isset($data['stock'])) {
             $sqlStock = 'INSERT INTO product_stock (productId, storeId, stock) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE stock = VALUES(stock)';
@@ -114,6 +114,13 @@ switch ($method) {
                     'stock' => $data['stock']
                 ]
             ];
+        } else {
+            // Si le suivi est désactivé explicitement, supprimer l'entrée de stock correspondante
+            if (isset($data['trackStock']) && !$data['trackStock'] && isset($data['storeId'])) {
+                $delStock = $pdo->prepare('DELETE FROM product_stock WHERE productId = ? AND storeId = ?');
+                $delStock->execute([$id, $data['storeId']]);
+                $productStockResult = ['deleted' => $delStock->rowCount()];
+            }
         }
             if (!$success) {
                 echo json_encode([
@@ -147,7 +154,7 @@ switch ($method) {
             isset($data['trackStock']) ? (int)$data['trackStock'] : 0,
             $data['id'] ?? ''
         ]);
-        // Un seul bloc d'insertion product_stock avec log dans la réponse JSON
+        // Gérer product_stock : insérer/mettre à jour si trackStock true, sinon supprimer l'entrée correspondante
         $productStockResult = null;
         if (isset($data['trackStock']) && $data['trackStock'] && isset($data['stock'])) {
             $sqlStock = 'INSERT INTO product_stock (productId, storeId, stock) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE stock = VALUES(stock)';
@@ -166,6 +173,12 @@ switch ($method) {
                     'stock' => $data['stock']
                 ]
             ];
+        } else {
+            if (isset($data['trackStock']) && !$data['trackStock'] && isset($data['storeId'])) {
+                $delStock = $pdo->prepare('DELETE FROM product_stock WHERE productId = ? AND storeId = ?');
+                $delStock->execute([$data['id'], $data['storeId']]);
+                $productStockResult = ['deleted' => $delStock->rowCount()];
+            }
         }
             if (!$success) {
                 echo json_encode([

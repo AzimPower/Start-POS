@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vitejs.dev/config/
@@ -14,59 +13,142 @@ export default defineConfig(({ mode }) => ({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'robots.txt', 'offline.html', 'placeholder.svg'],
+      injectRegister: 'auto',
       devOptions: {
-        enabled: true
+        enabled: true, // Activer en développement pour tester
+        type: 'module'
       },
+      includeAssets: ['favicon/site.webmanifest', 'robots.txt', 'offline.html'],
       manifest: {
-        name: 'Start POS',
+        name: 'POS System',
         short_name: 'POS',
-        start_url: '/',
-        display: 'standalone',
+        description: 'Point of Sale System',
+        theme_color: '#ffffff',
         background_color: '#ffffff',
-        theme_color: '#0ea5a4',
-        description: 'POS app avec synchronisation offline/online',
+        display: 'standalone',
+        start_url: '/',
         icons: [
           {
-            src: 'placeholder.svg',
+            src: 'favicon/site.webmanifest',
             sizes: '192x192',
-            type: 'image/svg+xml'
+            type: 'image/png'
           },
           {
-            src: 'placeholder.svg',
+            src: 'favicon/site.webmanifest',
             sizes: '512x512',
-            type: 'image/svg+xml'
+            type: 'image/png'
           }
         ]
       },
       workbox: {
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
+        // Améliorer la gestion des versions
+        mode: 'generateSW',
+        swDest: 'sw.js',
+        // Fichiers à précacher
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,webp,woff2}'
+        ],
+        // Ignorer certains fichiers
+        globIgnores: [
+          '**/node_modules/**/*',
+          'sw.js',
+          'workbox-*.js'
+        ],
+        // Configuration du cache runtime
         runtimeCaching: [
           {
             urlPattern: /\/api\//,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'api-cache'
+              cacheName: 'api-cache-v1',
+              networkTimeoutSeconds: 10,
+              cacheableResponse: {
+                statuses: [0, 200]
+              },
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 60 * 5 // 5 minutes pour l'API
+              }
             }
           },
           {
-            urlPattern: /\.(?:png|jpg|jpeg|svg|gif)$/,
+            urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp)$/,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'image-cache',
+              cacheName: 'image-cache-v1',
               expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24 * 30
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 60 * 24 * 30 // 30 jours
+              },
+              cacheableResponse: {
+                statuses: [200]
               }
             }
+          },
+          {
+            urlPattern: /\.(?:js|css|woff2?|ttf|eot)$/,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'static-assets-v1',
+              expiration: {
+                maxEntries: 200,
+                maxAgeSeconds: 60 * 60 * 24 * 7 // 7 jours
+              }
+            }
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'google-fonts-stylesheets-v1'
+            }
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-webfonts-v1',
+              expiration: {
+                maxEntries: 30,
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 1 an
+              }
+            }
+          }
+        ],
+        // Code personnalisé pour gérer les mises à jour
+        additionalManifestEntries: [
+          {
+            url: '/offline.html',
+            revision: null
           }
         ]
       }
     }),
-    mode === "development" && componentTagger()
   ].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Utiliser des hash plus longs pour éviter les collisions
+        entryFileNames: 'assets/[name]-[hash:8].js',
+        chunkFileNames: 'assets/[name]-[hash:8].js',
+        assetFileNames: 'assets/[name]-[hash:8].[ext]'
+      }
+    },
+    // Optimiser le splitting pour de meilleurs hash
+    assetsInlineLimit: 0, // Ne pas inline les assets pour forcer les hash
+    chunkSizeWarningLimit: 1000
+  },
+  // Variables d'environnement pour le versioning
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.0'),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  }
 }));

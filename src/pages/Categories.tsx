@@ -31,6 +31,7 @@ export default function Categories() {
   const { user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
   name: '',
   description: '',
@@ -72,6 +73,8 @@ export default function Categories() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     const db = await getDB();
     try {
       if (editingCategory) {
@@ -142,6 +145,8 @@ export default function Categories() {
       loadData();
     } catch {
       toast.error('Erreur lors de l\'enregistrement');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -244,12 +249,12 @@ export default function Categories() {
                   placeholder="Description de la catégorie"
                 />
               </div>
-              <div className="flex gap-2 justify-end">
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="w-1/2" onClick={() => setIsDialogOpen(false)} disabled={submitting}>
                   Annuler
                 </Button>
-                <Button type="submit">
-                  {editingCategory ? 'Mettre à jour' : 'Créer'}
+                <Button type="submit" className="w-1/2" disabled={submitting}>
+                  {submitting ? 'Traitement...' : (editingCategory ? 'Mettre à jour' : 'Créer')}
                 </Button>
               </div>
             </form>

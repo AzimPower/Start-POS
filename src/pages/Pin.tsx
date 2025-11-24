@@ -336,22 +336,9 @@ export default function Pin({ overlay = false }: { overlay?: boolean }) {
       </div>
   <div className={contentClass}>
         <div className="flex flex-col items-center mb-6">
-          {logoSrc && logoSrc !== '/logo192.png' ? (
-            <img
-              src={logoSrc}
-              alt="Logo magasin"
-              className="w-32 h-20 object-contain"
-              onError={(e) => {
-                const target = e.currentTarget;
-                target.onerror = null;
-                target.src = 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'80\' height=\'60\'><rect width=\'100%\' height=\'100%\' fill=\'#e5e7eb\'/><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-size=\'14\' fill=\'#888\'>Logo</text></svg>';
-              }}
-            />
-          ) : (
-            <div className="mx-auto w-16 h-16 bg-gradient-to-br from-blue-400 via-blue-600 to-blue-800 rounded-2xl flex items-center justify-center shadow-md">
-              <ShoppingCart className="w-8 h-8 text-white" />
-            </div>
-          )}
+          <div className="mx-auto w-16 h-16 bg-gradient-to-br from-blue-400 via-blue-600 to-blue-800 rounded-2xl flex items-center justify-center shadow-md">
+            <ShoppingCart className="w-8 h-8 text-white" />
+          </div>
           <h2 className="mt-4 text-lg font-medium">Saisir le code PIN</h2>
         </div>
 

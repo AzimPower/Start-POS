@@ -10,9 +10,12 @@ import {
   forceSyncNow
 } from '@/lib/sync';
 import { useToast } from '@/hooks/use-toast';
+import { backendAvailable } from '@/lib/backend';
+
 
 export interface NetworkStatus {
-  isOnline: boolean;
+  isOnline: boolean; // Internet connectivity (navigator)
+  isBackendReachable: boolean; // Backend ping OK
   isSyncing: boolean;
   pendingCount: number;
   lastCheck: number;
@@ -21,6 +24,7 @@ export interface NetworkStatus {
 export const useNetwork = () => {
   const [status, setStatus] = useState<NetworkStatus>({
     isOnline: connectionState.isOnline,
+    isBackendReachable: false,
     isSyncing: connectionState.isSyncing,
     pendingCount: 0,
     lastCheck: connectionState.lastCheck,
@@ -36,33 +40,57 @@ export const useNetwork = () => {
 
   // S'abonner aux changements d'état
   useEffect(() => {
+    let mounted = true;
+
+    // Au montage, valider que le backend est joignable (pas seulement la connexion réseau)
+    (async () => {
+      try {
+        const up = await backendAvailable();
+        if (mounted) setStatus(prev => ({ ...prev, isBackendReachable: up }));
+      } catch (e) {
+        // ignore
+      }
+    })();
+
     const unsubscribe = onConnectionStateChange((newState) => {
-      setStatus(prevStatus => {
-        // Afficher une notification lors du changement d'état
-        if (prevStatus.isOnline !== newState.isOnline) {
-          if (newState.isOnline) {
-            toast({
-              title: '🌐 Connexion rétablie',
-              description: 'Synchronisation en cours...',
-              variant: 'default',
-            });
-          } else {
-            toast({
-              title: '📴 Mode hors ligne',
-              description: 'Les modifications seront synchronisées à la reconnexion',
-              variant: 'destructive',
-              duration: 5000,
-            });
+      (async () => {
+        let backendUp = false;
+        if (newState.isOnline) {
+          try {
+            backendUp = await backendAvailable();
+          } catch (e) {
+            backendUp = false;
           }
         }
 
-        return {
-          ...prevStatus,
-          isOnline: newState.isOnline,
-          isSyncing: newState.isSyncing,
-          lastCheck: newState.lastCheck,
-        };
-      });
+        setStatus(prevStatus => {
+          // Toast only if backend reachability changes
+          if (prevStatus.isBackendReachable !== backendUp) {
+            if (backendUp) {
+              toast({
+                title: '🌐 Connexion au serveur rétablie',
+                description: 'Synchronisation en cours...',
+                variant: 'default',
+              });
+            } else {
+              toast({
+                title: '📴 Serveur inaccessible',
+                description: 'Connexion Internet ok mais serveur indisponible',
+                variant: 'destructive',
+                duration: 5000,
+              });
+            }
+          }
+
+          return {
+            ...prevStatus,
+            isOnline: newState.isOnline,
+            isBackendReachable: backendUp,
+            isSyncing: newState.isSyncing,
+            lastCheck: newState.lastCheck,
+          };
+        });
+      })().catch(() => {});
     });
 
     // Mettre à jour le nombre d'items en attente périodiquement
@@ -77,13 +105,15 @@ export const useNetwork = () => {
 
   // Fonction pour forcer une synchronisation manuelle
   const manualSync = useCallback(async () => {
-    if (!status.isOnline) {
+    // Re-vérifier que le backend est joignable (même si navigator indique online)
+    const backendUp = await backendAvailable();
+    if (!backendUp) {
       toast({
-        title: '📴 Hors ligne',
-        description: 'Impossible de synchroniser en mode hors ligne',
+        title: '📴 Serveur indisponible',
+        description: 'Impossible de synchroniser : le serveur est inaccessible',
         variant: 'destructive',
       });
-      return { success: false, reason: 'offline' };
+      return { success: false, reason: 'backend_unreachable' };
     }
 
     if (status.isSyncing) {
@@ -124,7 +154,7 @@ export const useNetwork = () => {
       });
       return { success: false, error };
     }
-  }, [status.isOnline, status.isSyncing, toast, updatePendingCount]);
+  }, [status.isSyncing, toast, updatePendingCount]);
 
   return {
     ...status,

@@ -1,4 +1,5 @@
 import { connectionState, queueSyncOp } from './sync';
+import { backendAvailable } from './backend';
 /**
  * Effectue une opération synchronisable :
  * - Si en ligne, fait l’appel API backend
@@ -6,7 +7,14 @@ import { connectionState, queueSyncOp } from './sync';
  * @param op { url, method, data }
  */
 export async function performSyncOp(op: { url: string; method?: string; data?: any }) {
+  // Ensure backend is reachable before attempting a direct call.
   if (connectionState.isOnline) {
+    const backendUp = await backendAvailable().catch(() => false);
+    if (!backendUp) {
+      // Internet may be present but API is unreachable — queue operation instead
+      await queueSyncOp(op);
+      return { success: false, queued: true, reason: 'backend_unreachable' };
+    }
     try {
       const res = await fetch(op.url, {
         method: op.method || 'POST',
@@ -16,7 +24,7 @@ export async function performSyncOp(op: { url: string; method?: string; data?: a
       if (res.ok) {
         return { success: true, status: res.status, data: await res.json() };
       } else {
-        // Si erreur serveur, on peut choisir de mettre en attente
+        // Si erreur serveur, on met en attente
         await queueSyncOp(op);
         return { success: false, status: res.status, queued: true };
       }
@@ -50,13 +58,24 @@ interface POSDB extends DBSchema {
       id: string;
       username: string;
       phone: string; // Téléphone unique pour la connexion
+      email?: string; // Email optionnel
       password: string;
       role: 'super_admin' | 'admin' | 'cashier';
       storeId: string;
+      storeIds?: string[]; // support multi-magasin (mapping user_stores)
       active?: boolean;
       createdAt: number;
     };
-    indexes: { 'by-username': string; 'by-phone': string };
+    indexes: { 'by-username': string; 'by-phone': string; 'by-email': string };
+  };
+  userStores: {
+    key: string;
+    value: {
+      id: string;
+      userId: string;
+      storeId: string;
+    };
+    indexes: { 'by-user': string; 'by-store': string };
   };
   stores: {
     key: string;
@@ -278,18 +297,25 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<POSDB>('pos-db', 7, {
+  dbInstance = await openDB<POSDB>('pos-db', 9, {
     upgrade(db, oldVersion, newVersion, transaction) {
       // Users store
       if (!db.objectStoreNames.contains('users')) {
         const userStore = db.createObjectStore('users', { keyPath: 'id' });
         userStore.createIndex('by-username', 'username', { unique: true });
         userStore.createIndex('by-phone', 'phone', { unique: true });
+        userStore.createIndex('by-email', 'email', { unique: false });
       } else if (oldVersion < 3) {
         const userStore = transaction.objectStore('users');
 
         if (!userStore.indexNames.contains('by-phone')) {
           userStore.createIndex('by-phone', 'phone', { unique: true });
+        }
+      } else if (oldVersion < 9) {
+        const userStore = transaction.objectStore('users');
+
+        if (!userStore.indexNames.contains('by-email')) {
+          userStore.createIndex('by-email', 'email', { unique: false });
         }
       }
 
@@ -387,8 +413,34 @@ export async function getDB() {
         syncLogsStore.createIndex('by-entity', 'entity');
         syncLogsStore.createIndex('by-level', 'level');
       }
+      // userStores mapping (many-to-many user <-> stores)
+      if (!db.objectStoreNames.contains('userStores')) {
+        const us = db.createObjectStore('userStores', { keyPath: 'id' });
+        us.createIndex('by-user', 'userId');
+        us.createIndex('by-store', 'storeId');
+      }
     },
   });
+
+  // Migrate existing single-store users into userStores mappings (non-destructive)
+  try {
+    const userStoresCount = await dbInstance.count('userStores');
+    if (userStoresCount === 0) {
+      const allUsers = await dbInstance.getAll('users');
+      for (const u of allUsers) {
+        if (u.storeId) {
+          const id = crypto.randomUUID();
+          try {
+            await dbInstance.add('userStores', { id, userId: u.id, storeId: u.storeId });
+          } catch (e) {
+            // ignore duplicates
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('userStores migration error', e);
+  }
 
   // Initialize with default data if needed
   await initializeDefaultData(dbInstance);
@@ -405,6 +457,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
       id: crypto.randomUUID(),
       username: 'superadmin',
       phone: '+22600000000', // Téléphone par défaut pour super admin
+      email: 'superadmin@example.com',
       password: 'super123',
       role: 'super_admin',
       storeId: '',
@@ -431,6 +484,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
       id: crypto.randomUUID(),
       username: 'admin',
       phone: '1111111111', // Téléphone par défaut pour admin
+      email: 'admin@example.com',
       password: 'admin123',
       role: 'admin',
       storeId: defaultStore.id,
