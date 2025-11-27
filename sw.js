@@ -78,13 +78,13 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
+    "url": "assets/index-B61tojS_.js",
+    "revision": null
+  }, {
     "url": "assets/index-BehlJqI9.css",
     "revision": null
   }, {
-    "url": "assets/index-BOVnp907.js",
-    "revision": null
-  }, {
-    "url": "assets/virtual_pwa-register-RFpRvGM6.js",
+    "url": "assets/virtual_pwa-register-Dx4oMqII.js",
     "revision": null
   }, {
     "url": "assets/workbox-window.prod.es5-B9K5rw8f.js",
@@ -139,7 +139,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
   }, {
     "url": "index.html",
-    "revision": "10b7107ca415477ad40c45d9884932a1"
+    "revision": "80079692e4c0688bc3498c34dc63939f"
   }, {
     "url": "offline.html",
     "revision": "893dde22b9df46cfbc4f8746c7bffa32"
@@ -172,6 +172,20 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     }), new workbox.ExpirationPlugin({
       maxEntries: 50,
       maxAgeSeconds: 300
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    url,
+    request
+  }) => {
+    const isEmailAPI = url.href.includes("send-email.php");
+    const hasBypass = url.searchParams.has("_bypass_sw");
+    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !hasBypass;
+  }, new workbox.NetworkFirst({
+    "cacheName": "external-api-cache",
+    "networkTimeoutSeconds": 15,
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [200]
     })]
   }), 'GET');
   workbox.registerRoute(/\.(?:png|jpg|jpeg|svg|gif|webp)$/, new workbox.CacheFirst({

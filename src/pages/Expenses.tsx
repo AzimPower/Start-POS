@@ -15,6 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Plus, Receipt, Package, Settings, Trash2, Eye, Edit, Wifi, WifiOff } from 'lucide-react';
 import './expenses.css';
 import { toast } from 'sonner';
+import { emailService } from '@/lib/emailService';
+import { pendingEmailService } from '@/lib/pendingEmailService';
 
 interface Product {
   id: string;
@@ -85,6 +87,7 @@ export default function Expenses() {
   const [loading, setLoading] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [editingExpense, setEditingExpense] = useState<ExpenseAdvanced | null>(null);
+  const [adminUser, setAdminUser] = useState<any>(null);
   
   // Search and filter states
   const [searchQuery, setSearchQuery] = useState('');
@@ -157,6 +160,19 @@ export default function Expenses() {
             for (const p of backendProducts) await tx.store.put(p);
             await tx.done;
           }
+          // Admin user pour emails
+          const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+          if (usersResponse.ok) {
+            const users = await usersResponse.json();
+            const admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
+            if (admin) {
+              console.log('🔍 [DEBUG] Admin trouvé (Expenses):', admin.email);
+              setAdminUser(admin);
+            } else {
+              console.log('⚠️ [DEBUG] Aucun admin avec email trouvé (Expenses)');
+            }
+          }
+
           // Catégories de dépenses
           let categoriesUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php';
           if (user?.storeId) categoriesUrl += `?storeId=${user.storeId}`;
@@ -431,7 +447,6 @@ export default function Expenses() {
     try {
       setLoading(true);
       const db = await getDB();
-      
       let expenseName = '';
       if (expenseType === 'direct') {
         const product = products.find(p => p.id === formData.directProductId);
@@ -440,7 +455,6 @@ export default function Expenses() {
         const category = expenseCategories.find(c => c.id === formData.categoryId);
         expenseName = category ? category.name : 'Dépense';
       }
-      
       const baseExpense = {
         id: generateId(),
         type: expenseType,
@@ -454,13 +468,11 @@ export default function Expenses() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
-      
       let expense: ExpenseAdvanced;
       if (expenseType === 'direct') {
         const selectedProduct = products.find(p => p.id === formData.directProductId);
         const isStockProduct = selectedProduct && selectedProduct.stock && user?.storeId && Object.keys(selectedProduct.stock).includes(user.storeId);
         const qty = isStockProduct ? parseFloat(formData.directProductQuantity) : 1;
-        
         expense = {
           ...baseExpense,
           directProduct: {
@@ -469,8 +481,6 @@ export default function Expenses() {
             startDate: new Date(formData.date).getTime(),
           },
         };
-        
-        // Mise à jour du stock si produit géré en stock
         if (isStockProduct && user?.storeId) {
           const newStock = (selectedProduct.stock[user.storeId] || 0) + qty;
           const updatedProduct = {
@@ -483,17 +493,13 @@ export default function Expenses() {
             updatedAt: Date.now(),
           };
           await db.put('products', updatedProduct);
-          
-          // Mettre à jour le stock dans le backend si backend reachable
           if (isBackendReachable) {
             try {
-              // Préparer les données pour l'API backend (format attendu par products.php)
               const productDataForBackend = {
                 ...updatedProduct,
-                stock: newStock, // Envoyer le stock comme un nombre simple
-                trackStock: true // S'assurer que trackStock est activé
+                stock: newStock,
+                trackStock: true
               };
-              
               const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
                 method: 'PUT',
                 headers: {
@@ -501,13 +507,11 @@ export default function Expenses() {
                 },
                 body: JSON.stringify(productDataForBackend)
               });
-              
               if (!response.ok) {
                 throw new Error(`Erreur backend: ${response.status}`);
               }
             } catch (error) {
               console.error('Erreur lors de la mise à jour du stock dans le backend:', error);
-              // Ajouter la mise à jour du stock à la queue de synchronisation
               const productDataForBackend = {
                 ...updatedProduct,
                 stock: newStock,
@@ -524,7 +528,6 @@ export default function Expenses() {
               });
             }
           } else {
-            // Hors ligne : ajouter la mise à jour du stock à la queue de synchronisation
             const productDataForBackend = {
               ...updatedProduct,
               stock: newStock,
@@ -547,17 +550,17 @@ export default function Expenses() {
           categoryId: formData.categoryId,
         };
       }
-      
       // If editing an existing expense, update; otherwise add
+      let finalExpense = expense;
+      let isEdit = false;
       if (editingExpense) {
+        isEdit = true;
         const updatedExpense: ExpenseAdvanced = {
           ...expense,
           id: editingExpense.id,
           createdAt: editingExpense.createdAt,
           updatedAt: Date.now(),
         };
-
-        // If direct expense and quantity changed, adjust product stock accordingly
         if (expenseType === 'direct') {
           const selectedProduct = products.find(p => p.id === updatedExpense.directProduct?.productId);
           const isStockProduct = selectedProduct && selectedProduct.stock && user?.storeId && Object.keys(selectedProduct.stock).includes(user.storeId);
@@ -565,9 +568,7 @@ export default function Expenses() {
             const oldQty = Number(editingExpense.directProduct.quantity || 0);
             const newQty = Number(updatedExpense.directProduct.quantity || 0);
             if (user?.storeId) {
-              // 1. Soustraire l'ancienne quantité
               let tempStock = (selectedProduct.stock[user.storeId] || 0) - oldQty;
-              // 2. Ajouter la nouvelle quantité
               tempStock += newQty;
               const updatedProduct = {
                 ...selectedProduct,
@@ -579,13 +580,11 @@ export default function Expenses() {
                 updatedAt: Date.now(),
               };
               await db.put('products', updatedProduct);
-
               const productDataForBackend = {
                 ...updatedProduct,
                 stock: tempStock,
                 trackStock: true
               };
-
               if (isBackendReachable) {
                 try {
                   const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
@@ -620,7 +619,6 @@ export default function Expenses() {
             }
           }
         }
-
         await db.put('expensesAdvanced', updatedExpense);
         await performSyncOp({
           url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
@@ -628,19 +626,113 @@ export default function Expenses() {
           data: updatedExpense
         });
         toast.success('Dépense modifiée localement. La synchronisation se fera automatiquement.');
+        finalExpense = updatedExpense;
       } else {
-        // Sauvegarder localement d'abord
         await db.add('expensesAdvanced', expense);
-        // Synchroniser ou mettre en file avec performSyncOp
         await performSyncOp({
           url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
           method: 'POST',
           data: expense
         });
         toast.success('Dépense enregistrée localement. La synchronisation se fera automatiquement.');
+        finalExpense = expense;
       }
-      
-      // Reset form
+
+      // Envoi automatique d'un email à l'admin après ajout ou modification de dépense
+      try {
+        console.log('🔍 [DEBUG] Début envoi email dépense', { isEdit, expenseId: finalExpense.id });
+        const dbInstance = await getDB();
+        
+        // Vérifier les paramètres d'email pour les dépenses
+        const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
+        console.log('🔍 [DEBUG] Email settings:', emailSettings);
+        const shouldSendEmail = emailSettings?.expenses !== false; // Par défaut true si pas de config
+        
+        if (!shouldSendEmail) {
+          console.log('📧 Email désactivé pour les dépenses');
+        } else {
+          console.log('📧 [EXPENSE] Envoi email à tous les admins du store:', user?.storeId);
+          
+          // Récupérer le nom du magasin depuis la base locale
+          const store = await dbInstance.get('stores', user?.storeId);
+          const storeName = store?.name || user?.storeId || '';
+          // Construction du résumé HTML
+          const resume = `
+<div style="margin: 20px 0;">
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💸 Dépense ${isEdit ? 'modifiée' : 'ajoutée'}</h3>
+    <div class="info-row">
+      <span class="info-label">Utilisateur :&nbsp;</span>
+      <span class="info-value">${user?.username || 'Inconnu'}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Type :&nbsp;</span>
+      <span class="info-value">${getExpenseTypeLabel(finalExpense.type)}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Montant :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${Number(finalExpense.amount).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Date :&nbsp;</span>
+      <span class="info-value">${new Date(finalExpense.date).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Description :&nbsp;</span>
+      <span class="info-value">${finalExpense.description || '-'}</span>
+    </div>
+    ${finalExpense.type === 'direct' && finalExpense.directProduct ? `
+    <div class="info-row">
+      <span class="info-label">Produit :&nbsp;</span>
+      <span class="info-value">${getProductName(finalExpense.directProduct.productId)}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Quantité :&nbsp;</span>
+      <span class="info-value">${finalExpense.directProduct.quantity}</span>
+    </div>
+    ` : ''}
+    ${(finalExpense.type === 'indirect' || finalExpense.type === 'operational') && finalExpense.categoryId ? `
+    <div class="info-row">
+      <span class="info-label">Catégorie :&nbsp;</span>
+      <span class="info-value">${getCategoryName(finalExpense.categoryId)}</span>
+    </div>
+    ` : ''}
+  </div>
+  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+    <strong>ID de la dépense :&nbsp;</strong>${finalExpense.id}
+  </div>
+</div>
+`;
+
+          
+          // Envoyer à TOUS les admins du store
+          try {
+            console.log('📧 [DEBUG] Envoi email dépense à tous les admins du store...');
+            const result = await pendingEmailService.sendToAllAdmins({
+              message: resume,
+              storeName: storeName,
+              type: 'expense',
+              relatedId: finalExpense.id,
+              storeId: user?.storeId || '',
+              userId: user?.id || ''
+            });
+            
+            console.log(`📊 [EXPENSE] Résultats: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
+            if (result.sent > 0) {
+              console.log('✅ Emails dépense envoyés directement');
+            }
+            if (result.queued > 0) {
+              console.log('📦 Emails dépense mis en attente, seront envoyés lors de la sync');
+            }
+          } catch (e) {
+            console.warn('❌ Erreur service email dépense:', e);
+          }
+        }
+      } catch (e) {
+        console.warn('❌ Erreur lors de l\'envoi automatique du mail admin pour dépense:', e);
+        console.warn('🔍 [DEBUG] Détails erreur:', { isEdit, userId: user?.id, storeId: user?.storeId });
+      }
+
       setFormData({
         amount: '',
         description: '',

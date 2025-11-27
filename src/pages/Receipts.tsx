@@ -15,6 +15,7 @@ import * as NativePrinter from '@/lib/nativePrinter';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { pendingEmailService } from '@/lib/pendingEmailService';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -511,6 +512,83 @@ export default function Receipts() {
       } catch (error) {
         console.error('Erreur lors de la demande de synchronisation:', error);
         toast.success('Vente remboursée (sera synchronisée plus tard)');
+      }
+
+      // Envoyer notification email aux admins du store
+      try {
+        const emailSettings = JSON.parse(localStorage.getItem(`emailSettings_${saleToRefund.storeId}`) || '{}');
+        const shouldSendEmail = emailSettings?.refunds !== false; // Par défaut true si pas de config
+        
+        if (shouldSendEmail) {
+          const store = stores.find(s => s.id === saleToRefund.storeId);
+          const storeName = store?.name || 'Magasin';
+          
+          // Construction du template HTML structuré comme pour les dépenses
+          const refundMessage = `
+<div style="margin: 20px 0;">
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">↩️ Remboursement de Vente</h3>
+    <div class="info-row">
+      <span class="info-label">Magasin :&nbsp;</span>
+      <span class="info-value">${storeName}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Traité par :&nbsp;</span>
+      <span class="info-value">${user?.username || 'Inconnu'}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Montant remboursé :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${Number(saleToRefund.total).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Date :&nbsp;</span>
+      <span class="info-value">${new Date().toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Africa/Ouagadougou' })}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Méthode de paiement :&nbsp;</span>
+      <span class="info-value">${getPaymentMethodText(saleToRefund.paymentMethod)}</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📦 Articles Remboursés</h3>
+    ${(saleToRefund.items || []).map(item => `
+    <div class="info-row">
+      <span class="info-label">${item.name} :&nbsp;</span>
+      <span class="info-value">${item.quantity} × ${Number(item.price).toLocaleString('fr-FR')} = ${Number(item.total).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    `).join('')}
+  </div>
+
+  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+    <strong>ID de la Vente :&nbsp;</strong>${saleToRefund.id}
+  </div>
+</div>
+`;
+
+          console.log('📧 [REFUND] Envoi notification remboursement à tous les admins...');
+          const result = await pendingEmailService.sendToAllAdmins({
+            message: refundMessage,
+            storeName: storeName,
+            type: 'refund',
+            relatedId: saleToRefund.id,
+            storeId: saleToRefund.storeId,
+            userId: user?.id || 'unknown'
+          });
+
+          if (result.sent > 0) {
+            console.log('✅ Emails remboursement envoyés directement');
+            toast.success(`Remboursement effectué - Emails envoyés à ${result.totalAdmins} admin(s)`);
+          } else if (result.queued > 0) {
+            console.log('📦 Emails remboursement mis en attente, seront envoyés lors de la sync');
+            toast.success('Remboursement effectué - Notifications en attente d\'envoi');
+          }
+        } else {
+          console.log('📧 [REFUND] Envoi email désactivé pour les remboursements');
+        }
+      } catch (emailError) {
+        console.warn('❌ Erreur envoi email remboursement:', emailError);
+        // Ne pas bloquer le processus si l'email échoue
       }
 
   setShowRefundDialog(false);

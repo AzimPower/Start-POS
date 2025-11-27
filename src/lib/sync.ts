@@ -74,7 +74,42 @@ export async function syncWithServer() {
 	if (!backendUp) {
 		return { success: false, reason: 'backend_unreachable' };
 	}
-	// Récupérer les opérations en attente
+
+  // Traiter les emails en attente en premier
+  try {
+    const { pendingEmailService } = await import('./pendingEmailService');
+    
+    // Debug: Vérifier combien d'emails en attente
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const pendingEmails = await db.getAll('pendingEmails');
+    const pendingOnly = pendingEmails.filter(e => e.status === 'pending');
+    
+    console.log('🔍 [SYNC-DEBUG] Emails en base:', {
+      total: pendingEmails.length,
+      pending: pendingOnly.length,
+      sent: pendingEmails.filter(e => e.status === 'sent').length,
+      failed: pendingEmails.filter(e => e.status === 'failed').length
+    });
+    
+    if (pendingOnly.length > 0) {
+      console.log('📧 [SYNC-DEBUG] Premiers emails pending:', pendingOnly.slice(0, 3).map(e => ({
+        id: e.id,
+        type: e.type,
+        email: e.email,
+        attempts: e.attempts,
+        createdAt: new Date(e.createdAt).toLocaleString()
+      })));
+    }
+    
+    const emailStats = await pendingEmailService.processPendingEmails();
+    console.log('📧 [SYNC] Emails traités:', emailStats);
+    
+    // Nettoyer les anciens emails
+    await pendingEmailService.cleanupOldEmails();
+  } catch (emailError) {
+    console.error('❌ [SYNC] Erreur traitement emails:', emailError);
+  }	// Récupérer les opérations en attente
 	const ops = await getPendingSyncOps();
 	if (!ops.length) {
 		// Rien à synchroniser, ne pas appeler le backend

@@ -82,7 +82,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "3ca0b8505b4bec776b69afdba2768812"
   }, {
     "url": "index.html",
-    "revision": "0.nkfiksecas"
+    "revision": "0.lvl3icis3r8"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
@@ -96,6 +96,20 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     }), new workbox.ExpirationPlugin({
       maxEntries: 50,
       maxAgeSeconds: 300
+    })]
+  }), 'GET');
+  workbox.registerRoute(({
+    url,
+    request
+  }) => {
+    const isEmailAPI = url.href.includes("send-email.php");
+    const hasBypass = url.searchParams.has("_bypass_sw");
+    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !hasBypass;
+  }, new workbox.NetworkFirst({
+    "cacheName": "external-api-cache",
+    "networkTimeoutSeconds": 15,
+    plugins: [new workbox.CacheableResponsePlugin({
+      statuses: [200]
     })]
   }), 'GET');
   workbox.registerRoute(/\.(?:png|jpg|jpeg|svg|gif|webp)$/, new workbox.CacheFirst({

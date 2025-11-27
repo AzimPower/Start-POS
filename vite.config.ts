@@ -75,6 +75,21 @@ export default defineConfig(({ mode }) => ({
             }
           },
           {
+            urlPattern: ({ url, request }) => {
+              const isEmailAPI = url.href.includes('send-email.php');
+              const hasBypass = url.searchParams.has('_bypass_sw');
+              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com' && !isEmailAPI && !hasBypass;
+            },
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'external-api-cache',
+              networkTimeoutSeconds: 15,
+              cacheableResponse: {
+                statuses: [200]
+              }
+            }
+          },
+          {
             urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp)$/,
             handler: 'CacheFirst',
             options: {

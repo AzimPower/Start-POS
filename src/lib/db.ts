@@ -52,6 +52,20 @@ interface POSDB extends DBSchema {
     };
     indexes: { 'by-category': string; 'by-store': string };
   };
+  emailSettings: {
+    key: string;
+    value: {
+      id: string;
+      storeId: string;
+      shifts: boolean;
+      stockSignals: boolean;
+      expenses: boolean;
+      logins: boolean;
+      refunds: boolean;
+      updatedAt: number;
+    };
+    indexes: { 'by-store': string };
+  };
   users: {
     key: string;
     value: {
@@ -278,6 +292,43 @@ interface POSDB extends DBSchema {
     };
     indexes: { 'by-table': string; 'by-operation': string };
   };
+  pendingEmails: {
+    key: string;
+    value: {
+      id: string;
+      name: string;
+      email: string;
+      message: string;
+      storeName: string;
+      type: 'expense' | 'receipt' | 'shift' | 'stock' | 'refund';
+      relatedId?: string; // ID de la dépense, vente, shift, etc.
+      storeId: string;
+      userId: string;
+      createdAt: number;
+      attempts: number;
+      lastAttempt?: number;
+      status: 'pending' | 'sent' | 'failed';
+      error?: string;
+    };
+    indexes: { 'by-store': string; 'by-user': string; 'by-type': string; 'by-status': string };
+  };
+  adminCache: {
+    key: string;
+    value: {
+      id: string;
+      username: string;
+      email: string;
+      role: string;
+      storeId?: string;
+      cachedAt: number;
+      isFallback?: boolean;
+      allStoreAdmins?: Array<{
+        id: string;
+        username: string;
+        email: string;
+      }>;
+    };
+  };
   syncLogs: {
     key: string;
     value: {
@@ -297,7 +348,7 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<POSDB>('pos-db', 9, {
+  dbInstance = await openDB<POSDB>('pos-db', 14, {
     upgrade(db, oldVersion, newVersion, transaction) {
       // Users store
       if (!db.objectStoreNames.contains('users')) {
@@ -418,6 +469,26 @@ export async function getDB() {
         const us = db.createObjectStore('userStores', { keyPath: 'id' });
         us.createIndex('by-user', 'userId');
         us.createIndex('by-store', 'storeId');
+      }
+
+      // Email Settings (per store configuration)
+      if (!db.objectStoreNames.contains('emailSettings')) {
+        const emailSettingsStore = db.createObjectStore('emailSettings', { keyPath: 'id' });
+        emailSettingsStore.createIndex('by-store', 'storeId');
+      }
+
+      // Pending Emails (emails en attente d'envoi)
+      if (!db.objectStoreNames.contains('pendingEmails')) {
+        const pendingEmailsStore = db.createObjectStore('pendingEmails', { keyPath: 'id' });
+        pendingEmailsStore.createIndex('by-store', 'storeId');
+        pendingEmailsStore.createIndex('by-user', 'userId');
+        pendingEmailsStore.createIndex('by-type', 'type');
+        pendingEmailsStore.createIndex('by-status', 'status');
+      }
+      
+      // Admin cache store (version 14)
+      if (!db.objectStoreNames.contains('adminCache')) {
+        db.createObjectStore('adminCache', { keyPath: 'id' });
       }
     },
   });

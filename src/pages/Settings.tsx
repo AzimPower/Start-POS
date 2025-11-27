@@ -50,6 +50,7 @@ import { getDB, performSyncOp } from '@/lib/db';
 import { versionManager } from '@/lib/versionManager';
 import { checkForUpdates, forceUpdateApp } from '@/registerServiceWorker';
 
+
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
 
 export default function Settings() {
@@ -60,6 +61,16 @@ export default function Settings() {
   const [manualValue, setManualValue] = useState<string>('');
   const [note, setNote] = useState<string>('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  
+  // Email notification settings
+  const [emailSettings, setEmailSettings] = useState({
+    shifts: true,
+    stockSignals: true,
+    expenses: true,
+    logins: true,
+    refunds: true
+  });
+  const [loadingEmailSettings, setLoadingEmailSettings] = useState(false);
   // Fond de roulement dialog state
   const [fondDialogOpen, setFondDialogOpen] = useState(false);
   const [fondValue, setFondValue] = useState<string>('');
@@ -77,6 +88,63 @@ export default function Settings() {
     const n = Number(v) || 0;
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF', maximumFractionDigits: 2 }).format(n);
   }
+
+  // Load email notification settings
+  const loadEmailSettings = async () => {
+    try {
+      const db = await getDB();
+      const settings = await db.get('emailSettings', user?.storeId);
+      if (settings) {
+        setEmailSettings({
+          shifts: settings.shifts !== false,
+          stockSignals: settings.stockSignals !== false,
+          expenses: settings.expenses !== false,
+          logins: settings.logins !== false,
+          refunds: settings.refunds !== false
+        });
+      }
+    } catch (e) {
+      console.warn('Error loading email settings:', e);
+    }
+  };
+
+  // Save email notification settings
+  const saveEmailSettings = async (newSettings: any) => {
+    try {
+      setLoadingEmailSettings(true);
+      const db = await getDB();
+      
+      // Utiliser storeId comme ID unique pour éviter les doublons
+      const settingsData = {
+        id: user?.storeId, // ID = storeId pour garantir l'unicité
+        storeId: user?.storeId,
+        ...newSettings,
+        updatedAt: Date.now()
+      };
+      
+      // Sauvegarder localement (put remplace si existe déjà)
+      await db.put('emailSettings', settingsData);
+      
+      // Sync with backend if online
+      try {
+        await performSyncOp({
+          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php',
+          method: 'PUT',
+          data: settingsData
+        });
+      } catch (e) {
+        console.warn('Failed to sync email settings:', e);
+      }
+      
+      setEmailSettings(newSettings);
+      toast.success('Paramètres d\'email sauvegardés');
+    } catch (e) {
+      console.error('Error saving email settings:', e);
+      toast.error('Erreur lors de la sauvegarde');
+    } finally {
+      setLoadingEmailSettings(false);
+    }
+  };
 
   // Fetch store info for admin
   const fetchStore = async () => {
@@ -239,6 +307,7 @@ export default function Settings() {
   useEffect(() => {
     if (user && (user.role === 'admin' || user.role === 'super_admin')) {
       fetchStore();
+      loadEmailSettings();
     }
     // eslint-disable-next-line
   }, [user]);
@@ -1424,6 +1493,102 @@ export default function Settings() {
             </CardContent>
           </Card>
 
+          {/* Email Notifications Configuration card */}
+          {user?.role === 'admin' && (
+            <Card className="shadow-sm">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-50 rounded-md">
+                    <ZapOff size={18} className="text-green-600" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-sm">Notifications Email</CardTitle>
+                    <p className="text-xs text-muted-foreground">Configurez l'envoi automatique d'emails pour votre magasin.</p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Fermetures de services</p>
+                      <p className="text-xs text-muted-foreground">Reçoit un email à chaque fermeture de shift</p>
+                    </div>
+                    <Switch
+                      checked={emailSettings.shifts}
+                      onCheckedChange={(checked) => {
+                        saveEmailSettings({ ...emailSettings, shifts: checked });
+                      }}
+                      disabled={loadingEmailSettings}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Signalements de stock</p>
+                      <p className="text-xs text-muted-foreground">Reçoit un email à chaque signalement de performance stock</p>
+                    </div>
+                    <Switch
+                      checked={emailSettings.stockSignals}
+                      onCheckedChange={(checked) => {
+                        saveEmailSettings({ ...emailSettings, stockSignals: checked });
+                      }}
+                      disabled={loadingEmailSettings}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Dépenses</p>
+                      <p className="text-xs text-muted-foreground">Reçoit un email à chaque ajout/modification de dépense</p>
+                    </div>
+                    <Switch
+                      checked={emailSettings.expenses}
+                      onCheckedChange={(checked) => {
+                        saveEmailSettings({ ...emailSettings, expenses: checked });
+                      }}
+                      disabled={loadingEmailSettings}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Connexions utilisateurs</p>
+                      <p className="text-xs text-muted-foreground">Reçoit un email à chaque connexion d'utilisateur</p>
+                    </div>
+                    <Switch
+                      checked={emailSettings.logins}
+                      onCheckedChange={(checked) => {
+                        saveEmailSettings({ ...emailSettings, logins: checked });
+                      }}
+                      disabled={loadingEmailSettings}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Remboursements</p>
+                      <p className="text-xs text-muted-foreground">Reçoit un email à chaque remboursement de vente</p>
+                    </div>
+                    <Switch
+                      checked={emailSettings.refunds}
+                      onCheckedChange={(checked) => {
+                        saveEmailSettings({ ...emailSettings, refunds: checked });
+                      }}
+                      disabled={loadingEmailSettings}
+                    />
+                  </div>
+                  
+                  {loadingEmailSettings && (
+                    <div className="text-center py-2">
+                      <p className="text-xs text-muted-foreground">Sauvegarde en cours...</p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Updates and Version Management card */}
           <Card className="shadow-sm">
             <CardHeader>
@@ -1572,6 +1737,9 @@ export default function Settings() {
             </CardContent>
           </Card>
         </div>
+
+
+
       </div>
     </div>
   );

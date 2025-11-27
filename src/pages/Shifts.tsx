@@ -5,6 +5,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
+import { emailService } from '@/lib/emailService';
+import { pendingEmailService } from '@/lib/pendingEmailService';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -72,6 +74,7 @@ export default function Shifts() {
   const [encaisses, setEncaisses] = useState<Record<string, number>>({});
   // State pour suivre la synchronisation
   const [syncing, setSyncing] = useState(false);
+  const [adminUser, setAdminUser] = useState<any>(null);
 
   // Recalculate expected/difference and encaissé for all shifts when filteredShifts changes
   useEffect(() => {
@@ -258,6 +261,19 @@ export default function Shifts() {
       if (isOnline) {
         setSyncing(true);
         try {
+          // Récupérer l'admin pour les emails
+          const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+          if (usersResponse.ok) {
+            const users = await usersResponse.json();
+            const admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
+            if (admin) {
+              console.log('🔍 [DEBUG] Admin trouvé (Shifts):', admin.email);
+              setAdminUser(admin);
+            } else {
+              console.log('⚠️ [DEBUG] Aucun admin avec email trouvé (Shifts)');
+            }
+          }
+
           // Charger les shifts depuis le backend
           let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php';
           if (user?.storeId) url += `?storeId=${user.storeId}`;
@@ -473,12 +489,15 @@ export default function Shifts() {
       
       let cash = 0, mobile = 0;
       
-      // Priorité aux montants saisis lors de la fermeture du shift
-      if (shift.cashAmount !== undefined || shift.mobileMoneyAmount !== undefined) {
+      // Priorité ABSOLUE aux montants saisis lors de la fermeture du shift
+      if (shift.status === 'closed' && (shift.cashAmount !== undefined || shift.mobileMoneyAmount !== undefined)) {
+        // Pour un shift fermé, utiliser UNIQUEMENT les montants saisis par le caissier
         cash = toNum(shift.cashAmount || 0);
         mobile = toNum(shift.mobileMoneyAmount || 0);
+        console.log('🧾 [PRINT] Utilisation montants saisis fermeture - Cash:', cash, 'Mobile:', mobile);
       } else {
-        // Fallback: calculer à partir des ventes (ancien comportement)
+        // Fallback uniquement pour les shifts anciens ou non fermés correctement
+        console.log('🧾 [PRINT] Fallback: calcul depuis les ventes (shift ancien ou incomplet)');
         for (const s of sales) {
           const isRefunded = Boolean(s.refunded);
           if (isRefunded) continue; // Ignorer les ventes remboursées
@@ -768,6 +787,137 @@ export default function Shifts() {
       
       // Sauvegarder localement d'abord
       await db.put('shifts', updatedShift);
+      // Envoi automatique d'un email à l'admin avec résumé complet du shift
+      try {
+        const dbInstance = await getDB();
+        
+        // Vérifier les paramètres d'email pour les shifts
+        const emailSettings = await dbInstance.get('emailSettings', updatedShift.storeId);
+        const shouldSendEmail = emailSettings?.shifts !== false; // Par défaut true si pas de config
+        
+        if (!shouldSendEmail) {
+          console.log('📧 Email désactivé pour les fermetures de shifts');
+        } else {
+          // Récupérer l'utilisateur caissier
+          const cashier = user;
+          console.log('📧 [SHIFT] Préparation envoi à tous les admins du store:', updatedShift.storeId);
+          
+          // Récupérer le nom du magasin depuis la base locale
+          const store = await dbInstance.get('stores', updatedShift.storeId);
+          const storeName = store?.name || updatedShift.storeId || 'Magasin';
+          
+          // Construire le résumé complet du shift
+          const durationMs = (updatedShift.closedAt ?? Date.now()) - updatedShift.openedAt;
+          const hours = Math.floor(durationMs / (1000 * 60 * 60));
+          const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+          
+          const resume = `
+<div style="margin: 20px 0;">
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">👤 Informations du Caissier</h3>
+    <div class="info-row">
+      <span class="info-label">Caissier :&nbsp;</span>
+      <span class="info-value">${cashier?.username || 'Inconnu'}</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📅 Période du Service</h3>
+    <div class="info-row">
+      <span class="info-label">Ouverture :&nbsp;</span>
+      <span class="info-value">${new Date(updatedShift.openedAt).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Fermeture :&nbsp;</span>
+      <span class="info-value">${new Date(updatedShift.closedAt ?? Date.now()).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Durée totale :&nbsp;</span>
+      <span class="info-value">${hours}h ${minutes}min</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💰 Montants</h3>
+    <div class="info-row">
+      <span class="info-label">Montant d'ouverture :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${(updatedShift.openingAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Montant de fermeture :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${(updatedShift.closingAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Montant attendu :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${(updatedShift.expectedAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+  </div>
+
+  <div class="${(updatedShift.difference ?? 0) >= 0 ? 'highlight positive' : 'highlight negative'}">
+    <div class="info-row">
+      <span class="info-label" style="font-size: 16px;">📊 Différence (Écart):&nbsp;</span>
+      <span class="info-value" style="font-size: 18px; font-weight: 700;">
+        ${(updatedShift.difference ?? 0) >= 0 ? '+' : ''}${(updatedShift.difference ?? 0).toLocaleString('fr-FR')} F CFA
+        ${(updatedShift.difference ?? 0) >= 0 ? '✅' : '⚠️'}
+      </span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💳 Répartition des Paiements</h3>
+    <div class="info-row">
+      <span class="info-label">💵 Espèces :&nbsp;</span>
+      <span class="info-value">${(updatedShift.cashAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">📱 Mobile Money :&nbsp;</span>
+      <span class="info-value">${(updatedShift.mobileMoneyAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">🔄 Autres moyens :&nbsp;</span>
+      <span class="info-value">${(updatedShift.otherAmount ?? 0).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+  </div>
+
+  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+    <strong>ID du Shift :&nbsp;</strong>${updatedShift.id}
+  </div>
+</div>
+`;
+          
+          console.log('📤 Préparation envoi email shift avec résumé complet');
+          
+          // Utiliser le service d'emails en attente
+          try {
+            console.log('📧 [DEBUG] Envoi email fermeture shift à tous les admins...');
+            const result = await pendingEmailService.sendToAllAdmins({
+              message: resume,
+              storeName: storeName,
+              type: 'shift',
+              relatedId: updatedShift.id,
+              storeId: updatedShift.storeId,
+              userId: user?.id || ''
+            });
+            
+            console.log(`📊 [SHIFT] Résultats: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
+            if (result.sent > 0) {
+              console.log('✅ Emails fermeture shift envoyés directement');
+              toast.success(`Emails envoyés à ${result.totalAdmins} admin(s)`);
+            }
+            if (result.queued > 0) {
+              console.log('📦 Emails fermeture shift mis en attente, seront envoyés lors de la sync');
+              toast.success('Emails programmés pour envoi');
+            }
+          } catch (e) {
+            console.warn('❌ Erreur service email fermeture:', e);
+            toast.error('Erreur lors de la programmation email');
+          }
+
+        }
+      } catch (e) {
+        console.error('❌ Erreur lors de l\'envoi automatique du mail admin:', e);
+        toast.error('Erreur: ' + (e as Error).message);
+      }
       // Auto-print the closed shift receipt (best-effort)
       try {
         printShiftReceipt(updatedShift);

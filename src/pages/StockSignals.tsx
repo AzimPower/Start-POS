@@ -24,6 +24,7 @@ import {
   WifiOff
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { pendingEmailService } from '@/lib/pendingEmailService';
 
 interface Product {
   id: string;
@@ -740,6 +741,143 @@ export default function StockSignals() {
         toast.success('Signalement créé (mode hors ligne)');
       }
       
+      // Envoi automatique d'un email à l'admin avec résumé du signalement de stock
+      try {
+        const dbInstance = await getDB();
+        
+        // Vérifier les paramètres d'email pour les signalements de stock
+        const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
+        const shouldSendEmail = emailSettings?.stockSignals !== false; // Par défaut true si pas de config
+        
+        if (!shouldSendEmail) {
+          console.log('📧 Email désactivé pour les signalements de stock');
+        } else {
+          // Récupérer l'utilisateur current
+          const currentUser = user;
+          console.log('📧 [STOCK] Préparation envoi à tous les admins du store:', user?.storeId);
+          
+          // Récupérer le nom du magasin depuis la base locale
+          const store = await dbInstance.get('stores', user?.storeId);
+          const storeName = store?.name || user?.storeId || '';
+          
+          // Récupérer le nom du produit/catégorie
+          const productName = selectedExpense.type === 'direct' && selectedExpense.directProduct
+            ? getProductName(selectedExpense.directProduct.productId)
+            : (expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Dépense indirecte');
+            
+          // Construire le résumé du signalement de stock
+          const statusBadge = marginCalculation.marginPercentage >= 35 ? '✅ Excellente' : 
+                             marginCalculation.marginPercentage >= 20 ? '⚠️ Moyenne' : '❌ Faible';
+          
+          const resume = `
+<div style="margin: 20px 0;">
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">👤 Informations Utilisateur</h3>
+    <div class="info-row">
+      <span class="info-label">Signalé par :&nbsp;</span>
+      <span class="info-value">${currentUser?.username || 'Inconnu'}</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📦 Détails du Stock</h3>
+    <div class="info-row">
+      <span class="info-label">Produit/Catégorie :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${productName}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Type de dépense :&nbsp;</span>
+      <span class="info-value">${selectedExpense.type === 'direct' ? '🎯 Directe' : selectedExpense.type === 'indirect' ? '🔄 Indirecte' : '⚙️ Opérationnelle'}</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📅 Période de Suivi</h3>
+    <div class="info-row">
+      <span class="info-label">Date début :&nbsp;</span>
+      <span class="info-value">${new Date(marginCalculation.effectiveStartDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Date fin :&nbsp;</span>
+      <span class="info-value">${new Date(chosenEndDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💰 Résultats Financiers</h3>
+    <div class="info-row">
+      <span class="info-label">Coût d'achat :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${marginCalculation.purchaseAmount.toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Chiffre d'affaires :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${marginCalculation.periodRevenue.toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Marge brute réelle :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${marginCalculation.realMargin.toLocaleString('fr-FR')} F CFA</span>
+    </div>
+  </div>
+
+  <div class="${marginCalculation.marginPercentage >= 35 ? 'highlight positive' : marginCalculation.marginPercentage >= 20 ? 'highlight' : 'highlight negative'}">
+    <div class="info-row">
+      <span class="info-label" style="font-size: 16px;">📊 Performance :&nbsp;</span>
+      <span class="info-value" style="font-size: 18px; font-weight: 700;">
+        ${statusBadge} - ${marginCalculation.marginPercentage.toFixed(1)}%
+      </span>
+    </div>
+  </div>
+
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📈 Statistiques de Vente</h3>
+    <div class="info-row">
+      <span class="info-label">Quantité achetée :&nbsp;</span>
+      <span class="info-value">${marginCalculation.quantityBought.toLocaleString('fr-FR')}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Quantité vendue :&nbsp;</span>
+      <span class="info-value">${marginCalculation.totalQuantity.toLocaleString('fr-FR')}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Taux d'écoulement :&nbsp;</span>
+      <span class="info-value">${marginCalculation.quantityBought > 0 ? ((marginCalculation.totalQuantity / marginCalculation.quantityBought) * 100).toFixed(1) : '0'}%</span>
+    </div>
+  </div>
+
+  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+    <strong>ID du Signalement :&nbsp;</strong>${stockSignal.id}
+  </div>
+</div>
+`;
+          
+          // Utiliser le service d'emails en attente
+          try {
+            console.log('🔍 [DEBUG] Envoi email signalement stock (ou mise en attente)...');
+            const result = await pendingEmailService.sendToAllAdmins({
+              message: resume,
+              storeName: storeName,
+              type: 'stock',
+              relatedId: stockSignal.id,
+              storeId: user?.storeId || '',
+              userId: user?.id || ''
+            });
+            
+            console.log(`📊 [STOCK] Résultats: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
+            if (result.sent > 0) {
+              console.log('✅ Emails signalement stock envoyés directement');
+            }
+            if (result.queued > 0) {
+              console.log('📦 Emails signalement stock mis en attente, seront envoyés lors de la sync');
+            }
+          } catch (e) {
+            console.warn('❌ Erreur service email signalement:', e);
+          }
+
+        }
+      } catch (e) {
+        console.warn('❌ Erreur lors de l\'envoi automatique du mail admin pour signalement:', e);
+      }
+
       // Afficher le résultat
       if (marginCalculation.marginPercentage < 20) {
         toast.error(`⚠️ Marge faible: ${marginCalculation.marginPercentage.toFixed(1)}%`);

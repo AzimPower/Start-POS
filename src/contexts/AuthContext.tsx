@@ -3,11 +3,399 @@ import { getDB } from '@/lib/db';
 import * as secureStorage from '@/lib/secureStorage';
 import { refreshAllFromBackend } from '@/lib/sync';
 import { backendAvailable } from '@/lib/backend';
+import { pendingEmailService } from '@/lib/pendingEmailService';
+
+// Function to force refresh admin cache for a specific store
+const forceRefreshAdminCache = async (storeId: string) => {
+  try {
+    const db = await getDB();
+    // Supprimer le cache existant pour forcer la mise à jour
+    await db.delete('adminCache', storeId);
+    console.log('🔄 [FORCE-REFRESH] Cache admin supprimé pour store:', storeId);
+    
+    // Recréer le cache
+    return await cacheAdminData(storeId);
+  } catch (error) {
+    console.error('❌ [FORCE-REFRESH] Erreur lors du rafraichissement forcé:', error);
+    return null;
+  }
+};
+
+// Function to cache admin data locally for a specific store
+const cacheAdminData = async (storeId: string) => {
+  try {
+    const db = await getDB();
+    console.log('🔍 [CACHE-ADMIN] Récupération admins pour store:', storeId);
+    
+    // Vérifier d'abord si on a déjà un cache récent (moins de 5min pour test et debug)
+    try {
+      const existingCache = await db.get('adminCache', storeId);
+      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000); // Réduit à 5min pour test
+      if (existingCache && existingCache.cachedAt > fiveMinutesAgo && existingCache.allStoreAdmins && existingCache.allStoreAdmins.length > 0) {
+        console.log(`✅ [CACHE-ADMIN] Cache récent déjà disponible (${existingCache.allStoreAdmins.length} admins), skip update`);
+        // Debug : afficher les admins en cache
+        console.log('🔍 [CACHE-DEBUG] Admins en cache:', existingCache.allStoreAdmins.map((a: any) => ({
+          username: a.username,
+          email: a.email,
+          storeId: a.storeId
+        })));
+        return existingCache;
+      } else if (existingCache) {
+        console.log('🔄 [CACHE-ADMIN] Cache existant mais expiré ou incomplet, mise à jour nécessaire');
+      }
+    } catch (e) {
+      console.log('🔍 [CACHE-ADMIN] Pas de cache existant ou erreur lecture');
+    }
+    
+    // Vérifier la connectivité avant de tenter la récupération
+    if (!navigator.onLine) {
+      console.log('📵 [CACHE-ADMIN] Hors ligne, impossible de mettre à jour le cache admins');
+      return null;
+    }
+    
+    // Récupérer tous les users depuis le backend
+    const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    if (usersResponse.ok) {
+      const users = await usersResponse.json();
+      console.log('🔍 [CACHE-ADMIN] Nombre d\'utilisateurs récupérés:', users.length);
+      
+      // Debug: montrer tous les admins avec leurs stores
+      const allAdmins = users.filter((u: any) => u.role === 'admin');
+      console.log('🔍 [DEBUG] TOUS les admins dans le système:');
+      allAdmins.forEach((admin: any) => {
+        console.log(`  - ${admin.username} (${admin.email || 'no email'}): storeId=${admin.storeId}, storeIds=${JSON.stringify(admin.storeIds)}`);
+      });
+      
+      // Chercher TOUS les admins de ce store qui ont un email
+      // Utiliser la même logique que l'API users.php
+      const storeAdmins = users.filter((u: any) => {
+        const isAdmin = u.role === 'admin';
+        const hasEmail = u.email && u.email.trim() !== '';
+        
+        // Vérifier si l'admin est associé à ce store
+        let isAssociatedToStore = false;
+        
+        // Méthode 1: storeId direct (legacy) - comme dans users.php
+        if (u.storeId === storeId) {
+          isAssociatedToStore = true;
+        }
+        
+        // Méthode 2: storeIds array (système principal) - comme dans users.php
+        if (u.storeIds && Array.isArray(u.storeIds) && u.storeIds.includes(storeId)) {
+          isAssociatedToStore = true;
+        }
+        
+        const result = isAdmin && hasEmail && isAssociatedToStore;
+        
+        // Debug détaillé pour chaque admin avec email
+        if (isAdmin && hasEmail) {
+          console.log(`🔍 [FILTER] Admin ${u.username} (${u.email}):`);
+          console.log(`  - storeId: ${u.storeId}`);
+          console.log(`  - storeIds: ${JSON.stringify(u.storeIds)}`);
+          console.log(`  - Recherche pour store: ${storeId}`);
+          console.log(`  - Associé: ${isAssociatedToStore}`);
+          console.log(`  - Inclus: ${result}`);
+        }
+        
+        return result;
+      });
+      
+      console.log('🔍 [CACHE-ADMIN] Admins trouvés pour store', storeId, ':', storeAdmins.length);
+      console.log('🔍 [CACHE-ADMIN] Liste des admins trouvés:', storeAdmins.map(a => ({
+        username: a.username,
+        email: a.email,
+        storeId: a.storeId,
+        storeIds: a.storeIds
+      })));
+      
+      // Debug supplémentaire : tous les admins avec email du système
+      const allAdminsWithEmail = users.filter((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
+      console.log('🔍 [DEBUG] TOUS les admins avec email dans le système:', allAdminsWithEmail.map(a => ({
+        username: a.username,
+        email: a.email,
+        storeId: a.storeId,
+        storeIds: a.storeIds
+      })));
+      
+      if (storeAdmins.length > 0) {
+        // Prendre le premier admin avec email pour ce store
+        const admin = storeAdmins[0];
+        
+        // Stocker l'admin en cache avec timestamp et storeId pour chaque admin
+        const adminCache = {
+          id: storeId, // Utiliser storeId comme clé
+          username: admin.username,
+          email: admin.email,
+          role: admin.role,
+          storeId: admin.storeId,
+          cachedAt: Date.now(),
+          allStoreAdmins: storeAdmins.map(a => ({ // Sauver tous les admins du store avec leur storeId
+            id: a.id,
+            username: a.username,
+            email: a.email,
+            storeId: a.storeId || storeId // S'assurer que chaque admin a bien le storeId
+          }))
+        };
+        
+        await db.put('adminCache', adminCache);
+        console.log('✅ [CACHE-ADMIN] Admin principal mis en cache pour store', storeId, ':', admin.email);
+        console.log('✅ [CACHE-ADMIN] Tous les admins du store sauvés:', adminCache.allStoreAdmins);
+        return adminCache;
+      } else {
+        console.log('⚠️ [CACHE-ADMIN] Aucun admin avec email trouvé pour store', storeId);
+        
+        // Fallback : chercher un admin avec email dans n'importe quel store
+        const anyAdmin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
+        if (anyAdmin) {
+          const adminCache = {
+            id: storeId,
+            username: anyAdmin.username,
+            email: anyAdmin.email,
+            role: anyAdmin.role,
+            storeId: anyAdmin.storeId,
+            cachedAt: Date.now(),
+            isFallback: true
+          };
+          
+          await db.put('adminCache', adminCache);
+          console.log('🔄 [CACHE-ADMIN] Admin fallback mis en cache:', anyAdmin.email);
+          return adminCache;
+        }
+        
+        // Debug : montrer les rôles et stores disponibles
+        const roles = users.map(u => u.role).filter(r => r);
+        const stores = users.map(u => u.storeId).filter(s => s);
+        console.log('🔍 [CACHE-ADMIN] Rôles trouvés:', [...new Set(roles)]);
+        console.log('🔍 [CACHE-ADMIN] Stores trouvés:', [...new Set(stores)]);
+      }
+    } else {
+      console.log('❌ [CACHE-ADMIN] Erreur HTTP récupération users:', usersResponse.status);
+    }
+  } catch (error) {
+    console.error('❌ [CACHE-ADMIN] Erreur lors de la mise en cache admin:', error);
+  }
+  return null;
+};
+
+// Function to get cached admin emails (for offline use)
+const getCachedAdminEmails = async (storeId: string): Promise<string[]> => {
+  try {
+    const db = await getDB();
+    const cachedAdmin = await db.get('adminCache', storeId);
+    
+    if (cachedAdmin && cachedAdmin.allStoreAdmins && cachedAdmin.allStoreAdmins.length > 0) {
+      // Filtrer strictement par storeId
+      const emails = cachedAdmin.allStoreAdmins
+        .filter((admin: any) => {
+          const hasValidEmail = admin.email && admin.email.trim() !== '';
+          const isCorrectStore = !admin.storeId || admin.storeId === storeId;
+          return hasValidEmail && isCorrectStore;
+        })
+        .map((admin: any) => admin.email);
+      console.log('📧 [CACHE-ADMIN] Emails admin en cache pour store', storeId, ':', emails.length);
+      return emails;
+    }
+    
+    // Fallback: utiliser l'admin principal en cache s'il correspond au store
+    if (cachedAdmin && cachedAdmin.email && cachedAdmin.email.trim() !== '' &&
+        (!cachedAdmin.storeId || cachedAdmin.storeId === storeId)) {
+      console.log('📧 [CACHE-ADMIN] Utilisation admin principal en cache:', cachedAdmin.email);
+      return [cachedAdmin.email];
+    }
+    
+    console.log('⚠️ [CACHE-ADMIN] Aucun email admin en cache pour store:', storeId);
+    return [];
+  } catch (error) {
+    console.error('❌ [CACHE-ADMIN] Erreur récupération emails cache:', error);
+    return [];
+  }
+};
+
+// Function to clean up admin cache and remove invalid or cross-store entries
+const cleanupAdminCache = async () => {
+  try {
+    const db = await getDB();
+    console.log('🧹 [CACHE-CLEANUP] Nettoyage du cache admin...');
+    
+    const allCaches = await db.getAll('adminCache');
+    let cleaned = 0;
+    
+    for (const cache of allCaches) {
+      let needsUpdate = false;
+      const updatedCache = { ...cache };
+      
+      // Nettoyer allStoreAdmins : supprimer uniquement les admins sans email valide
+      // Ne pas filtrer par storeId car les admins peuvent être associés de différentes manières
+      if (cache.allStoreAdmins && Array.isArray(cache.allStoreAdmins)) {
+        const originalCount = cache.allStoreAdmins.length;
+        updatedCache.allStoreAdmins = cache.allStoreAdmins.filter((admin: any) => {
+          const hasValidEmail = admin.email && admin.email.trim() !== '';
+          // Ne plus filtrer par storeId - garder tous les admins avec email valide
+          return hasValidEmail;
+        });
+        
+        if (updatedCache.allStoreAdmins.length !== originalCount) {
+          needsUpdate = true;
+          console.log(`🧹 [CACHE-CLEANUP] Store ${cache.id}: ${originalCount} -> ${updatedCache.allStoreAdmins.length} admins`);
+        }
+      }
+      
+      // Supprimer les caches trop anciens (plus de 7 jours)
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      if (cache.cachedAt && cache.cachedAt < sevenDaysAgo) {
+        await db.delete('adminCache', cache.id);
+        cleaned++;
+        console.log(`🧹 [CACHE-CLEANUP] Cache expiré supprimé pour store: ${cache.id}`);
+        continue;
+      }
+      
+      // Mettre à jour si nécessaire
+      if (needsUpdate) {
+        await db.put('adminCache', updatedCache);
+        cleaned++;
+      }
+    }
+    
+    if (cleaned > 0) {
+      console.log(`✅ [CACHE-CLEANUP] ${cleaned} entrées nettoyées/mises à jour`);
+    }
+    
+    return cleaned;
+  } catch (error) {
+    console.error('❌ [CACHE-CLEANUP] Erreur nettoyage cache admin:', error);
+    return 0;
+  }
+};
+
+// Function to send login notification email to admin
+const sendLoginNotificationEmail = async (userData: User) => {
+  try {
+    const db = await getDB();
+    
+    // Vérifier les paramètres d'email pour les connexions
+    const emailSettings = await db.get('emailSettings', userData.storeId);
+    const shouldSendEmail = emailSettings?.logins !== false; // Par défaut true si pas de config
+    
+    if (!shouldSendEmail) {
+      console.log('📧 Email désactivé pour les connexions utilisateur');
+      return;
+    }
+    
+    // Récupérer l'admin - d'abord en local, puis fallback vers backend
+    let admin = null;
+    
+    // 1. Essayer de récupérer l'admin depuis le stockage local
+    try {
+      const storedAdmin = await db.get('adminCache', userData.storeId);
+      if (storedAdmin && storedAdmin.email && storedAdmin.email.trim() !== '') {
+        console.log('🎯 [DEBUG] Admin trouvé en cache local pour email connexion');
+        admin = storedAdmin;
+      }
+    } catch (e) {
+      console.log('⚠️ [DEBUG] Erreur lecture admin cache local:', e);
+    }
+    
+    // 2. Si pas trouvé en local, fallback vers backend
+    if (!admin) {
+      try {
+        const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+        if (usersResponse.ok) {
+          const users = await usersResponse.json();
+          admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
+          console.log('🌐 [DEBUG] Admin récupéré depuis backend pour email connexion');
+        }
+      } catch (adminError) {
+        console.error('❌ [DEBUG] Erreur récupération admin depuis backend:', adminError);
+      }
+    }
+    
+    if (admin && admin.email) {
+      
+      // Récupérer le nom du magasin
+      const store = await db.get('stores', userData.storeId);
+      const storeName = store?.name || userData.storeId || 'Magasin';
+      
+      const loginTime = new Date().toLocaleString('fr-FR', { 
+        dateStyle: 'full', 
+        timeStyle: 'medium' 
+      });
+      
+      const resume = `
+<div style="margin: 20px 0;">
+  <div class="info-block">
+    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">🔐 Connexion Utilisateur</h3>
+    <div class="info-row">
+      <span class="info-label">Utilisateur :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600;">${userData.username}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Rôle :&nbsp;</span>
+      <span class="info-value">${userData.role === 'admin' ? '👨‍💼 Administrateur' : userData.role === 'cashier' ? '💰 Caissier' : '🔧 Super Admin'}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Téléphone :&nbsp;</span>
+      <span class="info-value">${userData.phone}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Date et heure :&nbsp;</span>
+      <span class="info-value">${loginTime}</span>
+    </div>
+  </div>
+  
+  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+    <strong>ID Utilisateur :&nbsp;</strong>${userData.id}
+  </div>
+</div>
+`;
+      
+      const emailPayload = {
+        name: userData.username,
+        email: admin.email,
+        message: resume,
+        storeName: storeName
+      };
+      
+      // Utiliser le service d'emails en attente pour la connexion
+      try {
+        console.log('🔄 [DEBUG] Envoi email connexion à TOUS les admins du store...');
+        const result = await pendingEmailService.sendToAllAdmins({
+          message: resume,
+          storeName: storeName,
+          type: 'receipt', // Utiliser 'receipt' comme type générique pour les connexions
+          relatedId: userData.id,
+          storeId: userData.storeId,
+          userId: userData.id
+        });
+        
+        console.log(`✅ Email de connexion: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
+        result.results.forEach(r => {
+          if (r.sent) {
+            console.log('✅ Email connexion envoyé directement à', r.email);
+          } else if (r.queued) {
+            console.log('📦 Email connexion mis en attente pour', r.email);
+          }
+        });
+      } catch (e) {
+        console.warn('❌ Erreur service email connexion:', e);
+      }
+    } else {
+      console.log('⚠️ [DEBUG] Aucun admin avec email trouvé pour la connexion');
+    }
+  } catch (e) {
+    console.warn('❌ Erreur lors de l\'envoi automatique du mail de connexion:', e);
+  }
+};
 
 interface User {
   id: string;
   username: string;
   phone: string; // Téléphone unique pour la connexion
+  email?: string; // Email optionnel
   role: 'super_admin' | 'admin' | 'cashier';
   storeId: string;
   storeIds?: string[]; // liste des magasins liés à l'utilisateur
@@ -163,6 +551,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           id: userRecord.id,
           username: userRecord.username,
           phone: userRecord.phone,
+          email: userRecord.email,
           role: userRecord.role,
           storeId: userRecord.storeId,
           storeIds: (userRecord as any).storeIds || (userRecord.storeId ? [userRecord.storeId] : []),
@@ -190,6 +579,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
   setPinFailState({ userId: userData.id, count: 0 });
   localStorage.removeItem('pos-login-last-error');
+  
+  // Nettoyer le cache admin avant de le mettre à jour
+  try {
+    await cleanupAdminCache();
+  } catch (e) {
+    console.warn('⚠️ [AUTH] Échec nettoyage cache admin:', e);
+  }
+
+  // Mise en cache de l'admin pour les futurs emails (important pour fonctionnement hors ligne)
+  if (backendIsUp) {
+    try {
+      const cacheResult = await cacheAdminData(userData.storeId);
+      if (cacheResult) {
+        const adminCount = (cacheResult as any)?.allStoreAdmins?.length || 1;
+        console.log('✅ [AUTH] Cache admins créé avec succès:', adminCount, 'admins');
+      }
+    } catch (e) {
+      console.warn('⚠️ [AUTH] Échec mise en cache admins (continuera sans cache):', e);
+      // Ne pas bloquer la connexion si le cache échoue
+    }
+  } else {
+    console.log('📵 [AUTH] Backend inaccessible, cache admins non mis à jour');
+  }
+  
+  // Envoi automatique d'un email à l'admin après connexion réussie
+  try {
+    await sendLoginNotificationEmail(userData);
+  } catch (e) {
+    console.warn('Failed to send login notification email:', e);
+  }
+  
   // If backend is reachable, refresh user record from backend to get up-to-date PIN
   if (backendIsUp) {
           try {
@@ -269,6 +689,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 id: found.id,
                 username: found.username,
                 phone: found.phone,
+                email: found.email,
                 role: found.role,
                 storeId: found.storeId,
                 storeIds: (found as any).storeIds || (found.storeId ? [found.storeId] : []),
@@ -293,6 +714,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               setPinFailState({ userId: userData.id, count: 0 });
               localStorage.removeItem('pos-login-last-error');
+              
+              // Mise en cache de l'admin pour les futurs emails
+              try {
+                // Mettre en cache les admins du store lors de la reconnexion
+                const cacheResult = await cacheAdminData(userData.storeId);
+                if (cacheResult) {
+                  const adminCount = (cacheResult as any)?.allStoreAdmins?.length || 1;
+                  console.log('✅ [AUTH] Cache admins rafraìhi lors reconnexion:', adminCount, 'admins');
+                } else {
+                  console.log('⚠️ [AUTH] Pas de mise à jour cache admins lors reconnexion');
+                }
+              } catch (cacheError) {
+                console.warn('⚠️ [AUTH] Échec cache admins lors reconnexion:', cacheError);
+              }
+              
+              // Envoi automatique d'un email à l'admin après connexion réussie
+              try {
+                await sendLoginNotificationEmail(userData);
+              } catch (e) {
+                console.warn('Failed to send login notification email:', e);
+              }
+              
               return true;
             }
           }

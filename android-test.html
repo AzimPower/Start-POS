@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Android Email</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Test Email Android Studio</h1>
+        
+        <button onclick="testEnvironment()">🔍 Analyser l'environnement</button>
+        <button onclick="testDirectXHR()">📤 Test XMLHttpRequest Direct</button>
+        <button onclick="testEmailService()">📧 Test Service Email</button>
+        <button onclick="clearLog()">🧹 Effacer les logs</button>
+        
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : 'info';
+            logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        function testEnvironment() {
+            log('🔍 === ANALYSE ENVIRONNEMENT ===');
+            log(`📱 User Agent: ${navigator.userAgent}`);
+            log(`🌐 Online: ${navigator.onLine}`);
+            log(`🔌 Connection: ${navigator.connection?.effectiveType || 'unknown'}`);
+            log(`📦 Capacitor: ${!!(window.Capacitor) ? 'OUI' : 'NON'}`);
+            log(`🌍 Location: ${window.location.href}`);
+            log(`🔧 Service Worker: ${navigator.serviceWorker ? 'Supporté' : 'Non supporté'}`);
+            
+            if (window.Capacitor) {
+                log('🤖 ENVIRONNEMENT: Capacitor/Android Studio détecté', 'success');
+            } else {
+                log('🌐 ENVIRONNEMENT: Navigateur web standard', 'info');
+            }
+        }
+
+        async function testDirectXHR() {
+            log('📤 === TEST XMLHTTPREQUEST DIRECT ===');
+            
+            return new Promise((resolve) => {
+                const xhr = new XMLHttpRequest();
+                const url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/send-email.php';
+                
+                log(`🎯 URL: ${url}`);
+                xhr.open('POST', url, true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 15000;
+                
+                xhr.onload = function() {
+                    log(`✅ Status: ${xhr.status}`, 'success');
+                    log(`📥 Response: ${xhr.responseText}`, xhr.status === 200 ? 'success' : 'error');
+                    resolve(xhr.status === 200);
+                };
+                
+                xhr.onerror = function() {
+                    log('❌ XMLHttpRequest Error', 'error');
+                    resolve(false);
+                };
+                
+                xhr.ontimeout = function() {
+                    log('⏰ XMLHttpRequest Timeout', 'error');
+                    resolve(false);
+                };
+                
+                const payload = {
+                    name: 'Test Android Direct',
+                    email: 'powerstartbf@gmail.com',
+                    message: `Test XMLHttpRequest direct depuis Android\n\nTimestamp: ${new Date().toLocaleString()}\nEnvironnement: ${window.Capacitor ? 'Capacitor' : 'Web'}`,
+                    storeName: 'Test Android Studio'
+                };
+                
+                log(`📤 Payload: ${JSON.stringify(payload, null, 2)}`);
+                xhr.send(JSON.stringify(payload));
+            });
+        }
+
+        async function testEmailService() {
+            log('📧 === TEST SERVICE EMAIL ===');
+            
+            try {
+                // Test si le service existe
+                if (typeof window.emailService === 'undefined') {
+                    log('⚠️ Service email non trouvé, tentative d\'import...', 'error');
+                    
+                    // Tentative d'import dynamique
+                    try {
+                        const module = await import('./src/lib/emailService.js');
+                        window.emailService = module.emailService;
+                        log('✅ Service email importé avec succès', 'success');
+                    } catch (importError) {
+                        log(`❌ Erreur import: ${importError.message}`, 'error');
+                        return;
+                    }
+                }
+                
+                const testData = {
+                    name: 'Test Service Email',
+                    email: 'powerstartbf@gmail.com',
+                    message: `Test du service email depuis Android Studio\n\nTimestamp: ${new Date().toLocaleString()}\nNavigateur: ${navigator.userAgent}`,
+                    storeName: 'Android Test Service'
+                };
+                
+                log('📤 Envoi via service email...');
+                const result = await window.emailService.sendEmail(testData);
+                
+                if (result.ok) {
+                    log('✅ Service email: SUCCESS', 'success');
+                } else {
+                    log(`❌ Service email: FAILED - ${result.error}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`❌ Erreur service email: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-analyse au chargement
+        window.addEventListener('load', () => {
+            log('🚀 Page chargée, analyse automatique...');
+            testEnvironment();
+        });
+    </script>
+</body>
+</html>
