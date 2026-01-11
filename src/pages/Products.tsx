@@ -207,6 +207,7 @@ export default function Products() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+
     if (productSubmitting) return;
     setProductSubmitting(true);
 
@@ -223,83 +224,61 @@ export default function Products() {
             storeId: user.storeId,
             createdAt: Date.now(),
           };
-
           try {
             const dbLocal = await getDB();
-            // persist locally so the product can reference it immediately
             await dbLocal.add('categories', { ...newCategory, storeId: user.storeId });
-            // update UI immediately
             setCategories(prev => [...prev, newCategory]);
           } catch (e) {
             console.warn('Impossible d\'enregistrer la catégorie localement:', e);
           }
-
-          // Queue the remote creation via performSyncOp (will attempt direct call only if backendAvailable)
           await performSyncOp({
             url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php',
             method: 'POST',
             data: newCategory,
           });
-
           cat = newCategory;
         }
         categoryId = cat.id;
       }
       const db = await getDB();
-      // If there's a pending image, upload it now and capture the returned URL locally.
-      // We use a local variable so we don't rely on setState being applied synchronously.
       let uploadedImageUrl = formData.imageUrl || '';
       if (formData.pendingImage) {
         try {
-          // Only attempt image upload when backend is reachable. If unreachable, keep pendingImage for later upload.
           const backendUpForUpload = await backendAvailable().catch(() => false);
           if (!backendUpForUpload) {
             toast.error('Serveur indisponible — upload de l\'image différé jusqu\'à la reconnexion.');
           } else {
-          // If editing an existing product and it has an image, delete the old image first
-          // to avoid accumulating orphan files on the server.
-          if (editingProduct && editingProduct.imageUrl) {
-            // Try to delete the previous image. We'll try multiple candidate paths:
-            // 1) the exact stored URL
-            // 2) fallback to 'img_products/<basename>' (some servers store relative paths)
-            const prevUrl = editingProduct.imageUrl;
-            const basename = prevUrl ? prevUrl.split('/').pop() : null;
-            const candidates: string[] = [];
-            if (prevUrl) candidates.push(prevUrl);
-            if (basename) candidates.push(`img_products/${basename}`);
-
-            let deleted = false;
-            for (const candidate of candidates) {
-              try {
-                const delRes = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
-                  method: 'DELETE',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url: candidate })
-                });
-                // Try to parse JSON response (server echoes success/error)
-                let delJson: any = null;
+            if (editingProduct && editingProduct.imageUrl) {
+              const prevUrl = editingProduct.imageUrl;
+              const basename = prevUrl ? prevUrl.split('/').pop() : null;
+              const candidates: string[] = [];
+              if (prevUrl) candidates.push(prevUrl);
+              if (basename) candidates.push(`img_products/${basename}`);
+              let deleted = false;
+              for (const candidate of candidates) {
                 try {
-                  delJson = await delRes.json();
-                } catch (e) {
-                  // ignore parse error
+                  const delRes = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: candidate })
+                  });
+                  let delJson: any = null;
+                  try { delJson = await delRes.json(); } catch (e) {}
+                  if (delRes.ok && delJson && delJson.success) {
+                    deleted = true;
+                    toast.success('Ancienne image supprimée du serveur');
+                    break;
+                  } else {
+                    console.warn('Suppression image tentative échouée', candidate, delRes.status, delJson);
+                  }
+                } catch (delErr) {
+                  console.warn('Erreur lors de la tentative de suppression de l\'ancienne image:', delErr);
                 }
-                if (delRes.ok && delJson && delJson.success) {
-                  deleted = true;
-                  toast.success('Ancienne image supprimée du serveur');
-                  break;
-                } else {
-                  // keep trying other candidates
-                  console.warn('Suppression image tentative échouée', candidate, delRes.status, delJson);
-                }
-              } catch (delErr) {
-                console.warn('Erreur lors de la tentative de suppression de l\'ancienne image:', delErr);
+              }
+              if (!deleted) {
+                toast.error('Impossible de supprimer l\'ancienne image sur le serveur (vérifiez les logs). Le fichier peut rester présent.');
               }
             }
-            if (!deleted) {
-              toast.error('Impossible de supprimer l\'ancienne image sur le serveur (vérifiez les logs). Le fichier peut rester présent.');
-            }
-          }
-
             const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -309,11 +288,9 @@ export default function Products() {
             if (result && result.success) {
               const fullUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/${result.url}`;
               uploadedImageUrl = fullUrl;
-              // still update the form state for UI consistency
               setFormData(f => ({ ...f, imageUrl: fullUrl, pendingImage: '' }));
             } else {
               toast.error('Erreur lors de l\'upload de l\'image: ' + (result?.error || ''));
-              // continue without blocking save
             }
           }
         } catch (err) {
@@ -321,8 +298,29 @@ export default function Products() {
           toast.error('Erreur réseau lors de l\'upload de l\'image — upload différé');
         }
       }
-  if (editingProduct) {
-        // Update existing product
+      // IMPORTANT : Toute modification de stock doit passer par performSyncOp pour garantir la cohérence et la synchronisation hors-ligne/online.
+      // Ne jamais modifier le stock local directement sans passer par cette file d'attente !
+      if (editingProduct) {
+        // Recharger le stock actuel depuis la BD avant de mettre à jour
+        let currentStock = editingProduct?.stock || {};
+        try {
+          if (isBackendReachable) {
+            const stockResponse = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${editingProduct.id}`);
+            if (stockResponse.ok) {
+              const freshProduct = await stockResponse.json();
+              if (freshProduct && freshProduct.stock) {
+                currentStock = freshProduct.stock;
+              }
+            }
+          } else {
+            const freshLocal = await db.get('products', editingProduct.id);
+            if (freshLocal && freshLocal.stock) {
+              currentStock = freshLocal.stock;
+            }
+          }
+        } catch (error) {
+          console.warn('Impossible de recharger le stock actuel, utilisation de la valeur en mémoire:', error);
+        }
         const updated = {
           ...editingProduct,
           name: formData.name,
@@ -338,7 +336,7 @@ export default function Products() {
           unit: formData.unit,
           taxRate: formData.taxRate ? parseFloat(formData.taxRate) : undefined,
           stock: formData.trackStock ? {
-            ...(editingProduct?.stock || {}),
+            ...currentStock,
             [user.storeId]: formData.stock ? parseFloat(formData.stock) : 0,
           } : {},
           minStock: formData.trackStock && formData.minStock ? parseFloat(formData.minStock) : undefined,
@@ -346,22 +344,25 @@ export default function Products() {
           updatedAt: Date.now(),
           trackStock: formData.trackStock,
         };
-
-        // Écrire immédiatement en local
-        await db.put('products', updated as any);
-
-        // Essayer de synchroniser (performSyncOp gère la mise en file si hors-ligne)
+        // Synchronisation via performSyncOp (gère la file d'attente hors-ligne)
         await performSyncOp({
           url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
           method: 'PUT',
           data: { ...updated, storeId: user.storeId, stock: formData.trackStock ? parseFloat(formData.stock) || 0 : 0 }
         });
-
-        toast.success('Produit mis à jour (localement). La synchronisation se fera automatiquement.');
+        // Après modification, recharger le stock depuis le backend si possible
+        if (isBackendReachable) {
+          try {
+            const refreshed = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${editingProduct.id}`);
+            if (refreshed.ok) {
+              const refreshedProduct = await refreshed.json();
+              await db.put('products', refreshedProduct);
+            }
+          } catch (e) { /* ignore */ }
+        }
+        toast.success('Produit mis à jour. La synchronisation se fera automatiquement.');
       } else {
-        // Generate default SKU if not provided
         const finalSku = formData.sku || `PRD-${Date.now().toString().slice(-6)}`;
-        // Create new product
         const newProduct: Product = {
           id: generateId(),
           name: formData.name,
@@ -385,22 +386,29 @@ export default function Products() {
           updatedAt: Date.now(),
           trackStock: formData.trackStock,
         };
-
-        // Enregistrer localement
-        await db.add('products', newProduct as any);
-
-        // Demander la synchronisation (ou mise en queue)
+        // Synchronisation via performSyncOp (gère la file d'attente hors-ligne)
         await performSyncOp({
           url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
           method: 'POST',
           data: { ...newProduct, stock: formData.trackStock ? parseFloat(formData.stock) || 0 : 0 }
         });
-
-        toast.success('Produit créé localement. La synchronisation se fera automatiquement.');
+        // Après modification, recharger le stock depuis le backend si possible
+        if (isBackendReachable) {
+          try {
+            const refreshed = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?storeId=${user.storeId}`);
+            if (refreshed.ok) {
+              const refreshedProducts = await refreshed.json();
+              for (const p of refreshedProducts) {
+                await db.put('products', p);
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }
+        toast.success('Produit créé. La synchronisation se fera automatiquement.');
       }
       setIsDialogOpen(false);
       resetForm();
-      loadData(); // Recharger depuis le backend
+      loadData();
     } catch (error) {
       toast.error('Erreur lors de l\'enregistrement: ' + (error as Error).message);
       console.error('Erreur:', error);
@@ -409,26 +417,71 @@ export default function Products() {
     }
   };
 
-  const handleEdit = (product: Product) => {
-    setEditingProduct(product);
-    const cat = categories.find(c => c.id === product.categoryId);
-    setFormData({
-      name: product.name,
-      sku: product.sku,
-      categoryName: cat?.name || '',
-      salePrice: product.salePrice?.toString() || '',
-      costPrice: product.costPrice?.toString() || '',
-      targetMargin: product.targetMargin?.toString() || '',
-      variablePrices: product.variablePrices?.map(vp => ({ label: vp.label, price: vp.price.toString() })) || [],
-      unit: product.unit,
-      taxRate: product.taxRate?.toString() || '',
-      stock: (product.stock?.[user.storeId] || 0).toString(),
-      minStock: product.minStock?.toString() || '',
-      trackStock: product.stock ? Object.keys(product.stock).length > 0 : false,
-      imageUrl: product.imageUrl || '',
-      pendingImage: '',
-    });
-    setIsDialogOpen(true);
+  const handleEdit = async (product: Product) => {
+    // Toujours recharger le produit depuis la BD pour avoir les quantités à jour
+    // Ceci évite les incohérences entre plusieurs appareils
+    try {
+      let currentProduct: Product = product;
+      
+      // Si le backend est disponible, recharger depuis le backend pour avoir les données les plus récentes
+      if (isBackendReachable) {
+        try {
+          const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${product.id}`);
+          if (response.ok) {
+            const freshProduct = await response.json() as any;
+            if (freshProduct && freshProduct.id) {
+              // S'assurer que le storeId est présent
+              currentProduct = {
+                ...freshProduct,
+                storeId: freshProduct.storeId || user.storeId,
+                stock: freshProduct.stock || {},
+                trackStock: freshProduct.trackStock !== undefined ? freshProduct.trackStock : (freshProduct.stock && Object.keys(freshProduct.stock).length > 0)
+              } as Product;
+              // Mettre à jour aussi en local
+              const db = await getDB();
+              await db.put('products', currentProduct);
+            }
+          }
+        } catch (error) {
+          console.warn('Impossible de recharger depuis le backend, utilisation des données locales:', error);
+        }
+      } else {
+        // Sinon, recharger depuis IndexedDB pour avoir la version la plus récente
+        const db = await getDB();
+        const freshProduct = await db.get('products', product.id) as any;
+        if (freshProduct) {
+          currentProduct = {
+            ...freshProduct,
+            storeId: freshProduct.storeId || user.storeId,
+            stock: freshProduct.stock || {},
+            trackStock: freshProduct.trackStock !== undefined ? freshProduct.trackStock : (freshProduct.stock && Object.keys(freshProduct.stock).length > 0)
+          } as Product;
+        }
+      }
+      
+      setEditingProduct(currentProduct);
+      const cat = categories.find(c => c.id === currentProduct.categoryId);
+      setFormData({
+        name: currentProduct.name,
+        sku: currentProduct.sku,
+        categoryName: cat?.name || '',
+        salePrice: currentProduct.salePrice?.toString() || '',
+        costPrice: currentProduct.costPrice?.toString() || '',
+        targetMargin: currentProduct.targetMargin?.toString() || '',
+        variablePrices: currentProduct.variablePrices?.map(vp => ({ label: vp.label, price: vp.price.toString() })) || [],
+        unit: currentProduct.unit,
+        taxRate: currentProduct.taxRate?.toString() || '',
+        stock: (currentProduct.stock?.[user.storeId] || 0).toString(),
+        minStock: currentProduct.minStock?.toString() || '',
+        trackStock: currentProduct.stock ? Object.keys(currentProduct.stock).length > 0 : false,
+        imageUrl: currentProduct.imageUrl || '',
+        pendingImage: '',
+      });
+      setIsDialogOpen(true);
+    } catch (error) {
+      console.error('Erreur lors du rechargement du produit:', error);
+      toast.error('Erreur lors du chargement du produit');
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -522,23 +575,23 @@ export default function Products() {
           <h1 className="text-2xl sm:text-3xl font-bold">Produits</h1>
           <p className="text-muted-foreground mt-1 text-sm sm:text-base">Gérez votre inventaire</p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={(open) => {
-          setIsDialogOpen(open);
-          if (!open) resetForm();
-        }}>
-          <DialogTrigger asChild>
-            <Button className="w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              Nouveau produit
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>
-                {editingProduct ? 'Modifier le produit' : 'Nouveau produit'}
-              </DialogTitle>
-
-            </DialogHeader>
+        {user.role !== 'manager' && (
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) resetForm();
+          }}>
+            <DialogTrigger asChild>
+              <Button className="w-full sm:w-auto">
+                <Plus className="w-4 h-4 mr-2" />
+                Nouveau produit
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>
+                  {editingProduct ? 'Modifier le produit' : 'Nouveau produit'}
+                </DialogTitle>
+              </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2 col-span-1 sm:col-span-2">
@@ -901,6 +954,7 @@ export default function Products() {
             </form>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -1005,14 +1059,16 @@ export default function Products() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => handleEdit(product)} title="Modifier">
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleDelete(product.id)} title="Supprimer">
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
+                        {user.role !== 'manager' && (
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="icon" onClick={() => handleEdit(product)} title="Modifier">
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleDelete(product.id)} title="Supprimer">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))

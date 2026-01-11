@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Search, Trash2, Plus, Minus, DollarSign, ShoppingCart, X, Wifi, WifiOff } from 'lucide-react';
+import { Search, Trash2, Plus, Minus, DollarSign, ShoppingCart, X, Wifi, WifiOff, Heart } from 'lucide-react';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -27,6 +27,7 @@ interface Product {
   stock?: { [storeId: string]: number };
   unit: string;
   imageUrl?: string;
+  trackStock?: boolean;
 }
 
 interface Customer {
@@ -94,6 +95,7 @@ export default function POS() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [clientSearch, setClientSearch] = useState('');
   const [activeShift, setActiveShift] = useState<any>(null);
   const [showPayment, setShowPayment] = useState(false);
@@ -110,6 +112,56 @@ export default function POS() {
   const [shiftsChecked, setShiftsChecked] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const loadedOnceRef = useRef(false);
+  const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
+  const [isLoadingMoreProducts, setIsLoadingMoreProducts] = useState(false);
+  const [productOffset, setProductOffset] = useState(0);
+  const PRODUCTS_PER_PAGE = 20;
+  
+  // Système de favoris
+  const [favorites, setFavorites] = useState<{ [productId: string]: number }>({});
+
+  // Charger les favoris spécifiques à l'utilisateur
+  useEffect(() => {
+    if (user?.id) {
+      const savedKey = `product_favorites_${user.id}`;
+      const saved = localStorage.getItem(savedKey);
+      setFavorites(saved ? JSON.parse(saved) : {});
+    } else {
+      setFavorites({});
+    }
+  }, [user?.id]);
+  
+  // Mémoriser les calculs du panier pour optimiser les performances
+  const cartCalculations = useMemo(() => {
+    const subtotal = cart.reduce((sum, item) => {
+      const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
+      return sum + (price * item.quantity);
+    }, 0);
+    
+    const tax = cart.reduce((sum, item) => {
+      const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
+      const taxRate = (typeof item.product.taxRate === 'number' && !isNaN(item.product.taxRate)) ? item.product.taxRate : 0;
+      const itemTotal = price * item.quantity;
+      return sum + (itemTotal * (taxRate / 100));
+    }, 0);
+    
+    const total = subtotal + tax;
+    
+    return { subtotal, tax, total };
+  }, [cart]);
+
+  const calculateTotal = useCallback(() => cartCalculations.total, [cartCalculations]);
+  const calculateSubtotal = useCallback(() => cartCalculations.subtotal, [cartCalculations]);
+  const calculateTax = useCallback(() => cartCalculations.tax, [cartCalculations]);
+  
+  // Debounce pour la recherche (optimisation mobile)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // Helper to close any open modal/panels in the POS page
   const closeAllModals = () => {
     try {
@@ -126,38 +178,60 @@ export default function POS() {
     }
   };
 
-  // Montant espèces par défaut = montant total
+  // Montant espèces par défaut = montant total (optimisé)
   useEffect(() => {
-    if (showPayment && paymentMethod === 'cash') {
-      setCashAmount(calculateTotal().toFixed(0));
+    if (!showPayment) return;
+    
+    const total = cartCalculations.total.toFixed(0);
+    
+    if (paymentMethod === 'cash') {
+      setCashAmount(total);
+    } else if (paymentMethod === 'mobile_money') {
+      setMobileAmount(total);
+    } else if (paymentMethod === 'mixed' && !cashAmount && !mobileAmount) {
+      setCashAmount(total);
+      setMobileAmount('');
     }
-    if (showPayment && paymentMethod === 'mobile_money') {
-      setMobileAmount(calculateTotal().toFixed(0));
-    }
-    if (showPayment && paymentMethod === 'mixed') {
-      // Si aucun montant, initialiser espèces au total
-      if (!cashAmount && !mobileAmount) {
-        setCashAmount(calculateTotal().toFixed(0));
-        setMobileAmount('');
-      }
-    }
-  }, [showPayment, paymentMethod]);
+  }, [showPayment, paymentMethod, cartCalculations.total]);
 
   useEffect(() => {
-    // Only load data when we have a logged-in user. Avoid reloading on every
-    // navigation: use loadedOnceRef to load only once per session. If the app
-    // goes offline -> backend reachable, reload to sync changes.
     if (!user) return;
 
-    const shouldReload = !loadedOnceRef.current || isBackendReachable;
+    const shouldReload = !loadedOnceRef.current;
     if (!shouldReload) return;
 
-    // If we're reloading due to going backend reachable, allow it. If first load, set flag.
-    loadData();
-    loadCategories();
-    loadDraftSales();
+    const loadAllData = async () => {
+      try {
+        await Promise.all([
+          loadData(),
+          loadCategories(),
+          loadDraftSales()
+        ]);
+      } catch (error) {
+        console.error('Erreur lors du chargement initial:', error);
+        toast.error('Erreur de chargement des données');
+      }
+    };
+
+    loadAllData();
     loadedOnceRef.current = true;
-  }, [user, isBackendReachable]);
+  }, [user]);
+
+  // Synchronisation séparée quand le backend devient accessible
+  useEffect(() => {
+    if (!user || !isBackendReachable || !loadedOnceRef.current) return;
+    
+    const syncData = async () => {
+      try {
+        // Synchronisation en arrière-plan sans bloquer l'UI
+        await loadData();
+      } catch (error) {
+        console.warn('Erreur de synchronisation en arrière-plan:', error);
+      }
+    };
+    
+    syncData();
+  }, [isBackendReachable]);
 
   // When payment dialog opens, keep client input readonly to avoid automatic
   // focusing/keyboard on mobile. It will be enabled when the user explicitly
@@ -167,6 +241,57 @@ export default function POS() {
       setClientInputReadOnly(true);
     }
   }, [showPayment]);
+
+  // 🔄 Vérifier périodiquement si un shift a été ouvert/fermé sur un autre appareil
+  useEffect(() => {
+    if (!user || !isBackendReachable) return;
+    
+    const checkActiveShift = async () => {
+      try {
+        const db = await getDB();
+        const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
+        const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+        
+        // Si le shift actif a changé (nouvel ID ou fermé)
+        if (userShift?.id !== activeShift?.id) {
+          console.log(`🔄 [POS] Shift actif mis à jour:`, userShift?.id || 'aucun');
+          setActiveShift(userShift || null);
+        }
+      } catch (error) {
+        console.warn('Erreur vérification shift actif:', error);
+      }
+    };
+    
+    // Vérifier toutes les 30 secondes
+    const interval = setInterval(checkActiveShift, 30000);
+    
+    return () => clearInterval(interval);
+  }, [user, isBackendReachable, activeShift?.id]);
+
+  // 👁️ Recharger le shift quand la page devient visible (retour depuis Shifts ou autre page)
+  useEffect(() => {
+    if (!user) return;
+    
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && isBackendReachable) {
+        console.log('👁️ [POS] Page visible - rechargement du shift actif');
+        try {
+          const db = await getDB();
+          const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
+          const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+          if (userShift?.id !== activeShift?.id) {
+            console.log(`🔄 [POS] Nouveau shift actif détecté:`, userShift?.id || 'aucun');
+            setActiveShift(userShift || null);
+          }
+        } catch (error) {
+          console.warn('Erreur rechargement shift:', error);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user, isBackendReachable, activeShift?.id]);
 
     const loadDraftSales = async () => {
       const db = await getDB();
@@ -219,12 +344,40 @@ export default function POS() {
       await loadFromLocal(db);
       await loadLocalData(db);
       await updatePendingSyncCount();
+      
+      // Débloquer l'interface dès que les données essentielles sont chargées
+      setLoading(false);
 
-  // 2. Synchroniser en arrière-plan si backend reachable
+  // 2. Synchroniser en arrière-plan si backend reachable (sans bloquer l'UI)
   if (isBackendReachable) {
-        // Afficher un indicateur de synchronisation si besoin
-        setLoading(true);
+        // Synchronisation en arrière-plan
         try {
+          // 🔄 SHIFTS - Synchroniser AVANT tout pour que tous les appareils aient le même shift actif
+          let shiftsUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php';
+          if (user?.storeId) shiftsUrl += `?storeId=${user.storeId}`;
+          const shiftsResponse = await fetch(shiftsUrl);
+          if (shiftsResponse.ok) {
+            const backendShifts = await shiftsResponse.json();
+            if (Array.isArray(backendShifts)) {
+              const tx = db.transaction('shifts', 'readwrite');
+              await Promise.all([
+                ...backendShifts.map(s => tx.store.put(s)),
+                tx.done
+              ]);
+              console.log(`✅ [POS] ${backendShifts.length} shifts synchronisés depuis le backend`);
+              
+              // Recharger le shift actif après synchronisation
+              const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
+              const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+              if (userShift) {
+                console.log(`🔄 [POS] Shift actif rechargé depuis le backend:`, userShift.id);
+                setActiveShift(userShift);
+              } else {
+                console.log(`⚠️ [POS] Aucun shift actif trouvé pour l'utilisateur`);
+              }
+            }
+          }
+          
           // Produits
           let productsUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php';
           if (user?.storeId) productsUrl += `?storeId=${user.storeId}`;
@@ -246,6 +399,28 @@ export default function POS() {
             });
             setProducts(filteredBackendProducts);
           }
+          
+          // Ventes - Synchroniser TOUTES les ventes sans pagination pour POS
+          let salesUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php?all=1';
+          if (user?.storeId) salesUrl += `&storeId=${user.storeId}`;
+          try {
+            const salesResponse = await fetch(salesUrl);
+            if (salesResponse.ok) {
+              const salesData = await salesResponse.json();
+              const backendSales = Array.isArray(salesData) ? salesData : (salesData.data || []);
+              if (backendSales.length > 0) {
+                const salesTx = db.transaction('sales', 'readwrite');
+                await Promise.all([
+                  ...backendSales.map(s => salesTx.store.put(s)),
+                  salesTx.done
+                ]);
+                console.log(`✅ [POS] ${backendSales.length} ventes synchronisées`);
+              }
+            }
+          } catch (e) {
+            console.warn('Erreur sync ventes:', e);
+          }
+          
           // Clients
           let customersUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
           if (user?.storeId) customersUrl += `?storeId=${user.storeId}`;
@@ -263,13 +438,11 @@ export default function POS() {
         } catch (error) {
           console.error('Erreur de synchronisation avec le backend:', error);
         }
-        setLoading(false);
+        // La synchronisation se fait en arrière-plan, pas besoin de setLoading(false)
       }
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
       console.error('Erreur:', error);
-    } finally {
-      // Ensure loading is cleared regardless of online/offline and errors.
       setLoading(false);
     }
   };
@@ -301,24 +474,13 @@ export default function POS() {
   };
 
   const loadLocalData = async (db: any) => {
-    // Récupérer les ventes pour chaque produit
-    const allSales = await db.getAll('sales');
-    const salesCount: { [productId: string]: number } = {};
-    for (const sale of allSales) {
-      if (sale.storeId !== user?.storeId) continue;
-      for (const item of sale.items) {
-        salesCount[item.productId] = (salesCount[item.productId] || 0) + item.quantity;
-      }
-    }
-    setProductSalesCount(salesCount);
-
     // Check for active shift - filter by both userId and storeId
     const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
     const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
     setActiveShift(userShift);
-  // Indicate that we've finished checking for shifts (used to avoid flashing the
-  // "no active shift" message before the DB/backend check completes)
-  setShiftsChecked(true);
+    // Indicate that we've finished checking for shifts (used to avoid flashing the
+    // "no active shift" message before the DB/backend check completes)
+    setShiftsChecked(true);
 
     // Load current store
     if (user?.storeId) {
@@ -339,19 +501,65 @@ export default function POS() {
     }
   };
 
-  const filteredProducts = products
-    .filter(p => {
-      if (selectedCategory === 'all') return true;
-      return (p as any).categoryId === selectedCategory;
-    })
-    .filter(p => {
-      // Recherche produit uniquement avec 'search', pas 'clientSearch'
-      return (
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.sku.toLowerCase().includes(search.toLowerCase())
-      );
-    })
-    .sort((a, b) => (productSalesCount[b.id] || 0) - (productSalesCount[a.id] || 0));
+  const filteredProducts = useMemo(() => {
+    const searchLower = debouncedSearch.toLowerCase();
+    const filtered = products
+      .filter(p => {
+        if (selectedCategory !== 'all' && (p as any).categoryId !== selectedCategory) return false;
+        if (searchLower && !p.name.toLowerCase().includes(searchLower) && !p.sku.toLowerCase().includes(searchLower)) return false;
+        return true;
+      });
+    
+    // Trier par favoris d'abord (par ordre d'ancienneté), puis les autres
+    return filtered.sort((a, b) => {
+      const aIsFav = favorites[a.id];
+      const bIsFav = favorites[b.id];
+      
+      if (aIsFav && bIsFav) {
+        return aIsFav - bIsFav; // Plus ancien favori en premier
+      }
+      if (aIsFav && !bIsFav) return -1;
+      if (!aIsFav && bIsFav) return 1;
+      return 0;
+    });
+  }, [products, selectedCategory, debouncedSearch, favorites]);
+
+  // Gestion de la pagination des produits pour optimiser l'affichage
+  useEffect(() => {
+    setDisplayedProducts(filteredProducts.slice(0, PRODUCTS_PER_PAGE));
+    setProductOffset(PRODUCTS_PER_PAGE);
+  }, [filteredProducts]);
+
+  const loadMoreProducts = useCallback(() => {
+    if (productOffset >= filteredProducts.length || isLoadingMoreProducts) return;
+    
+    setIsLoadingMoreProducts(true);
+    setTimeout(() => {
+      setDisplayedProducts(prev => [
+        ...prev,
+        ...filteredProducts.slice(productOffset, productOffset + PRODUCTS_PER_PAGE)
+      ]);
+      setProductOffset(prev => prev + PRODUCTS_PER_PAGE);
+      setIsLoadingMoreProducts(false);
+    }, 100);
+  }, [filteredProducts, productOffset, isLoadingMoreProducts]);
+
+  // Gestion des favoris
+  const toggleFavorite = useCallback((productId: string) => {
+    if (!user?.id) return;
+    
+    setFavorites(prev => {
+      const newFavorites = { ...prev };
+      if (newFavorites[productId]) {
+        delete newFavorites[productId];
+      } else {
+        newFavorites[productId] = Date.now();
+      }
+      const savedKey = `product_favorites_${user.id}`;
+      localStorage.setItem(savedKey, JSON.stringify(newFavorites));
+      return newFavorites;
+    });
+  }, [user?.id]);
 
   const addToCart = (product: Product) => {
     // Si le produit a des prix variables, ouvrir le dialog de sélection
@@ -379,6 +587,66 @@ export default function POS() {
     }
   };
 
+  // Composant ProductCard optimisé
+  const ProductCard = useCallback(({ product }: { product: Product }) => (
+    <Card
+      className="cursor-pointer hover:shadow-md transition-shadow"
+      onClick={() => addToCart(product)}
+      style={{ minHeight: 140 }}
+    >
+      <CardContent className="p-2 flex flex-col items-center">
+        <div 
+          style={{ 
+            width: 60, 
+            height: 60, 
+            marginBottom: 4, 
+            borderRadius: 6, 
+            background: '#f3f4f6',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden'
+          }}
+        >
+          {product.imageUrl ? (
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              style={{ 
+                width: '100%', 
+                height: '100%', 
+                objectFit: 'cover'
+              }}
+              loading="lazy"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = '/placeholder.svg';
+              }}
+            />
+          ) : (
+            <div style={{ color: '#9ca3af', fontSize: '10px' }}>Image</div>
+          )}
+        </div>
+        <h3 className="font-semibold text-sm mb-1 text-center line-clamp-2" style={{ minHeight: 32 }}>
+          {product.name}
+        </h3>
+        <p className="text-primary font-bold text-xs mb-1">
+          {product.variablePrices && product.variablePrices.length > 0
+            ? `${Math.min(...product.variablePrices.map(vp => vp.price))} - ${Math.max(...product.variablePrices.map(vp => vp.price))} FCFA`
+            : product.salePrice !== undefined && product.salePrice !== null && !isNaN(Number(product.salePrice)) && Number(product.salePrice) > 0
+            ? `${Number(product.salePrice).toFixed(0)} FCFA`
+            : <span className="text-red-500">Prix à définir</span>
+          }
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          Stock: {product.trackStock !== false && Object.keys(product.stock || {}).length > 0
+            ? (user?.storeId ? `${product.stock?.[user.storeId] || 0} ${product.unit}` : <span className="text-muted-foreground text-[10px]">—</span>)
+            : <span className="text-muted-foreground text-[10px]">Non suivi</span>
+          }
+        </p>
+      </CardContent>
+    </Card>
+  ), [addToCart, user?.storeId]);
+
   const updateQuantity = (productId: string, priceLabel: string | undefined, delta: number) => {
     setCart(cart.map(item => {
       if (item.product.id === productId && item.priceLabel === priceLabel) {
@@ -398,32 +666,6 @@ export default function POS() {
     toast.success('Panier vidé');
     try { closeAllModals(); } catch (e) {}
     try { navigate('/pos'); } catch (e) {}
-  };
-
-  const calculateTotal = () => {
-    return cart.reduce((sum, item) => {
-      const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
-      const taxRate = (typeof item.product.taxRate === 'number' && !isNaN(item.product.taxRate)) ? item.product.taxRate : 0;
-      const itemTotal = price * item.quantity;
-      const tax = itemTotal * (taxRate / 100);
-      return sum + itemTotal + tax;
-    }, 0);
-  };
-
-  const calculateSubtotal = () => {
-    return cart.reduce((sum, item) => {
-      const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
-      return sum + (price * item.quantity);
-    }, 0);
-  };
-
-  const calculateTax = () => {
-    return cart.reduce((sum, item) => {
-      const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
-      const taxRate = (typeof item.product.taxRate === 'number' && !isNaN(item.product.taxRate)) ? item.product.taxRate : 0;
-      const itemTotal = price * item.quantity;
-      return sum + (itemTotal * (taxRate / 100));
-    }, 0);
   };
 
   const handleCheckout = () => {
@@ -477,11 +719,10 @@ export default function POS() {
       return;
     }
 
+    setLoading(true);
     const db = await getDB();
-
     try {
-      setLoading(true);
-      // Create sale
+      // 1. Création de la vente locale
       const sale = {
         id: opts?.draftId || generateId(),
         shiftId: activeShift.id,
@@ -500,12 +741,11 @@ export default function POS() {
         tax: calculateTax(),
         total: total,
         paymentMethod,
-        // Montants détaillés par mode de paiement
         cashAmount: paymentMethod === 'cash' ? paidAmount : 
                    paymentMethod === 'mixed' ? (parseFloat(cashAmount) || 0) : 0,
         mobileMoneyAmount: paymentMethod === 'mobile_money' ? paidAmount : 
                           paymentMethod === 'mixed' ? (parseFloat(mobileAmount) || 0) : 0,
-        otherAmount: 0, // Pour les futurs modes de paiement (carte, chèque, etc.)
+        otherAmount: 0,
         payments: paymentMethod === 'mixed'
           ? [
               { method: 'cash' as const, amount: parseFloat(cashAmount) || 0 },
@@ -518,118 +758,33 @@ export default function POS() {
         draftComment: opts?.comment || '',
       };
 
-      if (opts?.draft) {
-        await db.put('sales', sale);
-        toast.success('Vente enregistrée en brouillon');
-        setCart([]);
-        setCashAmount('');
-        setMobileAmount('');
-        setPaymentMethod('cash');
-        loadDraftSales();
-        // Close any open modals and redirect to POS main view
-        try { closeAllModals(); } catch (e) {}
-        try { navigate('/pos'); } catch (e) {}
-        return;
-      } else {
-        await db.put('sales', sale);
-      }
-
-      // Update stock - seulement pour les produits avec suivi de stock configuré
+      // 2. Mise à jour du stock local AVANT affichage du reçu
       const productsToUpdate = [];
       for (const item of cart) {
-        const product = await db.get('products', item.product.id);
-        if (product) {
-          // Vérifier si le produit a un suivi de stock configuré pour ce magasin
-          if (product.stock && user!.storeId in product.stock) {
-            // Le produit a déjà un suivi de stock pour ce magasin, on met à jour
-            product.stock[user!.storeId] = (product.stock[user!.storeId] || 0) - item.quantity;
-            await db.put('products', product);
-            productsToUpdate.push(product);
-          }
-          // Si le produit n'a pas de suivi configuré (stock vide ou pas de storeId), on ne fait rien
+        let product = await db.get('products', item.product.id);
+        if (product && product.stock && user!.storeId in product.stock) {
+          product.stock[user!.storeId] = (product.stock[user!.storeId] || 0) - item.quantity;
+          await db.put('products', product);
+          productsToUpdate.push(product);
         }
       }
-
-  // Si backend reachable, synchroniser immédiatement avec le backend
-  if (isBackendReachable) {
-        try {
-          // Synchroniser la vente
-          const salesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(sale)
-          });
-
-          if (!salesResponse.ok) {
-            throw new Error(`Erreur backend vente: ${salesResponse.status}`);
-          }
-
-          // Synchroniser les mises à jour de stock
-          for (const product of productsToUpdate) {
-            const productDataForBackend = {
-              ...product,
-              stock: product.stock[user!.storeId],
-              trackStock: true
-            };
-            
-            await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
-              method: 'PUT',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify(productDataForBackend)
-            });
-          }
-
-        } catch (error) {
-          console.error('Erreur de synchronisation:', error);
-          // Queue sale sync via performSyncOp (will queue if offline)
-          await performSyncOp({
-            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-            method: 'POST',
-            data: sale,
-          });
-
-          // Queue product stock updates via performSyncOp
-          for (const product of productsToUpdate) {
-            const productDataForBackend = {
-              ...product,
-              stock: product.stock[user!.storeId],
-              trackStock: true
-            };
-            await performSyncOp({
-              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-              method: 'PUT',
-              data: productDataForBackend,
-            });
-          }
+      setProducts(prevProducts => 
+        prevProducts.map(p => {
+          const updated = productsToUpdate.find(upd => upd.id === p.id);
+          return updated ? updated : p;
+        })
+      );
+      setProductSalesCount(prevCounts => {
+        const newCounts = { ...prevCounts };
+        for (const item of cart) {
+          newCounts[item.product.id] = (newCounts[item.product.id] || 0) + item.quantity;
         }
-      } else {
-        // Hors ligne: queue sale and product updates via performSyncOp
-        await performSyncOp({
-          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-          method: 'POST',
-          data: sale,
-        });
-        for (const product of productsToUpdate) {
-          const productDataForBackend = {
-            ...product,
-            stock: product.stock[user!.storeId],
-            trackStock: true
-          };
-          await performSyncOp({
-            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-            method: 'PUT',
-            data: productDataForBackend,
-          });
-        }
-      }
+        return newCounts;
+      });
+      await db.put('sales', sale);
 
-      // Prepare receipt data
-      // Prépare les montants par mode de paiement
-      let paymentDetails: { label: string, amount: number }[] = [];
+      // 3. Affichage immédiat du reçu et reset UI
+      let paymentDetails = [];
       if (sale.paymentMethod === 'mixed') {
         paymentDetails = [
           { label: 'Especes', amount: sale.payments.find((p: any) => p.method === 'cash')?.amount || 0 },
@@ -644,7 +799,6 @@ export default function POS() {
           { label: 'Mobile Money', amount: sale.payments[0]?.amount || 0 }
         ];
       }
-
       const receiptData = {
         ...sale,
         receiptNumber: sale.id.substring(0, 8).toUpperCase(),
@@ -661,119 +815,177 @@ export default function POS() {
         change: paidAmount - total,
         date: new Date(sale.createdAt),
       };
+      setLastSale(receiptData);
+      setCart([]);
+      setCashAmount('');
+      setMobileAmount('');
+      setPaymentMethod('cash');
+      loadDraftSales();
+      try { closeAllModals(); } catch (e) {}
+      try { navigate('/pos'); } catch (e) {}
+      setShowReceipt(true);
 
-  setLastSale(receiptData);
-  const syncMessage = isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)';
-  setCart([]);
-  setCashAmount('');
-  setMobileAmount('');
-  setPaymentMethod('cash');
-  loadDraftSales();
-  // Close other modals and ensure we are on POS main view; keep receipt visible
-  try { closeAllModals(); } catch (e) {}
-  try { navigate('/pos'); } catch (e) {}
-  setShowReceipt(true);
-  // Try to print automatically on native devices. We will build HTML from
-  // a temporary element similar to the Receipt content and try native print
-  // via Cordova, otherwise fallback to the browser print window.
-  try {
-    const autoPrintSetting = localStorage.getItem('auto_print');
-    const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
-    if (!autoPrint) {
-      // Auto-print disabled in settings
-      return;
-    }
-    // Build a plain-text receipt (consistent format) and send via native print
-    try {
-      const lines: string[] = [];
-      // small helper to center text for plain-text ESC/POS receipts
-      const centerText = (s: string, w: number) => {
-        const str = (s || '').toString();
-        if (str.length >= w) return str;
-        const left = Math.floor((w - str.length) / 2);
-        return ' '.repeat(left) + str;
-      };
-      const paper = localStorage.getItem('printer_paper') || '80';
-      const width = paper === '58' ? 32 : 48;
-      // Center store name and address (bold)
-      const headerLine = centerText(receiptData.storeName || 'Magasin', width);
-      lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
-      if (receiptData.storeAddress) {
-        const addrLine = centerText(receiptData.storeAddress, width);
-        lines.push('\x1bE\x01' + addrLine + '\x1bE\x00');
-      }
-      lines.push('');
-      // Date on the left, receipt number on the right (same line)
-      const dateText = receiptData.date ? new Date(receiptData.date).toLocaleString('fr-FR') : new Date(receiptData.createdAt).toLocaleString('fr-FR');
-      lines.push(NativePrinter.formatColumns(dateText, `Recu N°: ${receiptData.receiptNumber}`, width));
-
-      lines.push('--------------------------------');
-      for (const it of (receiptData.items || [])) {
-        const name = it.name || '';
-        const qty = it.quantity || 0;
-        const price = isNaN(it.price) ? 0 : Math.round(it.price);
-        const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
-        const qtyText = `${qty} x ${price} FCFA`;
-        const totalText = `${totalItem} FCFA`;
-        const leftFull = (name + ' ' + qtyText).trim();
-        if (leftFull.length + 1 + totalText.length <= width) {
-          lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
-        } else {
-          const firstLineLeft = name;
-          if (firstLineLeft.length + 1 + totalText.length <= width) {
-            lines.push(NativePrinter.formatColumns(firstLineLeft, totalText, width));
-            lines.push(NativePrinter.formatColumns(qtyText, '', width));
-          } else {
-            lines.push(NativePrinter.formatColumns(name, totalText, width));
-            lines.push(NativePrinter.formatColumns(qtyText, '', width));
+      // Impression automatique (inchangée)
+      try {
+        const autoPrintSetting = localStorage.getItem('auto_print');
+        const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
+        if (autoPrint) {
+          try {
+            const lines: string[] = [];
+            const centerText = (s: string, w: number) => {
+              const str = (s || '').toString();
+              if (str.length >= w) return str;
+              const left = Math.floor((w - str.length) / 2);
+              return ' '.repeat(left) + str;
+            };
+            const paper = localStorage.getItem('printer_paper') || '80';
+            const width = paper === '58' ? 32 : 48;
+            const headerLine = centerText(receiptData.storeName || 'Magasin', width);
+            lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
+            if (receiptData.storeAddress) {
+              const addrLine = centerText(receiptData.storeAddress, width);
+              lines.push('\x1bE\x01' + addrLine + '\x1bE\x00');
+            }
+            lines.push('');
+            const dateText = receiptData.date ? new Date(receiptData.date).toLocaleString('fr-FR') : new Date(receiptData.createdAt).toLocaleString('fr-FR');
+            lines.push(NativePrinter.formatColumns(dateText, `Recu N°: ${receiptData.receiptNumber}`, width));
+            lines.push('--------------------------------');
+            for (const it of (receiptData.items || [])) {
+              const name = it.name || '';
+              const qty = it.quantity || 0;
+              const price = isNaN(it.price) ? 0 : Math.round(it.price);
+              const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
+              const qtyText = `${qty} x ${price} FCFA`;
+              const totalText = `${totalItem} FCFA`;
+              const leftFull = (name + ' ' + qtyText).trim();
+              if (leftFull.length + 1 + totalText.length <= width) {
+                lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
+              } else {
+                const firstLineLeft = name;
+                if (firstLineLeft.length + 1 + totalText.length <= width) {
+                  lines.push(NativePrinter.formatColumns(firstLineLeft, totalText, width));
+                  lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                } else {
+                  lines.push(NativePrinter.formatColumns(name, totalText, width));
+                  lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                }
+              }
+            }
+            lines.push('--------------------------------');
+            lines.push(NativePrinter.formatColumns('Sous-total:', `${Math.round(receiptData.subtotal || 0)} FCFA`, width));
+            lines.push(NativePrinter.formatColumns('TVA:', `${Math.round(receiptData.tax || 0)} FCFA`, width));
+            const totalLine = NativePrinter.formatColumns('TOTAL:', `${Math.round(receiptData.total || 0)} FCFA`, width);
+            lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
+            lines.push('');
+            const paymentTitle = NativePrinter.formatColumns('Mode de paiement:', receiptData.paymentMethod || '', width);
+            lines.push('\x1bE\x01' + paymentTitle + '\x1bE\x00');
+            if (receiptData.paymentDetails && receiptData.paymentDetails.length > 0) {
+              for (const p of receiptData.paymentDetails) {
+                lines.push(NativePrinter.formatColumns(p.label + ':', `${Math.round(p.amount)} FCFA`, width));
+              }
+            } else {
+              if (receiptData.cashReceived !== undefined && receiptData.cashReceived !== null) {
+                lines.push(NativePrinter.formatColumns('Espèces:', `${Math.round(receiptData.cashReceived)} FCFA`, width));
+              }
+              if (receiptData.change !== undefined && receiptData.change !== null) {
+                lines.push(NativePrinter.formatColumns('Rendu:', `${Math.round(receiptData.change)} FCFA`, width));
+              }
+            }
+            lines.push('');
+            lines.push('Merci pour votre visite !');
+            let mac: string | undefined = undefined;
+            try {
+              const s = await (await import('@/lib/secureStorage')).getItem('printer_mac');
+              mac = s || localStorage.getItem('printer_mac') || undefined;
+            } catch (e) {
+              mac = localStorage.getItem('printer_mac') || undefined;
+            }
+            const ok = await NativePrinter.printText(lines, mac as any);
+            if (!ok) {
+              toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
+            }
+          } catch (e) {
+            console.warn('Auto-text-print failed', e);
+            toast.error('Échec impression automatique');
           }
         }
+      } catch (err) {
+        console.warn('Auto-print failed:', err);
       }
-      lines.push('--------------------------------');
-  lines.push(NativePrinter.formatColumns('Sous-total:', `${Math.round(receiptData.subtotal || 0)} FCFA`, width));
-  lines.push(NativePrinter.formatColumns('TVA:', `${Math.round(receiptData.tax || 0)} FCFA`, width));
-  // TOTAL in bold
-  const totalLine = NativePrinter.formatColumns('TOTAL:', `${Math.round(receiptData.total || 0)} FCFA`, width);
-  lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
-      lines.push('');
-      // Payment section: show method and any detailed payment lines in columns
-      // Payment method title in bold
-      const paymentTitle = NativePrinter.formatColumns('Mode de paiement:', receiptData.paymentMethod || '', width);
-      lines.push('\x1bE\x01' + paymentTitle + '\x1bE\x00');
-      if (receiptData.paymentDetails && receiptData.paymentDetails.length > 0) {
-        for (const p of receiptData.paymentDetails) {
-          // payment detail lines — keep normal but could be bold if desired
-          lines.push(NativePrinter.formatColumns(p.label + ':', `${Math.round(p.amount)} FCFA`, width));
-        }
-      } else {
-        if (receiptData.cashReceived !== undefined && receiptData.cashReceived !== null) {
-          lines.push(NativePrinter.formatColumns('Espèces:', `${Math.round(receiptData.cashReceived)} FCFA`, width));
-        }
-        if (receiptData.change !== undefined && receiptData.change !== null) {
-          lines.push(NativePrinter.formatColumns('Rendu:', `${Math.round(receiptData.change)} FCFA`, width));
-        }
-      }
-      lines.push('');
-      lines.push('Merci pour votre visite !');
 
-      let mac: string | undefined = undefined;
-      try {
-        const s = await (await import('@/lib/secureStorage')).getItem('printer_mac');
-        mac = s || localStorage.getItem('printer_mac') || undefined;
-      } catch (e) {
-        mac = localStorage.getItem('printer_mac') || undefined;
-      }
-      const ok = await NativePrinter.printText(lines, mac as any);
-      if (!ok) {
-        toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
-      }
-    } catch (e) {
-      console.warn('Auto-text-print failed', e);
-      toast.error('Échec impression automatique');
-    }
-  } catch (err) {
-    console.warn('Auto-print failed:', err);
-  }
+      // 4. Synchronisation réseau en arrière-plan (hors UI)
+      (async () => {
+        // Si backend reachable, synchroniser immédiatement avec le backend
+        if (isBackendReachable) {
+          try {
+            // Synchroniser la vente
+            const salesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(sale)
+            });
+            if (!salesResponse.ok) {
+              throw new Error(`Erreur backend vente: ${salesResponse.status}`);
+            }
+            // Synchroniser les mises à jour de stock
+            for (const product of productsToUpdate) {
+              const productDataForBackend = {
+                ...product,
+                stock: product.stock[user!.storeId],
+                trackStock: true
+              };
+              await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(productDataForBackend)
+              });
+            }
+          } catch (error) {
+            // Si erreur, queue pour sync plus tard
+            await performSyncOp({
+              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
+              method: 'POST',
+              data: sale,
+            });
+            for (const product of productsToUpdate) {
+              const productDataForBackend = {
+                ...product,
+                stock: product.stock[user!.storeId],
+                trackStock: true
+              };
+              await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                method: 'PUT',
+                data: productDataForBackend,
+              });
+            }
+          }
+        } else {
+          // Hors ligne: queue sale and product updates via performSyncOp
+          await performSyncOp({
+            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
+            method: 'POST',
+            data: sale,
+          });
+          for (const product of productsToUpdate) {
+            const productDataForBackend = {
+              ...product,
+              stock: product.stock[user!.storeId],
+              trackStock: true
+            };
+            await performSyncOp({
+              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+              method: 'PUT',
+              data: productDataForBackend,
+            });
+          }
+        }
+      })();
+      toast.success(isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)');
     } catch (error) {
       toast.error('Erreur lors de l\'enregistrement de la vente');
       console.error('Erreur:', error);
@@ -884,37 +1096,77 @@ export default function POS() {
         Aucun produit ne correspond à la recherche ou à la catégorie sélectionnée.
       </div>
     ) : (
-      filteredProducts.map(product => (
-        <Card
-          key={product.id}
-          className="cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => addToCart(product)}
-          style={{ minHeight: 140 }}
-        >
-          <CardContent className="p-2 flex flex-col items-center">
-            <img
-              src={product.imageUrl ? product.imageUrl : '/placeholder.svg'}
-              alt={product.name}
-              style={{ width: 60, height: 60, marginBottom: 4, borderRadius: 6, objectFit: 'cover', background: '#f3f4f6' }}
-            />
-            <h3 className="font-semibold text-sm mb-1 text-center line-clamp-2" style={{ minHeight: 32 }}>{product.name}</h3>
-            <p className="text-primary font-bold text-xs mb-1">
-              {product.variablePrices && product.variablePrices.length > 0
-                ? `${Math.min(...product.variablePrices.map(vp => vp.price))} - ${Math.max(...product.variablePrices.map(vp => vp.price))} FCFA`
-                : product.salePrice !== undefined && product.salePrice !== null && !isNaN(Number(product.salePrice)) && Number(product.salePrice) > 0
-                ? `${Number(product.salePrice).toFixed(0)} FCFA`
-                : <span className="text-red-500">Prix à définir</span>
-              }
-            </p>
-            <p className="text-[10px] text-muted-foreground">
-              Stock: {Object.keys(product.stock || {}).length > 0
-                ? (user?.storeId ? `${product.stock?.[user.storeId] || 0} ${product.unit}` : <span className="text-muted-foreground text-[10px]">—</span>)
-                : <span className="text-muted-foreground text-[10px]">Non suivi</span>
-              }
-            </p>
-          </CardContent>
-        </Card>
-      ))
+      <>
+        {displayedProducts.map(product => (
+          <div key={product.id} className="relative">
+            <Card
+              className="cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => addToCart(product)}
+              style={{ minHeight: 140 }}
+            >
+              <CardContent className="p-2 flex flex-col items-center">
+                <img
+                  src={product.imageUrl ? product.imageUrl : '/placeholder.svg'}
+                  alt={product.name}
+                  style={{ 
+                    width: 60, 
+                    height: 60, 
+                    marginBottom: 4, 
+                    borderRadius: 6, 
+                    objectFit: 'cover', 
+                    background: '#f3f4f6'
+                  }}
+                  loading="lazy"
+                />
+                <h3 className="font-semibold text-sm mb-1 text-center line-clamp-2" style={{ minHeight: 32 }}>{product.name}</h3>
+                <p className="text-primary font-bold text-xs mb-1">
+                  {product.variablePrices && product.variablePrices.length > 0
+                    ? `${Math.min(...product.variablePrices.map(vp => vp.price))} - ${Math.max(...product.variablePrices.map(vp => vp.price))} FCFA`
+                    : product.salePrice !== undefined && product.salePrice !== null && !isNaN(Number(product.salePrice)) && Number(product.salePrice) > 0
+                    ? `${Number(product.salePrice).toFixed(0)} FCFA`
+                    : <span className="text-red-500">Prix à définir</span>
+                  }
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Stock: {product.trackStock !== false && Object.keys(product.stock || {}).length > 0
+                    ? (user?.storeId ? `${product.stock?.[user.storeId] || 0} ${product.unit}` : <span className="text-muted-foreground text-[10px]">—</span>)
+                    : <span className="text-muted-foreground text-[10px]">Non suivi</span>
+                  }
+                </p>
+              </CardContent>
+            </Card>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-1 right-1 h-6 w-6 p-0 hover:bg-white/80"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFavorite(product.id);
+              }}
+            >
+              <Heart 
+                className={`w-4 h-4 ${
+                  favorites[product.id] 
+                    ? 'fill-red-500 text-red-500' 
+                    : 'text-gray-400'
+                }`} 
+              />
+            </Button>
+          </div>
+        ))}
+        {productOffset < filteredProducts.length && (
+          <div className="col-span-full flex justify-center py-4">
+            <Button
+              variant="outline"
+              onClick={loadMoreProducts}
+              disabled={isLoadingMoreProducts}
+              size="sm"
+            >
+              {isLoadingMoreProducts ? 'Chargement...' : `Charger plus (${filteredProducts.length - productOffset} restants)`}
+            </Button>
+          </div>
+        )}
+      </>
     )}
   </div>
       </div>
@@ -1104,15 +1356,15 @@ export default function POS() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Sous-total</span>
-              <span>{formatMoneyDisplay(calculateSubtotal())} FCFA</span>
+              <span>{formatMoneyDisplay(cartCalculations.subtotal)} FCFA</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">TVA</span>
-              <span>{isNaN(calculateTax()) ? '0' : formatMoneyDisplay(calculateTax())} FCFA</span>
+              <span>{isNaN(cartCalculations.tax) ? '0' : formatMoneyDisplay(cartCalculations.tax)} FCFA</span>
             </div>
             <div className="flex justify-between text-lg font-bold">
               <span>Total</span>
-              <span className="text-primary">{isNaN(calculateTotal()) ? '0' : formatMoneyDisplay(calculateTotal())} FCFA</span>
+              <span className="text-primary">{isNaN(cartCalculations.total) ? '0' : formatMoneyDisplay(cartCalculations.total)} FCFA</span>
             </div>
           </div>
           <Button
@@ -1136,7 +1388,7 @@ export default function POS() {
           <div className="space-y-4">
             <div className="p-4 bg-muted rounded-lg">
               <p className="text-sm text-muted-foreground">Total à payer</p>
-              <p className="text-2xl font-bold text-primary">{formatMoneyDisplay(calculateTotal())} FCFA</p>
+              <p className="text-2xl font-bold text-primary">{formatMoneyDisplay(cartCalculations.total)} FCFA</p>
             </div>
 
             <div className="space-y-2">
@@ -1144,13 +1396,13 @@ export default function POS() {
               <Select value={paymentMethod} onValueChange={(v: any) => {
                 setPaymentMethod(v);
                 if (v === 'cash') {
-                  setCashAmount(calculateTotal().toFixed(0));
+                  setCashAmount(cartCalculations.total.toFixed(0));
                   setMobileAmount('');
                 } else if (v === 'mobile_money') {
-                  setMobileAmount(calculateTotal().toFixed(0));
+                  setMobileAmount(cartCalculations.total.toFixed(0));
                   setCashAmount('');
                 } else if (v === 'mixed') {
-                  setCashAmount(calculateTotal().toFixed(0));
+                  setCashAmount(cartCalculations.total.toFixed(0));
                   setMobileAmount('');
                 }
               }}>
@@ -1173,7 +1425,7 @@ export default function POS() {
                       placeholder="0"
                       value={formatNumberWithSpaces(cashAmount)}
                       onChange={e => {
-                        const total = calculateTotal();
+                        const total = cartCalculations.total;
                         let cash = parseInt(e.target.value.replace(/\s/g, "")) || 0;
                         if (cash < 0) cash = 0;
                         if (cash > total) cash = total;
@@ -1191,7 +1443,7 @@ export default function POS() {
                       placeholder="0"
                       value={formatNumberWithSpaces(mobileAmount)}
                       onChange={e => {
-                        const total = calculateTotal();
+                        const total = cartCalculations.total;
                         let mobile = parseInt(e.target.value.replace(/\s/g, "")) || 0;
                         if (mobile < 0) mobile = 0;
                         if (mobile > total) mobile = total;
@@ -1351,7 +1603,7 @@ export default function POS() {
           className="lg:hidden"
         >
           <ShoppingCart className="w-5 h-5 text-primary" />
-          {formatMoneyDisplay(calculateTotal())} FCFA
+          {formatMoneyDisplay(cartCalculations.total)} FCFA
         </button>
       )}
 

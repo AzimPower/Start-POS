@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback, memo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
@@ -133,6 +133,110 @@ export default function StockSignals() {
   const [activeSearch, setActiveSearch] = useState('');
   // (expense creation is handled on the dedicated Expenses page)
 
+  // ==== CACHES OPTIMISÉS ====
+  // Cache des noms de produits pour éviter les recherches répétées
+  const productNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    products.forEach(p => map.set(p.id, p.name));
+    return map;
+  }, [products]);
+
+  // Cache des produits complets par ID
+  const productMap = useMemo(() => {
+    const map = new Map<string, Product>();
+    products.forEach(p => map.set(p.id, p));
+    return map;
+  }, [products]);
+
+  // Cache des catégories par ID
+  const categoryMap = useMemo(() => {
+    const map = new Map<string, ExpenseCategory>();
+    expenseCategories.forEach(c => map.set(c.id, c));
+    return map;
+  }, [expenseCategories]);
+
+  // Cache des stocks par produit pour éviter les filtres répétés
+  const stocksByProduct = useMemo(() => {
+    const map = new Map<string, ExpenseAdvanced[]>();
+    activeStocks.forEach(stock => {
+      if (stock.directProduct?.productId) {
+        const existing = map.get(stock.directProduct.productId) || [];
+        existing.push(stock);
+        map.set(stock.directProduct.productId, existing);
+      }
+    });
+    // Trier chaque liste par date de début
+    map.forEach((stocks) => {
+      stocks.sort((a, b) => a.directProduct!.startDate - b.directProduct!.startDate);
+    });
+    return map;
+  }, [activeStocks]);
+
+  // Cache des stocks par catégorie
+  const stocksByCategory = useMemo(() => {
+    const map = new Map<string, ExpenseAdvanced[]>();
+    activeStocks.forEach(stock => {
+      if (stock.type === 'indirect' && stock.categoryId) {
+        const existing = map.get(stock.categoryId) || [];
+        existing.push(stock);
+        map.set(stock.categoryId, existing);
+      }
+    });
+    // Trier par date
+    map.forEach((stocks) => {
+      stocks.sort((a, b) => (a.date || 0) - (b.date || 0));
+    });
+    return map;
+  }, [activeStocks]);
+
+  // Fonctions de lookup optimisées
+  const getProductStockCount = useCallback((productId: string) => {
+    return stocksByProduct.get(productId)?.length || 0;
+  }, [stocksByProduct]);
+
+  const getOldestStockForProduct = useCallback((productId: string) => {
+    const stocks = stocksByProduct.get(productId);
+    return stocks?.[0];
+  }, [stocksByProduct]);
+
+  const getProductName = useCallback((productId: string) => {
+    return productNameMap.get(productId) || 'Produit inconnu';
+  }, [productNameMap]);
+
+  // Timestamp actuel mis en cache pour éviter les appels répétés à Date.now()
+  const nowTimestamp = useMemo(() => Date.now(), []);
+  const DAY_MS = 86400000; // 24 * 60 * 60 * 1000
+
+  const getDaysSince = useCallback((timestamp: number) => {
+    return Math.ceil((nowTimestamp - timestamp) / DAY_MS);
+  }, [nowTimestamp]);
+
+  const getMarginColor = useCallback((percentage: number) => {
+    if (percentage < 20) return 'text-red-600';
+    if (percentage < 35) return 'text-yellow-600';
+    return 'text-green-600';
+  }, []);
+
+  const getMarginColorByAmount = useCallback((margin: number) => {
+    return margin >= 0 ? 'text-green-600' : 'text-red-600';
+  }, []);
+
+  // Format amount as '2 900 FCFA' (blue)
+  const formatAmountBlue = useCallback((amount: number) => (
+    <span className="text-blue-600 font-bold">{Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
+  ), []);
+
+  const getMarginBadgeVariant = useCallback((percentage: number) => {
+    if (percentage < 20) return 'destructive';
+    if (percentage < 35) return 'secondary';
+    return 'default';
+  }, []);
+
+  const getMarginBadgeVariantByAmount = useCallback((margin: number) => {
+    return margin >= 0 ? 'default' : 'destructive';
+  }, []);
+  // ==== FIN CACHES ====
+
   useEffect(() => {
     loadData();
   }, []);
@@ -163,11 +267,11 @@ export default function StockSignals() {
       setShowEndDateDialog(true);
       return;
     }
-    // Chercher la marge visée depuis la fiche du produit
+    // Chercher la marge visée depuis la fiche du produit - utilise le cache
     let targetMargin: number | null = null;
     let product: Product | undefined;
     if (selectedExpense.type === 'direct' && selectedExpense.directProduct) {
-      product = products.find(p => p.id === selectedExpense.directProduct.productId);
+      product = productMap.get(selectedExpense.directProduct.productId);
       if (product && (product as any).targetMargin != null) {
         const parsed = Number((product as any).targetMargin);
         if (!isNaN(parsed)) targetMargin = parsed;
@@ -191,7 +295,7 @@ export default function StockSignals() {
       periodSalesData = await calculateSalesBetween(startTime, endTime, selectedExpense.directProduct.productId, true);
       totalSalesData = await calculateSalesBetween(periodSalesData.adjustedStartDate || startTime, endTime, selectedExpense.directProduct.productId, false);
     } else if (selectedExpense.type === 'indirect' && selectedExpense.categoryId) {
-      const category = expenseCategories.find(cat => cat.id === selectedExpense.categoryId);
+      const category = categoryMap.get(selectedExpense.categoryId);
       if (!category || !category.productIds || category.productIds.length === 0) {
         toast.error(`Aucun produit lié à cette catégorie de dépense indirecte.`);
         return;
@@ -277,37 +381,33 @@ export default function StockSignals() {
     setShowSignalDialog(true);
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const db = await getDB();
       
-      // Pour cette page critique, toujours essayer de charger depuis le backend
-      // même si hors ligne, on essaie d'abord le backend puis on fallback sur local
-      try {
-        // Charger toutes les données nécessaires depuis le backend
-        await Promise.all([
-          loadProductsFromBackend(db),
-          loadExpenseCategoriesFromBackend(db),
-          loadExpensesAdvancedFromBackend(db),
-          loadStockSignalsFromBackend(db),
-          loadSalesFromBackend(db)
-        ]);
-        
-        await processData(db);
-        
-        if (!isOnline) {
-          toast.success('Données chargées depuis le cache (mode hors ligne)');
-        }
-      } catch (error) {
-        console.error('Erreur de synchronisation avec le backend:', error);
-        // En cas d'erreur, charger depuis la base locale
-        await loadFromLocal(db);
-        
-        if (isOnline) {
-          toast.warning('Erreur de synchronisation, données chargées depuis le cache');
-        } else {
-          toast.info('Mode hors ligne - données depuis le cache');
+      // Stratégie optimisée: charger immédiatement depuis le cache local,
+      // puis rafraîchir en arrière-plan si en ligne
+      await processData(db);
+      setLoading(false); // Afficher les données locales immédiatement
+
+      // Si en ligne, synchroniser en arrière-plan sans bloquer l'UI
+      if (isOnline) {
+        try {
+          // Charger en parallèle depuis le backend (non-bloquant)
+          await Promise.all([
+            loadProductsFromBackend(db),
+            loadExpenseCategoriesFromBackend(db),
+            loadExpensesAdvancedFromBackend(db),
+            loadStockSignalsFromBackend(db),
+            loadSalesFromBackend(db)
+          ]);
+          
+          // Re-traiter les données après sync
+          await processData(db);
+        } catch (error) {
+          console.error('Erreur de synchronisation avec le backend:', error);
+          // Les données locales sont déjà affichées, pas besoin de toast d'erreur
         }
       }
 
@@ -316,10 +416,9 @@ export default function StockSignals() {
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
       console.error('Erreur:', error);
-    } finally {
       setLoading(false);
     }
-  };
+  }, [isOnline, user?.storeId]);
 
   const loadProductsFromBackend = async (db: any) => {
     try {
@@ -444,148 +543,124 @@ export default function StockSignals() {
     await processData(db);
   };
 
-  const processData = async (db: any) => {
-    // Load products
-    const productsData = await db.getAll('products');
-    setProducts(productsData);
+  const processData = useCallback(async (db: any) => {
+    // Charger toutes les données en une seule transaction pour optimiser les performances
+    const tx = db.transaction(['products', 'expenseCategories', 'stockSignals', 'expensesAdvanced'], 'readonly');
+    
+    const [productsData, categoriesData, signalsData, expensesData] = await Promise.all([
+      tx.objectStore('products').getAll(),
+      tx.objectStore('expenseCategories').getAll(),
+      tx.objectStore('stockSignals').getAll(),
+      tx.objectStore('expensesAdvanced').getAll()
+    ]);
 
-    // Load expense categories
-    const categoriesData = await db.getAll('expenseCategories');
-    setExpenseCategories(categoriesData);
+    // Traiter les signaux - utiliser un Set pour des lookups O(1)
+    const userSignals = signalsData
+      .filter((signal: StockSignal) => signal.storeId === user?.storeId)
+      .sort((a: StockSignal, b: StockSignal) => b.createdAt - a.createdAt);
+    
+    // Créer un Set pour des lookups rapides de signaux existants
+    const signalLookup = new Set(
+      userSignals.map((s: StockSignal) => `${s.expenseId}_${s.productId}`)
+    );
 
-    // Load completed signals (first, for filtering)
-    const signalsData = await db.getAll('stockSignals');
-    const userSignals = signalsData.filter(signal => 
-      signal.storeId === user?.storeId
-    ).sort((a, b) => b.createdAt - a.createdAt);
-    setCompletedSignals(userSignals);
+    // Filtrer les dépenses actives avec lookups optimisés
+    const storeId = user?.storeId;
+    const activeExpenses = expensesData.filter((expense: ExpenseAdvanced) => {
+      if (expense.storeId !== storeId) return false;
+      if (expense.type !== 'direct' && expense.type !== 'indirect') return false;
 
-    // Load active expenses (stocks non signalés) - inclure directes et indirectes
-    const expensesData = await db.getAll('expensesAdvanced');
-    // Exclude expenses that already have a completed signal for their product/category and period
-    const activeExpenses = expensesData.filter(expense => {
-      if (!(expense.type === 'direct' || expense.type === 'indirect')) return false;
-      if (expense.storeId !== user?.storeId) return false;
-
-      // For direct: check if a signal exists for this product and expense period
       if (expense.type === 'direct' && expense.directProduct) {
         if (expense.directProduct.endDate) return false;
-        // Check if a signal exists for this product and expenseId
-        const hasSignal = userSignals.some(signal =>
-          signal.expenseId === expense.id &&
-          signal.productId === expense.directProduct.productId
-        );
-        if (hasSignal) return false;
-        return true;
+        const key = `${expense.id}_${expense.directProduct.productId}`;
+        return !signalLookup.has(key);
       }
-      // For indirect: check if a signal exists for this category and expenseId
+      
       if (expense.type === 'indirect') {
         if (expense.directProduct?.endDate) return false;
-        const hasSignal = userSignals.some(signal =>
-          signal.expenseId === expense.id &&
-          signal.productId === (expense.categoryId || 'indirect')
-        );
-        if (hasSignal) return false;
-        return true;
+        const key = `${expense.id}_${expense.categoryId || 'indirect'}`;
+        return !signalLookup.has(key);
       }
+      
       return false;
     });
-    setActiveStocks(activeExpenses);
-  };
 
-  const calculateSalesBetween = async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
+    // Mettre à jour tous les états en batch
+    setProducts(productsData);
+    setExpenseCategories(categoriesData);
+    setCompletedSignals(userSignals);
+    setActiveStocks(activeExpenses);
+  }, [user?.storeId]);
+
+  // Cache pour éviter de recharger les ventes et signaux à chaque calcul
+  const salesCache = useMemo(() => ({ data: null as Sale[] | null, timestamp: 0 }), []);
+  const signalsCache = useMemo(() => ({ data: null as StockSignal[] | null, timestamp: 0 }), []);
+  const CACHE_TTL = 30000; // 30 secondes
+
+  const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
     const db = await getDB();
-    const sales = await db.getAll('sales');
+    const now = Date.now();
     
-    // Si on veut exclure les ventes déjà signalées, on récupère les signalements précédents
+    // Utiliser le cache si disponible et récent
+    let sales: Sale[];
+    if (salesCache.data && (now - salesCache.timestamp) < CACHE_TTL) {
+      sales = salesCache.data;
+    } else {
+      sales = await db.getAll('sales');
+      salesCache.data = sales;
+      salesCache.timestamp = now;
+    }
+    
     let adjustedStartDate = startDate;
     if (excludeAlreadySignaled) {
-      const stockSignals = await db.getAll('stockSignals');
-      const previousSignals = stockSignals
-        .filter(signal => 
-          signal.productId === productId && 
-          signal.storeId === user?.storeId
-        )
-        .sort((a, b) => b.endDate - a.endDate); // Trier par date de fin décroissante
-      
-      console.log('All signals for product:', previousSignals);
-      
-      // Si il y a un signalement précédent, on commence après sa date de fin
-      if (previousSignals.length > 0) {
-        const lastSignal = previousSignals[0]; // Le plus récent
-        // Ajouter 1 minute pour s'assurer qu'on exclut complètement toutes les ventes de la même minute que le signalement
-        adjustedStartDate = Math.max(startDate, lastSignal.endDate + 60000); // +1 minute = 60000ms
-        console.log('Previous signal found:', {
-          lastSignalEndDate: new Date(lastSignal.endDate),
-          originalStartDate: new Date(startDate),
-          adjustedStartDate: new Date(adjustedStartDate),
-          excludingWholeMinute: true
-        });
+      let stockSignals: StockSignal[];
+      if (signalsCache.data && (now - signalsCache.timestamp) < CACHE_TTL) {
+        stockSignals = signalsCache.data;
       } else {
-        console.log('No previous signals found for this product');
+        stockSignals = await db.getAll('stockSignals');
+        signalsCache.data = stockSignals;
+        signalsCache.timestamp = now;
+      }
+      
+      // Trouver le signalement le plus récent pour ce produit
+      let latestEndDate = 0;
+      const storeId = user?.storeId;
+      for (const signal of stockSignals) {
+        if (signal.productId === productId && signal.storeId === storeId && signal.endDate > latestEndDate) {
+          latestEndDate = signal.endDate;
+        }
+      }
+      
+      if (latestEndDate > 0) {
+        adjustedStartDate = Math.max(startDate, latestEndDate + 60000);
       }
     }
     
-    const filteredSales = sales.filter((sale: Sale) => 
-      sale.createdAt >= adjustedStartDate && // Maintenant on peut utiliser >= car adjustedStartDate = endDate + 1ms
-      sale.createdAt <= endDate &&
-      sale.draft !== true // Exclure les brouillons (en gérant le cas où draft n'existe pas)
-    );
-    
+    // Filtrer et calculer en une seule passe
     let totalQuantity = 0;
     let totalRevenue = 0;
     
-    console.log('Calculating sales for product:', productId);
-    console.log('Adjusted period:', new Date(adjustedStartDate), 'to', new Date(endDate));
-    console.log('All sales count:', sales.length);
-    console.log('Filtered sales:', filteredSales.length);
-    
-    // Debug: afficher toutes les ventes pour ce produit dans la période élargie
-    const debugSales = sales.filter(sale => 
-      sale.createdAt >= startDate && sale.createdAt <= endDate
-    );
-    console.log('Debug - All sales in original period:', debugSales.map(sale => ({
-      id: sale.id,
-      createdAt: new Date(sale.createdAt),
-      total: sale.total,
-      included: sale.createdAt >= adjustedStartDate
-    })));
-    
-    filteredSales.forEach(sale => {
-      if (sale.items && Array.isArray(sale.items)) {
-        sale.items.forEach(item => {
-          if (item.productId === productId) {
-            // S'assurer que les valeurs sont des nombres valides
-            const quantity = Number(item.quantity) || 0;
-            // Essayer d'abord item.total, sinon calculer price * quantity
-            let itemTotal = Number(item.total) || 0;
-            if (itemTotal === 0 && item.price) {
-              itemTotal = (Number(item.price) || 0) * quantity;
-            }
-            
-            console.log('Sale included in calculation:', { 
-              saleId: sale.id,
-              saleCreatedAt: new Date(sale.createdAt),
-              adjustedStartDate: new Date(adjustedStartDate),
-              isAfterCutoff: sale.createdAt >= adjustedStartDate,
-              quantity, 
-              itemTotal, 
-              originalTotal: item.total,
-              price: item.price,
-              productId: item.productId 
-            });
-            
-            totalQuantity += quantity;
-            totalRevenue += itemTotal;
+    for (const sale of sales) {
+      if (sale.createdAt < adjustedStartDate || sale.createdAt > endDate || sale.draft === true) continue;
+      
+      const items = sale.items;
+      if (!items) continue;
+      
+      for (const item of items) {
+        if (item.productId === productId) {
+          const quantity = Number(item.quantity) || 0;
+          let itemTotal = Number(item.total) || 0;
+          if (itemTotal === 0 && item.price) {
+            itemTotal = (Number(item.price) || 0) * quantity;
           }
-        });
+          totalQuantity += quantity;
+          totalRevenue += itemTotal;
+        }
       }
-    });
-    
-    console.log('Final totals:', { totalQuantity, totalRevenue });
+    }
     
     return { totalQuantity, totalRevenue, adjustedStartDate };
-  };
+  }, [user?.storeId]);
 
   const calculateSalesForMultipleProducts = async (startDate: number, endDate: number, productIds: string[], excludeAlreadySignaled: boolean = true) => {
     let totalQuantity = 0;
@@ -749,8 +824,13 @@ export default function StockSignals() {
         const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
         const shouldSendEmail = emailSettings?.stockSignals !== false; // Par défaut true si pas de config
         
+        // N'envoyer le mail que s'il y a un manque (margin < 0)
+        const hasShortage = marginCalculation.margin < 0;
+        
         if (!shouldSendEmail) {
           console.log('📧 Email désactivé pour les signalements de stock');
+        } else if (!hasShortage) {
+          console.log('📧 Pas d\'envoi d\'email car pas de manque (margin >= 0)');
         } else {
           // Récupérer l'utilisateur current
           const currentUser = user;
@@ -760,10 +840,18 @@ export default function StockSignals() {
           const store = await dbInstance.get('stores', user?.storeId);
           const storeName = store?.name || user?.storeId || '';
           
-          // Récupérer le nom du produit/catégorie
+          // Récupérer le nom du produit/catégorie - utilise les caches
           const productName = selectedExpense.type === 'direct' && selectedExpense.directProduct
             ? getProductName(selectedExpense.directProduct.productId)
-            : (expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Dépense indirecte');
+            : (categoryMap.get(selectedExpense.categoryId || '')?.name || 'Dépense indirecte');
+            
+          // Vérifier si on doit afficher les quantités - utilise le cache
+          const shouldShowQuantities = selectedExpense.type === 'direct' && selectedExpense.directProduct
+            ? (() => {
+                const prod = productMap.get(selectedExpense.directProduct.productId);
+                return (prod && (prod as any).trackQuantity === true) || marginCalculation.quantityBought > 1;
+              })()
+            : false;
             
           // Construire le résumé du signalement de stock
           const statusBadge = marginCalculation.marginPercentage >= 35 ? '✅ Excellente' : 
@@ -814,8 +902,8 @@ export default function StockSignals() {
       <span class="info-value" style="font-weight: 600;">${marginCalculation.periodRevenue.toLocaleString('fr-FR')} F CFA</span>
     </div>
     <div class="info-row">
-      <span class="info-label">Marge brute réelle :&nbsp;</span>
-      <span class="info-value" style="font-weight: 600;">${marginCalculation.realMargin.toLocaleString('fr-FR')} F CFA</span>
+      <span class="info-label">${marginCalculation.margin >= 0 ? 'Surplus' : 'Manque'} :&nbsp;</span>
+      <span class="info-value" style="font-weight: 600; color: ${marginCalculation.margin >= 0 ? '#10b981' : '#ef4444'}">${marginCalculation.margin >= 0 ? '+' : ''}${marginCalculation.margin.toLocaleString('fr-FR')} F CFA</span>
     </div>
   </div>
 
@@ -828,6 +916,7 @@ export default function StockSignals() {
     </div>
   </div>
 
+  ${shouldShowQuantities ? `
   <div class="info-block">
     <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📈 Statistiques de Vente</h3>
     <div class="info-row">
@@ -843,6 +932,7 @@ export default function StockSignals() {
       <span class="info-value">${marginCalculation.quantityBought > 0 ? ((marginCalculation.totalQuantity / marginCalculation.quantityBought) * 100).toFixed(1) : '0'}%</span>
     </div>
   </div>
+  ` : ''}
 
   <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
     <strong>ID du Signalement :&nbsp;</strong>${stockSignal.id}
@@ -901,11 +991,10 @@ export default function StockSignals() {
   };
 
   // Annuler un signalement et remettre le stock dans les stocks actifs
-  const cancelSignal = async (signal: StockSignal) => {
+  const cancelSignal = useCallback(async (signal: StockSignal) => {
     if (!signal) return;
-    const name = signal.productId === 'indirect'
-      ? (expenseCategories.find(cat => cat.id === signal.productId)?.name || 'Dépense indirecte')
-      : getProductName(signal.productId);
+    const cat = categoryMap.get(signal.productId);
+    const name = cat ? cat.name : (signal.productId === 'indirect' ? 'Dépense indirecte' : getProductName(signal.productId));
 
     const ok = window.confirm(`Confirmer l'annulation du signalement pour "${name}" ? Le stock redeviendra actif et devra être signalé à nouveau.`);
     if (!ok) return;
@@ -1005,151 +1094,92 @@ export default function StockSignals() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [categoryMap, getProductName, isOnline, loadData]);
 
-  const getProductStockCount = (productId: string) => {
-    return activeStocks.filter(stock => stock.directProduct?.productId === productId).length;
-  };
+  // Fonction pour filtrer les signaux - optimisée avec useMemo
+  const filteredSignals = useMemo(() => {
+    const now = nowTimestamp;
+    const oneDayAgo = now - DAY_MS;
+    const oneWeekAgo = now - 7 * DAY_MS;
+    const oneMonthAgo = now - 30 * DAY_MS;
+    const searchLower = searchTerm.trim().toLowerCase();
 
-  const getOldestStockForProduct = (productId: string) => {
-    const productStocks = activeStocks.filter(stock => stock.directProduct?.productId === productId);
-    return productStocks.sort((a, b) => a.directProduct!.startDate - b.directProduct!.startDate)[0];
-  };
+    return completedSignals.filter(s => {
+      // Filtre par période
+      if (periodFilter === 'day' && s.createdAt < oneDayAgo) return false;
+      if (periodFilter === 'week' && s.createdAt < oneWeekAgo) return false;
+      if (periodFilter === 'month' && s.createdAt < oneMonthAgo) return false;
 
-  const getProductName = (productId: string) => {
-    const product = products.find(p => p.id === productId);
-    return product ? product.name : 'Produit inconnu';
-  };
+      // Filtre par type (surplus/manque)
+      if (typeFilter === 'surplus' && s.margin < 0) return false;
+      if (typeFilter === 'manque' && s.margin >= 0) return false;
 
-  const getDaysSince = (timestamp: number) => {
-    return Math.ceil((Date.now() - timestamp) / (1000 * 60 * 60 * 24));
-  };
-
-  const getMarginColor = (percentage: number) => {
-    if (percentage < 20) return 'text-red-600';
-    if (percentage < 35) return 'text-yellow-600';
-    return 'text-green-600';
-  };
-
-  const getMarginColorByAmount = (margin: number) => {
-    // Si marge positive = surplus (vert), si négative = manque (rouge)
-    if (margin >= 0) return 'text-green-600';
-    return 'text-red-600';
-  };
-
-  // Format amount as '2 900 FCFA' (blue)
-  const formatAmountBlue = (amount: number) => (
-    <span className="text-blue-600 font-bold">{Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</span>
-  );
-
-  const getMarginBadgeVariant = (percentage: number) => {
-    if (percentage < 20) return 'destructive';
-    if (percentage < 35) return 'secondary';
-    return 'default';
-  };
-
-  const getMarginBadgeVariantByAmount = (margin: number) => {
-    // Si marge positive = surplus (vert/default), si négative = manque (rouge/destructive)
-    if (margin >= 0) return 'default'; // Vert
-    return 'destructive'; // Rouge
-  };
-
-  // Fonction pour filtrer les signaux
-  const getFilteredSignals = () => {
-    let filtered = completedSignals;
-
-    // Filtre par période
-    const now = Date.now();
-    const oneDayAgo = now - 24 * 60 * 60 * 1000;
-    const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
-    const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
-
-    if (periodFilter === 'day') {
-      filtered = filtered.filter(s => s.createdAt >= oneDayAgo);
-    } else if (periodFilter === 'week') {
-      filtered = filtered.filter(s => s.createdAt >= oneWeekAgo);
-    } else if (periodFilter === 'month') {
-      filtered = filtered.filter(s => s.createdAt >= oneMonthAgo);
-    }
-
-    // Filtre par type (surplus/manque)
-    if (typeFilter === 'surplus') {
-      filtered = filtered.filter(s => s.margin >= 0);
-    } else if (typeFilter === 'manque') {
-      filtered = filtered.filter(s => s.margin < 0);
-    }
-
-    // Filtre par recherche (nom de produit, date et heure)
-    if (searchTerm.trim()) {
-      filtered = filtered.filter(s => {
-        const productName = s.productId === 'indirect' || expenseCategories.find(cat => cat.id === s.productId)
-          ? expenseCategories.find(cat => cat.id === s.productId)?.name || 'Dépense Indirecte'
-          : getProductName(s.productId);
+      // Filtre par recherche (nom de produit, date et heure)
+      if (searchLower) {
+        const cat = categoryMap.get(s.productId);
+        const productName = cat ? cat.name : (productNameMap.get(s.productId) || 'Dépense Indirecte');
         
-        // Recherche dans le nom du produit
-        const matchesProductName = productName.toLowerCase().includes(searchTerm.toLowerCase());
+        if (productName.toLowerCase().includes(searchLower)) return true;
         
-        // Recherche dans les dates (format français DD/MM/YYYY et heure HH:MM:SS)
-        const startDateStr = new Date(s.startDate || s.createdAt).toLocaleDateString('fr-FR');
-        const endDateStr = new Date(s.endDate || s.createdAt).toLocaleDateString('fr-FR');
-        const startTimeStr = new Date(s.startDate || s.createdAt).toLocaleTimeString('fr-FR');
-        const endTimeStr = new Date(s.endDate || s.createdAt).toLocaleTimeString('fr-FR');
+        // Recherche dans les dates
+        const startDate = new Date(s.startDate || s.createdAt);
+        const endDate = new Date(s.endDate || s.createdAt);
+        const dateStrings = [
+          startDate.toLocaleDateString('fr-FR'),
+          endDate.toLocaleDateString('fr-FR'),
+          startDate.toLocaleTimeString('fr-FR'),
+          endDate.toLocaleTimeString('fr-FR')
+        ].join(' ');
         
-        const matchesDate = startDateStr.includes(searchTerm) || 
-                           endDateStr.includes(searchTerm) ||
-                           startTimeStr.includes(searchTerm) ||
-                           endTimeStr.includes(searchTerm);
-        
-        return matchesProductName || matchesDate;
-      });
-    }
+        return dateStrings.includes(searchTerm);
+      }
 
-    return filtered;
-  };
+      return true;
+    });
+  }, [completedSignals, periodFilter, typeFilter, searchTerm, nowTimestamp, categoryMap, productNameMap]);
 
-  // Simple full-text search for active stocks (produit/catégorie/prix/date)
-  const getFilteredActiveStocks = () => {
+  // Simple full-text search for active stocks - optimisé avec useMemo
+  const filteredActiveStocks = useMemo(() => {
     const q = activeSearch.trim().toLowerCase();
     if (!q) return activeStocks;
 
     return activeStocks.filter(exp => {
-      // product name
+      // product name - utilise le cache
       if (exp.type === 'direct' && exp.directProduct) {
-        const prod = products.find(p => p.id === exp.directProduct!.productId);
-        const prodName = prod ? String(prod.name).toLowerCase() : '';
+        const prodName = productNameMap.get(exp.directProduct.productId)?.toLowerCase() || '';
         if (prodName.includes(q)) return true;
       }
-      // category name
+      // category name - utilise le cache
       if (exp.type === 'indirect' && exp.categoryId) {
-        const cat = expenseCategories.find(c => c.id === exp.categoryId);
-        const catName = cat ? String(cat.name).toLowerCase() : '';
+        const catName = categoryMap.get(exp.categoryId)?.name?.toLowerCase() || '';
         if (catName.includes(q)) return true;
       }
-      // amount
-      if (String(exp.amount).toLowerCase().includes(q)) return true;
-      try {
-        if (Number(exp.amount).toLocaleString().toLowerCase().includes(q)) return true;
-      } catch (e) {}
+      // amount - pré-calculer les deux formats
+      const amountStr = String(exp.amount);
+      const amountFormatted = Number(exp.amount).toLocaleString();
+      if (amountStr.includes(q) || amountFormatted.toLowerCase().includes(q)) return true;
+      
       // start date/time
       const start = exp.type === 'direct' && exp.directProduct ? exp.directProduct.startDate : exp.date;
-      const dateStr = new Date(start).toLocaleDateString('fr-FR') + ' ' + new Date(start).toLocaleTimeString('fr-FR');
+      const startDate = new Date(start);
+      const dateStr = startDate.toLocaleDateString('fr-FR') + ' ' + startDate.toLocaleTimeString('fr-FR');
       if (dateStr.toLowerCase().includes(q)) return true;
 
       return false;
     });
-  };
+  }, [activeStocks, activeSearch, productNameMap, categoryMap]);
 
   // Expense creation removed from this page. Use the Expenses page to add new expenses.
 
-  // compute filtered items once to simplify JSX rendering
-  // Trie pour afficher les stocks anciens en haut
-  // Trie par date de début croissante (plus ancien en haut)
-  const activeItems = getFilteredActiveStocks()
-    .filter(exp => expenseTypeFilter === 'all' ? true : expenseTypeFilter === 'direct' ? exp.type === 'direct' : exp.type === 'indirect')
-    .slice().sort((a, b) => {
-    const getStartDate = (exp: any) => exp.type === 'direct' && exp.directProduct ? exp.directProduct.startDate : exp.date;
-    return getStartDate(a) - getStartDate(b);
-  });
+  // compute filtered items once to simplify JSX rendering - optimisé avec useMemo
+  const activeItems = useMemo(() => {
+    const getStartDate = (exp: ExpenseAdvanced) => 
+      exp.type === 'direct' && exp.directProduct ? exp.directProduct.startDate : exp.date;
+    
+    return filteredActiveStocks
+      .filter(exp => expenseTypeFilter === 'all' || exp.type === expenseTypeFilter)
+      .sort((a, b) => getStartDate(a) - getStartDate(b));
+  }, [filteredActiveStocks, expenseTypeFilter]);
 
   return (
     <div className="p-6 space-y-6">
@@ -1277,12 +1307,9 @@ export default function StockSignals() {
                     }
 
                     if (expense.type === 'indirect' && expense.categoryId) {
-                      categoryStockCount = activeStocks.filter(stock => stock.type === 'indirect' && stock.categoryId === expense.categoryId).length;
-                      // Trouver la plus ancienne dépense indirecte de cette catégorie
-                      const oldest = activeStocks
-                        .filter(stock => stock.type === 'indirect' && stock.categoryId === expense.categoryId)
-                        .sort((a, b) => (a.date || 0) - (b.date || 0))[0];
-                      isOldestForCategory = oldest?.id === expense.id;
+                      const categoryStocks = stocksByCategory.get(expense.categoryId) || [];
+                      categoryStockCount = categoryStocks.length;
+                      isOldestForCategory = categoryStocks[0]?.id === expense.id;
                       hasMultipleCategoryStocks = categoryStockCount > 1;
                     }
 
@@ -1336,7 +1363,7 @@ export default function StockSignals() {
                                     {expense.type === 'direct' && expense.directProduct
                                       ? getProductName(expense.directProduct.productId)
                                       : expense.type === 'indirect' && expense.categoryId
-                                      ? expenseCategories.find(cat => cat.id === expense.categoryId)?.name || 'Catégorie inconnue'
+                                      ? categoryMap.get(expense.categoryId)?.name || 'Catégorie inconnue'
                                       : 'N/A'
                                     }
                                   </p>
@@ -1355,7 +1382,7 @@ export default function StockSignals() {
                                     {expense.type === 'direct' && expense.directProduct
                                       ? expense.directProduct.quantity
                                       : expense.type === 'indirect' && expense.categoryId
-                                      ? (expenseCategories.find(cat => cat.id === expense.categoryId)?.productIds?.length || 0) + ' produits'
+                                      ? (categoryMap.get(expense.categoryId)?.productIds?.length || 0) + ' produits'
                                       : 'N/A'
                                     }
                                   </p>
@@ -1490,7 +1517,7 @@ export default function StockSignals() {
                 </Card>
               ))}
             </div>
-          ) : getFilteredSignals().length === 0 ? (
+          ) : filteredSignals.length === 0 ? (
             <Card>
               <CardContent className="text-center py-12">
                 <CheckCircle className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
@@ -1502,17 +1529,17 @@ export default function StockSignals() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {getFilteredSignals().map(signal => (
+              {filteredSignals.map(signal => {
+                const cat = categoryMap.get(signal.productId);
+                const displayName = cat ? cat.name : (signal.productId === 'indirect' ? 'Dépense Indirecte' : getProductName(signal.productId));
+                return (
                 <Card key={signal.id}>
                   <CardContent className="p-4">
                     <div className="flex justify-between items-start">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <h3 className="font-semibold">
-                            {signal.productId === 'indirect' || expenseCategories.find(cat => cat.id === signal.productId)
-                              ? expenseCategories.find(cat => cat.id === signal.productId)?.name || 'Dépense Indirecte'
-                              : getProductName(signal.productId)
-                            }
+                            {displayName}
                           </h3>
                           <Badge variant={getMarginBadgeVariantByAmount(signal.margin)}>
                             {signal.margin >= 0 ? 'Surplus' : 'Manque'}: {signal.margin >= 0 ? '+' : ''}{Number(signal.margin).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA
@@ -1520,8 +1547,8 @@ export default function StockSignals() {
                         </div>
                         
                         <div className={`grid gap-4 text-sm ${(() => {
-                          // Vérifier si le produit a un suivi de stock
-                          const prod = products.find(p => p.id === signal.productId);
+                          // Vérifier si le produit a un suivi de stock - utilise le cache
+                          const prod = productMap.get(signal.productId);
                           const showQuantity = (prod && Object.keys(prod.stock || {}).length > 0) || signal.quantityBought > 1;
                           // 4 colonnes de base + 1 si quantité
                           return showQuantity ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4';
@@ -1545,8 +1572,8 @@ export default function StockSignals() {
                             </p>
                           </div>
                           {(() => {
-                            // Afficher la quantité seulement si le produit a un suivi de stock
-                            const prod = products.find(p => p.id === signal.productId);
+                            // Afficher la quantité seulement si le produit a un suivi de stock - utilise le cache
+                            const prod = productMap.get(signal.productId);
                             const showQuantity = (prod && Object.keys(prod.stock || {}).length > 0) || signal.quantityBought > 1;
                             return showQuantity ? (
                               <div>
@@ -1587,7 +1614,8 @@ export default function StockSignals() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+              );
+              })}
             </div>
           )}
         </TabsContent>
@@ -1659,7 +1687,7 @@ export default function StockSignals() {
                       {selectedExpense.type === 'direct' && selectedExpense.directProduct
                         ? getProductName(selectedExpense.directProduct.productId)
                         : selectedExpense.type === 'indirect' && selectedExpense.categoryId
-                        ? expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Catégorie inconnue'
+                        ? categoryMap.get(selectedExpense.categoryId)?.name || 'Catégorie inconnue'
                         : 'Dépense'
                       }
                     </h3>
@@ -1721,9 +1749,9 @@ export default function StockSignals() {
                   {/* Quantités (admin-only) */}
                   {selectedExpense.type === 'direct' && (() => {
                     let showQuantity = false;
-                    let prod = null;
+                    let prod: Product | undefined;
                     if (selectedExpense.directProduct) {
-                      prod = products.find(p => p.id === selectedExpense.directProduct.productId);
+                      prod = productMap.get(selectedExpense.directProduct.productId);
                       showQuantity = (prod && (prod as any).trackQuantity === true) || marginCalculation.quantityBought > 1;
                     }
                     return showQuantity ? (
@@ -1762,7 +1790,7 @@ export default function StockSignals() {
                     {selectedExpense.type === 'direct' && selectedExpense.directProduct
                       ? getProductName(selectedExpense.directProduct.productId)
                       : selectedExpense.type === 'indirect' && selectedExpense.categoryId
-                      ? expenseCategories.find(cat => cat.id === selectedExpense.categoryId)?.name || 'Catégorie'
+                      ? categoryMap.get(selectedExpense.categoryId)?.name || 'Catégorie'
                       : 'Dépense'
                     }
                   </h3>

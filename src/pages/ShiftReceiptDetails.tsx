@@ -26,7 +26,6 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
   const [cashierName, setCashierName] = useState<string>('-');
   const [computedExpected, setComputedExpected] = useState<number | null>(null);
   const [computedDifference, setComputedDifference] = useState<number | null>(null);
-  const [computedSalesTotal, setComputedSalesTotal] = useState<number | null>(null);
 
   const formatMoney = (v: number | null | undefined) => {
     if (v === null || v === undefined || isNaN(Number(v))) return '-';
@@ -62,15 +61,15 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
         
         // Priorité aux montants saisis lors de la fermeture du shift
         if (selectedShift.cashAmount !== undefined || selectedShift.mobileMoneyAmount !== undefined) {
-          cash = toNum(selectedShift.cashAmount || 0);
+          // Pour les espèces, soustraire le montant d'ouverture car il est inclus dans cashAmount
+          const rawCash = toNum(selectedShift.cashAmount || 0);
+          const openingAmount = toNum(selectedShift.openingAmount || 0);
+          cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
           mobile_money = toNum(selectedShift.mobileMoneyAmount || 0);
         } else {
           // Fallback: calculer à partir des ventes (ancien comportement)
           for (const sale of sales) {
-            // Vérifier si la vente est remboursée
             const isRefunded = Boolean(sale.refunded);
-            if (isRefunded) continue; // Ignorer les ventes remboursées
-            
             let saleCash = 0, saleMobile = 0;
             
             // Priorité aux champs directs cashAmount et mobileMoneyAmount
@@ -89,24 +88,25 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
               if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
             }
             
-            cash += saleCash;
-            mobile_money += saleMobile;
+            // Ajouter aux ventes ou déduire des remboursements
+            if (isRefunded) {
+              cash -= saleCash;  // Déduire les remboursements
+              mobile_money -= saleMobile;
+            } else {
+              cash += saleCash;  // Ajouter les ventes
+              mobile_money += saleMobile;
+            }
           }
         }
 
         // Calculer les remboursements séparément pour affichage
         let refundsCash = 0, refundsMobile = 0;
-        let salesTotal = 0;
         
         for (const sale of sales) {
           // Vérifier si la vente est remboursée
           const isRefunded = Boolean(sale.refunded);
           
-          // sum totals for expected calculation (ignorer les ventes remboursées)
-          if (!isRefunded) {
-            const saleTotal = (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
-            salesTotal += saleTotal;
-          } else {
+          if (isRefunded) {
             // Pour les remboursements, calculer les montants par mode de paiement
             let saleCash = 0, saleMobile = 0;
             
@@ -128,19 +128,28 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
           }
         }
 
-        // compute expected: opening + salesTotal (sans les dépenses)
+        // compute expected: opening + encaissé net basé sur les ventes réelles (cohérent avec Shifts.tsx)
         const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
-        const expected = opening + salesTotal; // Pas de déduction des dépenses
+        
+        // Calculer le montant attendu basé sur les ventes réelles (sans remboursements)
+        let encaisseNetVentes = 0;
+        for (const sale of sales) {
+          const isRefunded = Boolean(sale.refunded);
+          if (isRefunded) {
+            encaisseNetVentes -= toNum(sale.total ?? 0); // Déduire les remboursements
+          } else {
+            encaisseNetVentes += toNum(sale.total ?? 0); // Ajouter les ventes
+          }
+        }
+        
+        const expected = opening + encaisseNetVentes;
 
-        // compute totalPaid from payments
-        const totalPaid = cash + mobile_money;
-
-        // compute difference: if closed use closingAmount - expected, else use totalPaid - expected
+        // compute difference: if closed use closingAmount - expected, else use encaisseNetVentes - expected
         let difference: number | null = null;
         if (selectedShift.closingAmount !== null && selectedShift.closingAmount !== undefined) {
           difference = Number(selectedShift.closingAmount) - expected;
         } else {
-          difference = totalPaid - expected;
+          difference = encaisseNetVentes - expected;
         }
 
         if (isMounted) {
@@ -148,14 +157,12 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
           setRefundsSummary({ cash: refundsCash, mobile_money: refundsMobile });
           setComputedExpected(Number.isFinite(expected) ? expected : null);
           setComputedDifference(Number.isFinite(difference) ? difference : null);
-          setComputedSalesTotal(Number.isFinite(salesTotal) ? salesTotal : null);
         }
       } catch (e) {
         setPaymentSummary(null);
         setRefundsSummary(null);
         setComputedExpected(null);
         setComputedDifference(null);
-        setComputedSalesTotal(null);
       }
     }
     fetchPayments();
@@ -270,14 +277,15 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
             
             // Utiliser les montants saisis lors de la fermeture du shift
             if (selectedShift.cashAmount !== undefined || selectedShift.mobileMoneyAmount !== undefined) {
-              cash = toNum(selectedShift.cashAmount || 0);
+              // Pour les espèces, soustraire le montant d'ouverture car il est inclus dans cashAmount
+              const rawCash = toNum(selectedShift.cashAmount || 0);
+              const openingAmount = toNum(selectedShift.openingAmount || 0);
+              cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
               mobile_money = toNum(selectedShift.mobileMoneyAmount || 0);
             } else {
               // Fallback: calculer à partir des ventes (ancien comportement)
               for (const sale of sales) {
                 const isRefunded = Boolean(sale.refunded);
-                if (isRefunded) continue;
-                
                 let saleCash = 0, saleMobile = 0;
                 
                 if (sale.cashAmount !== undefined || sale.mobileMoneyAmount !== undefined) {
@@ -293,21 +301,22 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
                   if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
                 }
                 
-                cash += saleCash;
-                mobile_money += saleMobile;
+                // Ajouter aux ventes ou déduire des remboursements
+                if (isRefunded) {
+                  cash -= saleCash;  // Déduire les remboursements
+                  mobile_money -= saleMobile;
+                } else {
+                  cash += saleCash;  // Ajouter les ventes
+                  mobile_money += saleMobile;
+                }
               }
             }
 
-            // Calculer les remboursements et le total des ventes
-            let refundsCash = 0, refundsMobile = 0;
-            
+            // Calculer les remboursements pour l'affichage
             for (const sale of sales) {
               const isRefunded = Boolean(sale.refunded);
               
-              if (!isRefunded) {
-                const saleTotal = (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
-                salesTotal += saleTotal;
-              } else {
+              if (isRefunded) {
                 // Pour les remboursements
                 let saleCash = 0, saleMobile = 0;
                 
@@ -328,13 +337,23 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
                 refundsMobile += saleMobile;
               }
             }
+            
+            // Calculer le montant attendu basé sur les ventes réelles (cohérent avec Shifts.tsx)
             const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
-            expected = opening + salesTotal; // Pas de déduction des dépenses
-            const totalPaid = cash + mobile_money;
+            let encaisseNetVentesPrint = 0;
+            for (const sale of sales) {
+              const isRefunded = Boolean(sale.refunded);
+              if (isRefunded) {
+                encaisseNetVentesPrint -= toNum(sale.total ?? 0); // Déduire les remboursements
+              } else {
+                encaisseNetVentesPrint += toNum(sale.total ?? 0); // Ajouter les ventes
+              }
+            }
+            expected = opening + encaisseNetVentesPrint; // Utiliser les ventes réelles
             if (selectedShift.closingAmount !== null && selectedShift.closingAmount !== undefined) {
               difference = Number(selectedShift.closingAmount) - expected;
             } else {
-              difference = totalPaid - expected;
+              difference = encaisseNetVentesPrint - expected;
             }
           }
           const printContent = document.getElementById('shift-receipt-print');
@@ -410,8 +429,8 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
             const mmAmt = formatMoney(mobile_money);
             lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Espèces'), sanitizeForPrinter(cashAmt + ' FCFA'), width));
             lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Mobile Money'), sanitizeForPrinter(mmAmt + ' FCFA'), width));
-            const totalPaid = formatMoney(cash + mobile_money);
-            const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(totalPaid + ' FCFA'), width);
+            const encaisseNetTotal = formatMoney(cash + mobile_money);
+            const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(encaisseNetTotal + ' FCFA'), width);
             lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
 
             const printed = await NativePrinter.printText(lines);

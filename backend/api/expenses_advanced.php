@@ -21,9 +21,13 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
-        $stmt = $pdo->query('SELECT * FROM expenses_advanced');
+        $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
+        $limit = isset($_GET['limit']) ? intval($_GET['limit']) : 25;
+        $sql = 'SELECT * FROM expenses_advanced ORDER BY createdAt DESC LIMIT ? OFFSET ?';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$limit, $offset]);
         $expenses = $stmt->fetchAll();
-        
+
         // Reconstruire la structure directProduct pour chaque expense
         foreach ($expenses as &$expense) {
             if ($expense['type'] === 'direct' && ($expense['directProduct_productId'] || $expense['directProduct_quantity'] || $expense['directProduct_startDate'])) {
@@ -40,8 +44,17 @@ switch ($method) {
             unset($expense['directProduct_startDate']);
             unset($expense['directProduct_endDate']);
         }
-        
-        echo json_encode($expenses);
+
+        // Compter le total pour la pagination
+        $countStmt = $pdo->query('SELECT COUNT(*) as total FROM expenses_advanced');
+        $total = $countStmt->fetchColumn();
+
+        echo json_encode([
+            'data' => $expenses,
+            'total' => intval($total),
+            'offset' => $offset,
+            'limit' => $limit
+        ]);
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);

@@ -74,7 +74,7 @@ interface POSDB extends DBSchema {
       phone: string; // Téléphone unique pour la connexion
       email?: string; // Email optionnel
       password: string;
-      role: 'super_admin' | 'admin' | 'cashier';
+      role: 'super_admin' | 'admin' | 'cashier' | 'manager';
       storeId: string;
       storeIds?: string[]; // support multi-magasin (mapping user_stores)
       active?: boolean;

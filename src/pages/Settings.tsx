@@ -400,6 +400,13 @@ export default function Settings() {
     const s = localStorage.getItem('auto_print');
     return s === null ? true : s === 'true';
   });
+  // PIN settings
+  const [pinEnabled, setPinEnabled] = useState<boolean>(false);
+  const [currentPin, setCurrentPin] = useState<string>('');
+  const [newPin, setNewPin] = useState<string>('');
+  const [confirmPin, setConfirmPin] = useState<string>('');
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [loadingPin, setLoadingPin] = useState(false);
   const [paperSize, setPaperSize] = useState<string>(() => {
     const p = localStorage.getItem('printer_paper');
     return p || '80';
@@ -898,8 +905,152 @@ export default function Settings() {
     }
   };
 
+  // Load PIN settings
+  const loadPinSettings = async () => {
+    try {
+      const db = await getDB();
+      const userRecord = await db.get('users', user?.id) as any;
+      if (userRecord) {
+        setPinEnabled(userRecord.pinEnabled || false);
+      }
+    } catch (e) {
+      console.warn('Error loading PIN settings:', e);
+    }
+  };
+
+  // Toggle PIN enabled/disabled
+  const handleTogglePin = async (enabled: boolean) => {
+    if (enabled) {
+      // Opening dialog to set new PIN
+      setPinDialogOpen(true);
+    } else {
+      // Disable PIN
+      try {
+        setLoadingPin(true);
+        const db = await getDB();
+        const userRecord = await db.get('users', user?.id) as any;
+        if (userRecord) {
+          const updated = { ...userRecord, pinEnabled: false };
+          await db.put('users', updated);
+          
+          console.log('🔓 [Settings] PIN disabled for user:', user?.username);
+          
+          // Update the stored user in secure storage to reflect PIN disabled
+          try {
+            const storedUser = localStorage.getItem('pos-user');
+            if (storedUser) {
+              const parsed = JSON.parse(storedUser);
+              const updatedUser = { ...parsed, pinEnabled: false };
+              localStorage.setItem('pos-user', JSON.stringify(updatedUser));
+              try {
+                await secureStorage.setItem('pos-user', JSON.stringify(updatedUser));
+              } catch (e) {
+                // ignore secure storage errors
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to update stored user:', e);
+          }
+          
+          // Sync with backend
+          try {
+            await performSyncOp({
+              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+              method: 'PUT',
+              data: updated
+            });
+          } catch (e) {
+            console.warn('Failed to sync PIN disable:', e);
+          }
+          
+          setPinEnabled(false);
+          toast.success('Code PIN désactivé - Rechargez la page pour appliquer');
+          
+          // Recharger la page après un court délai pour forcer la réinitialisation
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        }
+      } catch (e) {
+        console.error('Error disabling PIN:', e);
+        toast.error('Erreur lors de la désactivation du PIN');
+      } finally {
+        setLoadingPin(false);
+      }
+    }
+  };
+
+  // Save new PIN
+  const handleSavePin = async () => {
+    // Validate inputs
+    if (!newPin || newPin.length < 4) {
+      toast.error('Le PIN doit contenir au moins 4 chiffres');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      toast.error('Les codes PIN ne correspondent pas');
+      return;
+    }
+
+    try {
+      setLoadingPin(true);
+      const db = await getDB();
+      const userRecord = await db.get('users', user?.id) as any;
+      
+      if (!userRecord) {
+        toast.error('Utilisateur introuvable');
+        return;
+      }
+
+      const updated = {
+        ...userRecord,
+        pin: newPin,
+        pinEnabled: true
+      };
+
+      await db.put('users', updated);
+
+      // Sync with backend
+      try {
+        await performSyncOp({
+          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+          method: 'PUT',
+          data: updated
+        });
+      } catch (e) {
+        console.warn('Failed to sync PIN to backend:', e);
+      }
+
+      console.log('🔒 [Settings] PIN enabled for user:', user?.username);
+      
+      setPinEnabled(true);
+      setPinDialogOpen(false);
+      setNewPin('');
+      setConfirmPin('');
+      setCurrentPin('');
+      toast.success('Code PIN activé avec succès - Rechargez pour activer');
+      
+      // Recharger après un court délai
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (e) {
+      console.error('Error saving PIN:', e);
+      toast.error('Erreur lors de l\'enregistrement du PIN');
+    } finally {
+      setLoadingPin(false);
+    }
+  };
+
+  // Load PIN settings on mount
+  useEffect(() => {
+    if (user) {
+      loadPinSettings();
+    }
+  }, [user]);
+
   if (!user) return null;
-  if (user.role !== 'admin' && user.role !== 'super_admin' && user.role !== 'cashier') {
+  if (user.role !== 'admin' && user.role !== 'super_admin' && user.role !== 'cashier' && user.role !== 'manager') {
     return (
       <div className="p-8">
         <Card>
@@ -907,7 +1058,7 @@ export default function Settings() {
             <CardTitle>Paramètres</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-destructive">Accès réservé aux administrateurs et caissiers.</p>
+            <p className="text-destructive">Accès réservé aux administrateurs, gestionnaires et caissiers.</p>
           </CardContent>
         </Card>
       </div>
@@ -1578,16 +1729,100 @@ export default function Settings() {
                       disabled={loadingEmailSettings}
                     />
                   </div>
-                  
-                  {loadingEmailSettings && (
-                    <div className="text-center py-2">
-                      <p className="text-xs text-muted-foreground">Sauvegarde en cours...</p>
-                    </div>
-                  )}
                 </div>
               </CardContent>
             </Card>
           )}
+
+          {/* PIN Security Configuration card */}
+          <Card className="shadow-sm">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-50 rounded-md">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-sm">Sécurité par code PIN</CardTitle>
+                  <p className="text-xs text-muted-foreground">Protégez votre compte avec un code PIN à 4 chiffres.</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Code PIN</p>
+                    <p className="text-xs text-muted-foreground">
+                      {pinEnabled ? 'Activé - L\'application demandera votre PIN' : 'Désactivé - Pas de vérification PIN'}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={pinEnabled}
+                    onCheckedChange={handleTogglePin}
+                    disabled={loadingPin}
+                  />
+                </div>
+
+                {/* Dialog for setting new PIN */}
+                <Dialog open={pinDialogOpen} onOpenChange={setPinDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Configurer le code PIN</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <Label>Nouveau code PIN (4 chiffres minimum)</Label>
+                        <Input
+                          type="password"
+                          inputMode="numeric"
+                          value={newPin}
+                          onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                          placeholder="••••"
+                          disabled={loadingPin}
+                        />
+                      </div>
+                      <div>
+                        <Label>Confirmer le code PIN</Label>
+                        <Input
+                          type="password"
+                          inputMode="numeric"
+                          value={confirmPin}
+                          onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                          placeholder="••••"
+                          disabled={loadingPin}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          className="w-1/2"
+                          onClick={() => {
+                            setPinDialogOpen(false);
+                            setNewPin('');
+                            setConfirmPin('');
+                            setCurrentPin('');
+                          }}
+                          disabled={loadingPin}
+                        >
+                          Annuler
+                        </Button>
+                        <Button
+                          className="w-1/2"
+                          onClick={handleSavePin}
+                          disabled={loadingPin}
+                        >
+                          {loadingPin ? 'Enregistrement...' : 'Enregistrer'}
+                        </Button>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Updates and Version Management card */}
           <Card className="shadow-sm">

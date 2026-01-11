@@ -17,6 +17,6 @@ export default function RoleRedirect() {
   if (isLocked) return null;
 
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role === "cashier") return <Navigate to="/pos" replace />;
+  if (user.role === "cashier" || user.role === "manager") return <Navigate to="/pos" replace />;
   return <Navigate to="/dashboard" replace />;
 }

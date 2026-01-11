@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { UserCircle, Edit, Trash2, Plus, Shield, User } from 'lucide-react';
+import { UserCircle, Edit, Trash2, Plus, Shield, User, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +18,7 @@ interface UserData {
   phone: string;
   email?: string;
   password: string;
-  role: 'super_admin' | 'admin' | 'cashier';
+  role: 'super_admin' | 'admin' | 'cashier' | 'manager';
   storeId: string;
   storeIds?: string[];
   createdAt: number;
@@ -37,12 +37,14 @@ export default function Users() {
   const [isLoading, setIsLoading] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPin, setShowPin] = useState(false);
   const [formData, setFormData] = useState({
     username: '',
     phone: '',
     email: '',
     password: '',
-    role: 'cashier' as 'admin' | 'cashier',
+    role: 'cashier' as 'admin' | 'cashier' | 'manager',
     storeId: '',
     pin: '',
   });
@@ -140,7 +142,12 @@ export default function Users() {
     let finalStoreId = formData.storeId;
     if (user?.role === 'admin') {
       if (!editingUser || editingUser.id !== user.id) {
-        finalRole = 'cashier';
+        // L'admin peut créer des caissiers et des gestionnaires, mais pas d'autres admins
+        if (formData.role === 'admin') {
+          finalRole = 'cashier';
+        } else {
+          finalRole = formData.role; // Permet 'cashier' et 'manager'
+        }
         finalStoreId = user.storeId;
       }
     }
@@ -231,7 +238,9 @@ export default function Users() {
       }
       setShowDialog(false);
       setEditingUser(null);
-      setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier', storeId: '', pin: '' });
+      setShowPassword(false);
+      setShowPin(false);
+      setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeId: '', pin: '' });
       loadUsers();
     } catch (error) {
       console.error('User save error:', error);
@@ -249,8 +258,8 @@ export default function Users() {
       username: editUser.username,
       phone: phone8,
       email: editUser.email || '',
-      password: '',
-      role: editUser.role === 'super_admin' ? 'admin' : editUser.role,
+      password: editUser.password || '',
+      role: editUser.role === 'super_admin' ? 'admin' : editUser.role as 'admin' | 'cashier' | 'manager',
       storeId: editUser.storeId,
       pin: editUser.pin || '',
     });
@@ -282,7 +291,9 @@ export default function Users() {
 
   const openNewDialog = () => {
     setEditingUser(null);
-    setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier', storeId: stores[0]?.id || '', pin: '' });
+    setShowPassword(false);
+    setShowPin(false);
+    setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeId: stores[0]?.id || '', pin: '' });
     setShowDialog(true);
   };
 
@@ -357,32 +368,68 @@ export default function Users() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Mot de passe *</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="••••••••"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="••••••••"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                    onClick={() => setShowPassword(!showPassword)}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4 text-gray-400" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-gray-400" />
+                    )}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="pin">PIN (4-8 chiffres)</Label>
-                <Input
-                  id="pin"
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={8}
-                  value={formData.pin}
-                  onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0,8) })}
-                  placeholder={editingUser ? 'Laisser vide pour conserver le PIN actuel' : 'Ex: 1234'}
-                />
+                <div className="relative">
+                  <Input
+                    id="pin"
+                    type={showPin ? "text" : "password"}
+                    inputMode="numeric"
+                    maxLength={8}
+                    value={formData.pin}
+                    onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0,8) })}
+                    placeholder={editingUser ? 'Laisser vide pour conserver le PIN actuel' : 'Ex: 1234'}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                    onClick={() => setShowPin(!showPin)}
+                  >
+                    {showPin ? (
+                      <EyeOff className="h-4 w-4 text-gray-400" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-gray-400" />
+                    )}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="role">Rôle *</Label>
                 {(user?.role === 'admin' && editingUser && editingUser.id === user.id) ? (
                   <Input id="role" value="Administrateur" disabled />
                 ) : user?.role === 'admin' ? (
-                  <Input id="role" value="Caissier" disabled />
+                  <Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cashier">Caissier</SelectItem>
+                      <SelectItem value="manager">Gestionnaire</SelectItem>
+                    </SelectContent>
+                  </Select>
                 ) : (
                   <Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
                     <SelectTrigger>
@@ -390,6 +437,7 @@ export default function Users() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="cashier">Caissier</SelectItem>
+                      <SelectItem value="manager">Gestionnaire</SelectItem>
                       <SelectItem value="admin">Administrateur</SelectItem>
                     </SelectContent>
                   </Select>
@@ -465,8 +513,8 @@ export default function Users() {
                     )}
                     {user.username}
                   </div>
-                  <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                    {user.role === 'admin' ? 'Admin' : 'Caissier'}
+                  <Badge variant={user.role === 'admin' ? 'default' : user.role === 'manager' ? 'outline' : 'secondary'}>
+                    {user.role === 'admin' ? 'Admin' : user.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
                   </Badge>
                 </CardTitle>
               </CardHeader>

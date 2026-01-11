@@ -60,7 +60,7 @@ export default function Receipts() {
   const [shiftsChecked, setShiftsChecked] = useState(false);
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { isOnline, manualSync } = useNetwork();
+  const { isOnline, isBackendReachable, manualSync } = useNetwork();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
@@ -77,6 +77,7 @@ export default function Receipts() {
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [showRefundDialog, setShowRefundDialog] = useState(false);
   const [saleToRefund, setSaleToRefund] = useState<Sale | null>(null);
+  const [refundComment, setRefundComment] = useState('');
 
   useEffect(() => {
     // Check if the user has an active (open) shift, but load data regardless
@@ -99,7 +100,7 @@ export default function Receipts() {
       // Load data regardless of shift status to show existing receipts
       try {
         if (!cancelled) {
-          await loadData();
+          await loadData(0, pageSize, true);
         }
       } catch (e) {
         console.error('Erreur lors du chargement initial:', e);
@@ -122,30 +123,45 @@ export default function Receipts() {
     }
   };
 
-  const loadData = async () => {
+  const loadData = async (offset = 0, limit = pageSize, reset = true) => {
     setLoading(true);
     try {
       const db = await getDB();
-      
       // Si en ligne, charger depuis le backend et synchroniser
       if (isOnline) {
         try {
-          // Charger les ventes depuis le backend
+          // Pagination côté backend
           let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php';
-          if (user?.storeId) url += `?storeId=${user.storeId}`;
+          const params = new URLSearchParams();
+          if (user?.storeId) params.append('storeId', user.storeId);
+          params.append('offset', String(offset));
+          params.append('limit', String(limit));
+          url += `?${params.toString()}`;
           const response = await fetch(url);
           if (response.ok) {
-            const backendSales = await response.json();
+            const backendResult = await response.json();
+            // backendResult: { data: Sale[], total, offset, limit }
+            const backendSales = backendResult.data || [];
             // Mettre à jour la base locale
             const tx = db.transaction('sales', 'readwrite');
             await Promise.all([
               ...backendSales.map(s => tx.store.put(s)),
               tx.done
             ]);
-            // After syncing backend results into the DB, reset pagination and load first page from local
-            setLoadedCount(0);
-            setHasMore(true);
-            await loadSalesPage(db, 0, pageSize, true);
+            // Charger la page demandée depuis le backend (et non tout)
+            if (reset) {
+              setSales(backendSales);
+              setLoadedCount(backendSales.length);
+            } else {
+              setSales(prev => [...prev, ...backendSales]);
+              setLoadedCount(prev => prev + backendSales.length);
+            }
+            // Il y a plus de données si on a reçu exactement le nombre demandé
+            const stillHasMore = backendSales.length === limit;
+            setHasMore(stillHasMore);
+            console.log('Backend loaded:', { received: backendSales.length, limit, hasMore: stillHasMore });
+            await processSales(reset ? backendSales : [...sales, ...backendSales], db);
+            return;
           }
         } catch (error) {
           console.error('Erreur de synchronisation avec le backend:', error);
@@ -154,11 +170,10 @@ export default function Receipts() {
         }
       } else {
         // Hors ligne : charger depuis la base locale (paged)
-        await loadSalesPage(db, 0, pageSize, true);
+        await loadSalesPage(db, offset, limit, reset);
       }
-
-  // Compter les éléments en attente de synchronisation
-  await updatePendingSyncCount();
+      // Compter les éléments en attente de synchronisation
+      await updatePendingSyncCount();
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
       console.error('Erreur:', error);
@@ -218,6 +233,7 @@ export default function Receipts() {
       }
 
       setHasMore(results.length === limit);
+      console.log('Local loaded:', { received: results.length, limit, hasMore: results.length === limit });
       // Process the newly loaded page (this will set filteredSales and other derived data)
       await processSales(reset ? results : [...sales, ...results], db);
       return results;
@@ -248,13 +264,22 @@ export default function Receipts() {
 
   const handleScroll = async () => {
     const el = scrollRef.current;
-    if (!el || loadingMore || !hasMore) return;
-    const threshold = 200; // px from bottom
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < threshold) {
+    if (!el || loadingMore || !hasMore) {
+      console.log('Skip scroll:', { hasEl: !!el, loadingMore, hasMore, loadedCount });
+      return;
+    }
+    
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const threshold = 100; // px from bottom
+    const isNearBottom = scrollTop + clientHeight >= scrollHeight - threshold;
+    
+    console.log('Scroll event:', { scrollTop, scrollHeight, clientHeight, threshold, isNearBottom, loadedCount });
+    
+    if (isNearBottom) {
+      console.log('Loading more data...', { currentOffset: loadedCount });
       setLoadingMore(true);
       try {
-        const db = await getDB();
-        await loadSalesPage(db, loadedCount, pageSize, false);
+        await loadData(loadedCount, pageSize, false);
       } catch (e) {
         console.error('Erreur lors du chargement de la page suivante:', e);
       } finally {
@@ -263,35 +288,11 @@ export default function Receipts() {
     }
   };
 
-  // Fallback: also listen to window scroll so infinite loading works when page scroll is used
+  // Infinite scroll avec le container de la table
   useEffect(() => {
-    let cancelled = false;
-    const onWindowScroll = async () => {
-      if (cancelled) return;
-      if (loadingMore || !hasMore) return;
-      const scrollTop = window.scrollY || document.documentElement.scrollTop;
-      const windowHeight = window.innerHeight;
-      const docHeight = document.documentElement.scrollHeight;
-      const threshold = 200;
-      if (windowHeight + scrollTop >= docHeight - threshold) {
-        setLoadingMore(true);
-        try {
-          const db = await getDB();
-          await loadSalesPage(db, loadedCount, pageSize, false);
-        } catch (e) {
-          console.error('Erreur lors du chargement de la page suivante (window):', e);
-        } finally {
-          if (!cancelled) setLoadingMore(false);
-        }
-      }
-    };
-
-    window.addEventListener('scroll', onWindowScroll, { passive: true });
-    return () => {
-      cancelled = true;
-      window.removeEventListener('scroll', onWindowScroll);
-    };
-  }, [loadedCount, pageSize, hasMore, loadingMore]);
+    // Pas besoin de window scroll, on utilise le container
+    return () => {};
+  }, []);
 
   const processSales = async (allSales: any[], db: any) => {
     // Load shifts and stores
@@ -481,16 +482,53 @@ export default function Receipts() {
       // Sauvegarder localement d'abord
       await db.put('sales', refundedSale);
 
-      // Restore stock locally
+      // Restore stock locally - Restaurer le stock des articles remboursés
+      const productsToRestoreStock = [];
       for (const item of (saleToRefund.items || [])) {
-        const product = await db.get('products', item.productId);
+        let product = await db.get('products', item.productId);
+        
+        // Si le backend est disponible, recharger le produit pour avoir le stock le plus récent
+        if (isBackendReachable && product) {
+          try {
+            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${item.productId}`);
+            if (response.ok) {
+              const freshProduct = await response.json();
+              if (freshProduct && freshProduct.id) {
+                product = freshProduct;
+                // Mettre à jour aussi en local
+                await db.put('products', freshProduct);
+              }
+            }
+          } catch (error) {
+            console.warn(`Impossible de recharger le produit ${item.name} depuis le backend:`, error);
+          }
+        }
+        
         if (product) {
-          const updatedStock = { ...product.stock };
-          updatedStock[saleToRefund.storeId] = (updatedStock[saleToRefund.storeId] || 0) + item.quantity;
-          await db.put('products', {
-            ...product,
-            stock: updatedStock,
-          });
+          // Vérifier si le produit a un suivi de stock configuré pour ce magasin
+          if (product.stock && typeof product.stock === 'object') {
+            const updatedStock = { ...product.stock };
+            const currentStock = updatedStock[saleToRefund.storeId] || 0;
+            updatedStock[saleToRefund.storeId] = currentStock + item.quantity;
+            
+            const updatedProduct = {
+              ...product,
+              stock: updatedStock,
+            };
+            
+            await db.put('products', updatedProduct);
+            productsToRestoreStock.push({
+              product: updatedProduct,
+              restoredQuantity: item.quantity,
+              itemName: item.name
+            });
+            
+            console.log(`📦 Stock restauré pour "${item.name}": +${item.quantity} (nouveau stock: ${updatedStock[saleToRefund.storeId]})`);
+          } else {
+            console.log(`ℹ️ Produit "${item.name}" sans suivi de stock - pas de restauration`);
+          }
+        } else {
+          console.warn(`⚠️ Produit "${item.name}" (ID: ${item.productId}) non trouvé lors de la restauration du stock`);
         }
       }
 
@@ -502,16 +540,43 @@ export default function Receipts() {
           data: refundedSale,
         });
 
+        // Synchroniser aussi la restauration du stock des produits concernés
+        if (productsToRestoreStock.length > 0) {
+          console.log(`🔄 Synchronisation du stock restauré pour ${productsToRestoreStock.length} produit(s)`);
+          
+          for (const { product, restoredQuantity } of productsToRestoreStock) {
+            try {
+              // Préparer les données pour l'API backend
+              const productDataForBackend = {
+                ...product,
+                stock: product.stock[saleToRefund.storeId], // Envoyer seulement le stock pour ce magasin
+                trackStock: true, // Confirmer que ce produit a un suivi de stock
+                storeId: saleToRefund.storeId
+              };
+              
+              await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                method: 'PUT',
+                data: productDataForBackend,
+              });
+              
+              console.log(`✅ Synchronisation stock prévue pour "${product.name}": ${product.stock[saleToRefund.storeId]} unités`);
+            } catch (stockSyncError) {
+              console.error(`❌ Erreur synchronisation stock pour "${product.name}":`, stockSyncError);
+            }
+          }
+        }
+
         if (res.queued) {
-          toast.success('Vente remboursée (sera synchronisée plus tard)');
+          toast.success(`Vente remboursée - Stock restauré pour ${productsToRestoreStock.length} produit(s) (sera synchronisée plus tard)`);
         } else if (res.success) {
-          toast.success('Vente remboursée et synchronisée avec succès');
+          toast.success(`Vente remboursée et synchronisée - Stock restauré pour ${productsToRestoreStock.length} produit(s)`);
         } else {
-          toast.success('Vente remboursée (synchronisation différée)');
+          toast.success(`Vente remboursée - Stock restauré pour ${productsToRestoreStock.length} produit(s) (synchronisation différée)`);
         }
       } catch (error) {
         console.error('Erreur lors de la demande de synchronisation:', error);
-        toast.success('Vente remboursée (sera synchronisée plus tard)');
+        toast.success(`Vente remboursée - Stock restauré pour ${productsToRestoreStock.length} produit(s) (sera synchronisée plus tard)`);
       }
 
       // Envoyer notification email aux admins du store
@@ -548,6 +613,11 @@ export default function Receipts() {
       <span class="info-label">Méthode de paiement :&nbsp;</span>
       <span class="info-value">${getPaymentMethodText(saleToRefund.paymentMethod)}</span>
     </div>
+    ${refundComment ? `
+    <div class="info-row">
+      <span class="info-label">Commentaire :&nbsp;</span>
+      <span class="info-value">${refundComment}</span>
+    </div>` : ''}
   </div>
 
   <div class="info-block">
@@ -558,6 +628,9 @@ export default function Receipts() {
       <span class="info-value">${item.quantity} × ${Number(item.price).toLocaleString('fr-FR')} = ${Number(item.total).toLocaleString('fr-FR')} F CFA</span>
     </div>
     `).join('')}
+    <div style="margin-top: 10px; padding: 10px; background: #d4edda; border-left: 4px solid #28a745; font-size: 12px;">
+      <strong>📈 Stock restauré :</strong> Les quantités vendues ont été remises dans le stock du magasin
+    </div>
   </div>
 
   <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
@@ -593,6 +666,7 @@ export default function Receipts() {
 
   setShowRefundDialog(false);
   setSaleToRefund(null);
+  setRefundComment('');
   // Update pending sync count and reload
   await updatePendingSyncCount();
   loadData();
@@ -632,36 +706,15 @@ export default function Receipts() {
               />
             </div>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={async () => {
-                try {
-                  setLoading(true);
-                  const db = await getDB();
-                  const all = await db.getAll('sales');
-                  // Filter by user's storeId if present
-                  const salesForStore = user?.storeId ? all.filter(s => s.storeId === user.storeId) : all;
-                  salesForStore.sort((a: any, b: any) => b.createdAt - a.createdAt);
-                  setSales(salesForStore);
-                  setFilteredSales(salesForStore);
-                  setLoadedCount(salesForStore.length);
-                  setHasMore(false);
-                  // ensure related data loaded
-                  const storesData = await db.getAll('stores');
-                  setStores(storesData);
-                  const usersData = await db.getAll('users');
-                  setUsers(usersData);
-                  toast.success('Tous les reçus locaux chargés');
-                } catch (e) {
-                  console.error('Erreur chargement complet des reçus:', e);
-                  toast.error('Impossible de charger tous les reçus');
-                } finally {
-                  setLoading(false);
-                }
-              }}>Charger tout</Button>
+              <div className="text-sm text-muted-foreground hidden sm:block">
+                {loadedCount} chargés{hasMore ? ' (+)' : ''}
+              </div>
             </div>
           </div>
         </CardHeader>
         <CardContent className="p-0 sm:p-6">
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-[70vh]" ref={scrollRef} onScroll={handleScroll}>
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -794,8 +847,25 @@ export default function Receipts() {
                     );
                   })
                 )}
+                {loadingMore && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-4">
+                      <div className="animate-pulse text-muted-foreground">
+                        Chargement de plus de reçus...
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!hasMore && sales.length > 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-4 text-muted-foreground">
+                      Tous les reçus ont été chargés
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -840,9 +910,34 @@ export default function Receipts() {
           <AlertDialogHeader>
             <AlertDialogTitle>Confirmer le remboursement</AlertDialogTitle>
             <AlertDialogDescription>
-              Êtes-vous sûr de vouloir rembourser cette vente ? Cette action restaurera le stock des produits.
+              Êtes-vous sûr de vouloir rembourser cette vente ?
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-4">
+            <div>
+              <strong>Cette action va :</strong>
+              <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>Marquer la vente comme remboursée</li>
+                <li>Restaurer automatiquement le stock des articles vendus</li>
+                <li>Envoyer une notification aux administrateurs</li>
+              </ul>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Cette action ne peut pas être annulée.
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="refund-comment" className="text-sm font-medium">
+                Commentaire (optionnel)
+              </label>
+              <Input
+                id="refund-comment"
+                value={refundComment}
+                onChange={(e) => setRefundComment(e.target.value)}
+                placeholder="Raison du remboursement, notes..."
+                className="w-full"
+              />
+            </div>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={loading}>Annuler</AlertDialogCancel>
             <AlertDialogAction onClick={handleRefund} disabled={loading}>

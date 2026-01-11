@@ -332,7 +332,7 @@ CREATE TABLE `users` (
   `phone` varchar(20) NOT NULL,
   `password` varchar(255) NOT NULL,
   `pin` varchar(255) DEFAULT NULL,
-  `role` enum('super_admin','admin','cashier') NOT NULL,
+  `role` enum('super_admin','admin','cashier','manager') NOT NULL,
   `storeId` varchar(36) DEFAULT NULL,
   `active` tinyint(1) DEFAULT 1,
   `createdAt` bigint(20) NOT NULL

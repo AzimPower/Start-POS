@@ -31,6 +31,36 @@ try {
             break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        
+        // 🔒 SÉCURITÉ: Vérifier qu'il n'existe pas déjà un shift ouvert pour cet utilisateur dans ce magasin
+        $checkSql = 'SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open"';
+        $checkStmt = $pdo->prepare($checkSql);
+        $checkStmt->execute([$data['userId'], $data['storeId']]);
+        $existingShift = $checkStmt->fetch();
+        
+        if ($existingShift) {
+            // Un shift ouvert existe déjà pour cet utilisateur dans ce magasin
+            error_log('⚠️ Tentative d\'ouverture de shift: shift déjà ouvert pour userId=' . $data['userId'] . ' storeId=' . $data['storeId']);
+            
+            // Option 1: Refuser la création
+            http_response_code(409); // Conflict
+            echo json_encode([
+                'error' => 'Un shift est déjà ouvert pour cet utilisateur dans ce magasin',
+                'existingShiftId' => $existingShift['id'],
+                'openedAt' => $existingShift['openedAt']
+            ]);
+            exit;
+            
+            // Option 2 (alternative): Fermer automatiquement l'ancien et ouvrir le nouveau
+            // Décommentez ci-dessous si vous préférez cette approche
+            /*
+            error_log('🔄 Fermeture automatique de l\'ancien shift: ' . $existingShift['id']);
+            $closeSql = 'UPDATE shifts SET status="closed", closedAt=?, closingAmount=openingAmount, expectedAmount=openingAmount, difference=0 WHERE id=?';
+            $closeStmt = $pdo->prepare($closeSql);
+            $closeStmt->execute([time()*1000, $existingShift['id']]);
+            */
+        }
+        
         $sql = 'INSERT INTO shifts (id, userId, storeId, openingAmount, closingAmount, expectedAmount, difference, cashAmount, mobileMoneyAmount, otherAmount, openedAt, closedAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();

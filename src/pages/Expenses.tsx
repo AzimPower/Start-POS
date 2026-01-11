@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { useNetwork } from '@/hooks/useNetwork';
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Plus, Receipt, Package, Settings, Trash2, Eye, Edit, Wifi, WifiOff } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import './expenses.css';
 import { toast } from 'sonner';
 import { emailService } from '@/lib/emailService';
@@ -75,13 +76,14 @@ export default function Expenses() {
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [expenses, setExpenses] = useState<ExpenseAdvanced[]>([]);
   const [filteredExpenses, setFilteredExpenses] = useState<ExpenseAdvanced[]>([]);
+  // Toujours filtrer par défaut sur "aujourd'hui"
   const [filterOption, setFilterOption] = useState<'today'|'yesterday'|'thisWeek'|'thisMonth'|'thisYear'|'custom'>('today');
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
   const [rangeTotal, setRangeTotal] = useState<number>(0);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [loadedCount, setLoadedCount] = useState(0);
-  const [pageSize] = useState(25);
+  const [pageSize] = useState(10);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -91,9 +93,35 @@ export default function Expenses() {
   
   // Search and filter states
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'direct' | 'indirect' | 'operational'>('all');
   const [chartMode, setChartMode] = useState<'type' | 'category'>('type');
   const [chartType, setChartType] = useState<'pie' | 'bar'>('pie');
+  
+  // Debounce pour la recherche (optimisation)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+  
+  // Gestionnaires d'événements optimisés avec useCallback
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  }, []);
+  
+  const handleTypeFilterChange = useCallback((value: 'all' | 'direct' | 'indirect' | 'operational') => {
+    setTypeFilter(value);
+  }, []);
+  
+  const handleChartModeChange = useCallback((value: 'type' | 'category') => {
+    setChartMode(value);
+  }, []);
+  
+  const handleChartTypeChange = useCallback((value: 'pie' | 'bar') => {
+    setChartType(value);
+  }, []);
   
   // Form states
   const [formData, setFormData] = useState({
@@ -105,9 +133,28 @@ export default function Expenses() {
     categoryId: '',
   });
 
+
+  // Calcul du total sélectionné dès le chargement de la page
   useEffect(() => {
-    loadData();
+    // Toujours filtrer sur aujourd'hui au chargement
+    setFilterOption('today');
+    (async () => {
+      await loadData();
+      const db = await getDB();
+      await loadExpensesForRange(db, 'today');
+    })();
   }, []);
+
+  // Attacher l'event listener pour le scroll
+  useEffect(() => {
+    const scrollElement = listScrollRef.current;
+    if (scrollElement) {
+      scrollElement.addEventListener('scroll', handleListScroll);
+      return () => {
+        scrollElement.removeEventListener('scroll', handleListScroll);
+      };
+    }
+  }, [loadingMore, hasMore, loadedCount, filteredExpenses.length]);
 
   // Nouvelle logique : à chaque reconnexion internet, on recharge les produits et catégories du backend pour garantir la dispo offline
   useEffect(() => {
@@ -116,6 +163,17 @@ export default function Expenses() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBackendReachable]);
+
+  // Fonction optimisée pour changer de période (mémorisée)
+  const handleFilterOptionChange = useCallback(async (option: 'today'|'yesterday'|'thisWeek'|'thisMonth'|'thisYear'|'custom') => {
+    setFilterOption(option);
+    try {
+      const db = await getDB();
+      await loadExpensesForRange(db, option);
+    } catch (e) {
+      console.error('Erreur changement période:', e);
+    }
+  }, []);
 
   // Auto-apply custom date range when admin edits start/end (debounced)
   useEffect(() => {
@@ -137,99 +195,51 @@ export default function Expenses() {
     setLoading(true);
     try {
       const db = await getDB();
-  // Toujours charger depuis le backend si backend reachable
-  if (isBackendReachable) {
+      if (isBackendReachable) {
         try {
-          // Produits
-          let productsUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php';
-          if (user?.storeId) productsUrl += `?storeId=${user.storeId}`;
-          const productsResponse = await fetch(productsUrl);
-          if (productsResponse.ok) {
-            const backendProducts = await productsResponse.json();
-            // Filtrer les produits pour ne garder que ceux du magasin de l'utilisateur
-            const filteredBackendProducts = user?.storeId
-              ? backendProducts.filter((p: any) => (
-                  (p.storeId && p.storeId === user.storeId) ||
-                  (p.stock && Object.keys(p.stock || {}).includes(user.storeId))
-                ))
-              : backendProducts;
-            setProducts(filteredBackendProducts);
-            // Stocker en local
-            const tx = db.transaction('products', 'readwrite');
-            await tx.store.clear();
-            for (const p of backendProducts) await tx.store.put(p);
-            await tx.done;
-          }
-          // Admin user pour emails
-          const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
-          if (usersResponse.ok) {
-            const users = await usersResponse.json();
-            const admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
-            if (admin) {
-              console.log('🔍 [DEBUG] Admin trouvé (Expenses):', admin.email);
-              setAdminUser(admin);
-            } else {
-              console.log('⚠️ [DEBUG] Aucun admin avec email trouvé (Expenses)');
-            }
-          }
-
-          // Catégories de dépenses
-          let categoriesUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php';
-          if (user?.storeId) categoriesUrl += `?storeId=${user.storeId}`;
-          const categoriesResponse = await fetch(categoriesUrl);
-          if (categoriesResponse.ok) {
-            const backendCategories = await categoriesResponse.json();
-            const filteredBackendCategories = user?.storeId
-              ? backendCategories.filter((c: any) => c.storeId === user.storeId && c.active)
-              : backendCategories.filter((c: any) => c.active);
-            setExpenseCategories(filteredBackendCategories);
-            const tx = db.transaction('expenseCategories', 'readwrite');
-            await tx.store.clear();
-            for (const c of backendCategories) await tx.store.put(c);
-            await tx.done;
-          }
-          // Dépenses
+          // ...existing code...
+          // Dépenses - charger TOUTES les dépenses, pas seulement la première page
           let expensesAdvancedUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
-          if (user?.storeId) expensesAdvancedUrl += `?storeId=${user.storeId}`;
+          const params = [];
+          if (user?.storeId) params.push(`storeId=${user.storeId}`);
+          // Demander une limite très élevée pour avoir toutes les dépenses
+          params.push('limit=9999');
+          params.push('offset=0');
+          if (params.length) expensesAdvancedUrl += '?' + params.join('&');
           const expensesResponse = await fetch(expensesAdvancedUrl);
           if (expensesResponse.ok) {
-            const backendExpenses = await expensesResponse.json();
+            const backendResult = await expensesResponse.json();
+            const backendExpenses = backendResult.data || backendResult || []; // Gérer différents formats de réponse
+            console.log('Loaded from backend:', backendExpenses.length, 'expenses');
+            
+            // Stocker TOUTES les dépenses en local
             const tx = db.transaction('expensesAdvanced', 'readwrite');
             await tx.store.clear();
             for (const e of backendExpenses) await tx.store.put(e);
             await tx.done;
-            // reset pagination and load first page
-            setLoadedCount(0);
-            setHasMore(true);
-            // load default filtered expenses (admins can change range)
-            await loadExpensesForRange(db, filterOption, customStart, customEnd);
+            
+            console.log('Stored', backendExpenses.length, 'expenses in IndexedDB');
+            // Ne pas mettre à jour les states ici, c'est géré par loadExpensesForRange
           }
         } catch (error) {
-          console.error('Erreur de synchronisation avec le backend:', error);
           toast.error('Erreur de connexion au serveur, chargement des données locales');
           await loadFromLocal(db);
         }
       } else {
-        // Hors ligne (ou backend non joignable) : charger depuis la base locale
-        // Only show the offline toast if we've actually performed a backend reachability check
-        // and the browser reports we're offline. If we're online but the backend is unreachable
-        // we rely on the global network hook to display a server-unreachable toast instead.
         if (typeof lastCheck === 'number' && lastCheck > 0 && !isOnline) {
           toast.error('Mode hors ligne : chargement des données locales');
         }
         await loadFromLocal(db);
       }
-      // Compter les éléments en attente de synchronisation
       await updatePendingSyncCount(db);
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
-      console.error('Erreur:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Load expenses for a specific date range (no pagination) from IndexedDB
+  // Load expenses for a specific date range with proper pagination
   const loadExpensesForRange = async (db: any, option: 'today'|'yesterday'|'thisWeek'|'thisMonth'|'thisYear'|'custom', startStr?: string, endStr?: string) => {
     try {
       const all = await db.getAll('expensesAdvanced');
@@ -267,17 +277,25 @@ export default function Expenses() {
           break;
       }
 
-      const result = filteredByStore.filter((e: any) => {
+      // Tous les résultats de la période (pour la pagination)
+      const allResults = filteredByStore.filter((e: any) => {
         return e.date >= start && e.date <= end;
       }).sort((a: any, b: any) => b.createdAt - a.createdAt);
 
-      setFilteredExpenses(result);
-      setExpenses(result.slice(0, pageSize));
-      setLoadedCount(result.length > pageSize ? pageSize : result.length);
-      setHasMore(result.length > pageSize);
+      // Mise à jour: filteredExpenses contient TOUS les résultats, expenses contient seulement la première page
+      setFilteredExpenses(allResults);
+      setExpenses(allResults.slice(0, pageSize)); // Première page seulement
+      setLoadedCount(Math.min(pageSize, allResults.length));
+      setHasMore(allResults.length > pageSize);
 
-      const total = result.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const total = allResults.reduce((s, r) => s + (Number(r.amount) || 0), 0);
       setRangeTotal(total);
+      
+      console.log('loadExpensesForRange:', { 
+        total: allResults.length, 
+        firstPage: Math.min(pageSize, allResults.length), 
+        hasMore: allResults.length > pageSize 
+      });
     } catch (e) {
       console.error('loadExpensesForRange error', e);
     }
@@ -303,11 +321,44 @@ export default function Expenses() {
     }
     setExpenseCategories(filteredCategories);
     
-    // Load expenses paged
+    // Ne pas charger les dépenses ici, c'est géré par loadExpensesForRange
     await loadExpensesPage(db, 0, pageSize, true);
   };
 
+  // Load next page of expenses (infinite scroll)
   const loadExpensesPage = async (db: any, offset: number, limit: number, reset = false) => {
+    if (isBackendReachable) {
+      try {
+        let expensesAdvancedUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
+        const params = [];
+        if (user?.storeId) params.push(`storeId=${user.storeId}`);
+        params.push(`offset=${offset}`);
+        params.push(`limit=${limit}`);
+        if (params.length) expensesAdvancedUrl += '?' + params.join('&');
+        const expensesResponse = await fetch(expensesAdvancedUrl);
+        if (expensesResponse.ok) {
+          const backendResult = await expensesResponse.json();
+          const backendExpenses = backendResult.data || [];
+          const total = backendResult.total || 0;
+          // Optionally update local IndexedDB
+          const tx = db.transaction('expensesAdvanced', 'readwrite');
+          for (const e of backendExpenses) await tx.store.put(e);
+          await tx.done;
+          if (reset) {
+            setExpenses(backendExpenses);
+            setLoadedCount(backendExpenses.length);
+          } else {
+            setExpenses(prev => [...prev, ...backendExpenses]);
+            setLoadedCount(prev => prev + backendExpenses.length);
+          }
+          setHasMore(offset + backendExpenses.length < total);
+          return backendExpenses;
+        }
+      } catch (e) {
+        console.error('Erreur chargement paginé dépenses backend:', e);
+      }
+    }
+    // Fallback: local IndexedDB
     try {
       const all = await db.getAll('expensesAdvanced');
       const filtered = user?.storeId ? all.filter((e: any) => e.storeId === user.storeId) : all;
@@ -323,14 +374,8 @@ export default function Expenses() {
       setHasMore(page.length === limit);
       return page;
     } catch (e) {
-      console.error('Erreur chargement paginé dépenses:', e);
-      const all = await db.getAll('expensesAdvanced');
-      const filtered = user?.storeId ? all.filter((e: any) => e.storeId === user.storeId) : all;
-      filtered.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      const page = filtered.slice(offset, offset + limit);
-      if (reset) setExpenses(page); else setExpenses(prev => [...prev, ...page]);
-      setHasMore(page.length === limit);
-      return page;
+      console.error('Erreur chargement paginé dépenses local:', e);
+      return [];
     }
   };
 
@@ -338,16 +383,36 @@ export default function Expenses() {
   const handleListScroll = async () => {
     const el = listScrollRef.current;
     if (!el || loadingMore || !hasMore) return;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+    
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const isNearBottom = scrollTop + clientHeight >= scrollHeight - 100;
+    
+    console.log('Scroll detected:', { scrollTop, scrollHeight, clientHeight, isNearBottom, hasMore, loadedCount, totalFiltered: filteredExpenses.length });
+    
+    if (isNearBottom) {
+      console.log('Loading more...');
       setLoadingMore(true);
-      try {
-        const db = await getDB();
-        await loadExpensesPage(db, loadedCount, pageSize, false);
-      } catch (e) {
-        console.error('Erreur page dépenses suivante:', e);
-      } finally {
-        setLoadingMore(false);
+      
+      // Charger la page suivante depuis filteredExpenses
+      const nextPage = filteredExpenses.slice(loadedCount, loadedCount + pageSize);
+      console.log('Next page:', nextPage.length, 'items');
+      
+      if (nextPage.length > 0) {
+        setExpenses(prev => {
+          const updated = [...prev, ...nextPage];
+          console.log('Updated expenses:', updated.length);
+          return updated;
+        });
+        const newLoadedCount = loadedCount + nextPage.length;
+        setLoadedCount(newLoadedCount);
+        setHasMore(newLoadedCount < filteredExpenses.length);
+        console.log('New state:', { newLoadedCount, hasMore: newLoadedCount < filteredExpenses.length });
+      } else {
+        setHasMore(false);
+        console.log('No more items');
       }
+      
+      setTimeout(() => setLoadingMore(false), 100);
     }
   };
 
@@ -372,7 +437,7 @@ export default function Expenses() {
     }
   };
 
-  const handleEditExpense = (exp: ExpenseAdvanced) => {
+  const handleEditExpense = useCallback((exp: ExpenseAdvanced) => {
     setEditingExpense(exp);
     setExpenseType(exp.type);
     setFormData({
@@ -384,9 +449,9 @@ export default function Expenses() {
       categoryId: exp.categoryId || '',
     });
     setShowAddDialog(true);
-  };
+  }, []);
 
-  const handleDeleteExpense = async (id: string) => {
+  const handleDeleteExpense = useCallback(async (id: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette dépense ?')) return;
     try {
       setLoading(true);
@@ -398,14 +463,17 @@ export default function Expenses() {
         data: { id }
       });
       toast.success('Dépense supprimée localement. La synchronisation se fera automatiquement.');
+      
+      // Actualiser les données et recharger la période actuelle automatiquement
       await loadData();
+      await loadExpensesForRange(db, filterOption, customStart, customEnd);
     } catch (error) {
       console.error('Erreur suppression dépense:', error);
       toast.error('Erreur lors de la suppression');
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterOption, customStart, customEnd]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -470,7 +538,22 @@ export default function Expenses() {
       };
       let expense: ExpenseAdvanced;
       if (expenseType === 'direct') {
-        const selectedProduct = products.find(p => p.id === formData.directProductId);
+        let selectedProduct = products.find(p => p.id === formData.directProductId);
+        // Toujours recharger le produit depuis le backend si possible pour avoir le stock à jour
+        if (isBackendReachable && selectedProduct) {
+          try {
+            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
+            if (response.ok) {
+              const freshProduct = await response.json();
+              if (freshProduct && freshProduct.id) {
+                selectedProduct = freshProduct;
+                await db.put('products', freshProduct);
+              }
+            }
+          } catch (error) {
+            console.warn('Impossible de recharger le produit depuis le backend:', error);
+          }
+        }
         const isStockProduct = selectedProduct && selectedProduct.stock && user?.storeId && Object.keys(selectedProduct.stock).includes(user.storeId);
         const qty = isStockProduct ? parseFloat(formData.directProductQuantity) : 1;
         expense = {
@@ -482,66 +565,28 @@ export default function Expenses() {
           },
         };
         if (isStockProduct && user?.storeId) {
-          const newStock = (selectedProduct.stock[user.storeId] || 0) + qty;
-          const updatedProduct = {
+          // Ne jamais modifier le stock local directement : passer par performSyncOp
+          const productDataForBackend = {
             ...selectedProduct,
-            stock: {
-              ...selectedProduct.stock,
-              [user.storeId]: newStock,
-            },
-            createdAt: selectedProduct.createdAt ?? Date.now(),
-            updatedAt: Date.now(),
+            stock: (selectedProduct.stock[user.storeId] || 0) + qty,
+            trackStock: true
           };
-          await db.put('products', updatedProduct);
-          if (isBackendReachable) {
-            try {
-              const productDataForBackend = {
-                ...updatedProduct,
-                stock: newStock,
-                trackStock: true
-              };
-              const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(productDataForBackend)
-              });
-              if (!response.ok) {
-                throw new Error(`Erreur backend: ${response.status}`);
+          await performSyncOp({
+            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+            method: 'PUT',
+            data: productDataForBackend,
+          });
+          // Recharger le produit depuis le backend après modification
+          try {
+            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
+            if (response.ok) {
+              const freshProduct = await response.json();
+              if (freshProduct && freshProduct.id) {
+                await db.put('products', freshProduct);
               }
-            } catch (error) {
-              console.error('Erreur lors de la mise à jour du stock dans le backend:', error);
-              const productDataForBackend = {
-                ...updatedProduct,
-                stock: newStock,
-                trackStock: true
-              };
-              await addToSyncQueue(db, {
-                id: generateId(),
-                table: 'products',
-                operation: 'PUT',
-                data: productDataForBackend,
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-                storeId: user.storeId,
-                createdAt: Date.now()
-              });
             }
-          } else {
-            const productDataForBackend = {
-              ...updatedProduct,
-              stock: newStock,
-              trackStock: true
-            };
-            await addToSyncQueue(db, {
-              id: generateId(),
-              table: 'products',
-              operation: 'PUT',
-              data: productDataForBackend,
-              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-              storeId: user.storeId,
-              createdAt: Date.now()
-            });
+          } catch (error) {
+            console.warn('Impossible de recharger le produit après modification:', error);
           }
         }
       } else {
@@ -562,7 +607,25 @@ export default function Expenses() {
           updatedAt: Date.now(),
         };
         if (expenseType === 'direct') {
-          const selectedProduct = products.find(p => p.id === updatedExpense.directProduct?.productId);
+          let selectedProduct = products.find(p => p.id === updatedExpense.directProduct?.productId);
+          
+          // Si le backend est disponible, recharger le produit pour avoir le stock le plus récent
+          if (isBackendReachable && selectedProduct) {
+            try {
+              const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
+              if (response.ok) {
+                const freshProduct = await response.json();
+                if (freshProduct && freshProduct.id) {
+                  selectedProduct = freshProduct;
+                  // Mettre à jour aussi en local
+                  await db.put('products', freshProduct);
+                }
+              }
+            } catch (error) {
+              console.warn('Impossible de recharger le produit depuis le backend:', error);
+            }
+          }
+          
           const isStockProduct = selectedProduct && selectedProduct.stock && user?.storeId && Object.keys(selectedProduct.stock).includes(user.storeId);
           if (isStockProduct && updatedExpense.directProduct && editingExpense.directProduct) {
             const oldQty = Number(editingExpense.directProduct.quantity || 0);
@@ -620,44 +683,58 @@ export default function Expenses() {
           }
         }
         await db.put('expensesAdvanced', updatedExpense);
-        await performSyncOp({
-          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
-          method: 'PUT',
-          data: updatedExpense
-        });
-        toast.success('Dépense modifiée localement. La synchronisation se fera automatiquement.');
         finalExpense = updatedExpense;
       } else {
         await db.add('expensesAdvanced', expense);
-        await performSyncOp({
-          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
-          method: 'POST',
-          data: expense
-        });
-        toast.success('Dépense enregistrée localement. La synchronisation se fera automatiquement.');
         finalExpense = expense;
       }
 
-      // Envoi automatique d'un email à l'admin après ajout ou modification de dépense
-      try {
-        console.log('🔍 [DEBUG] Début envoi email dépense', { isEdit, expenseId: finalExpense.id });
-        const dbInstance = await getDB();
-        
-        // Vérifier les paramètres d'email pour les dépenses
-        const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
-        console.log('🔍 [DEBUG] Email settings:', emailSettings);
-        const shouldSendEmail = emailSettings?.expenses !== false; // Par défaut true si pas de config
-        
-        if (!shouldSendEmail) {
-          console.log('📧 Email désactivé pour les dépenses');
-        } else {
-          console.log('📧 [EXPENSE] Envoi email à tous les admins du store:', user?.storeId);
-          
-          // Récupérer le nom du magasin depuis la base locale
-          const store = await dbInstance.get('stores', user?.storeId);
-          const storeName = store?.name || user?.storeId || '';
-          // Construction du résumé HTML
-          const resume = `
+      // Reset du formulaire et fermeture immédiate du dialog
+      setFormData({
+        amount: '',
+        description: '',
+        date: new Date().toISOString().slice(0, 16),
+        directProductId: '',
+        directProductQuantity: '',
+        categoryId: '',
+      });
+      setShowAddDialog(false);
+      setEditingExpense(null);
+      setLoading(false);
+
+      // Message de succès immédiat
+      toast.success(isEdit ? 'Dépense modifiée avec succès!' : 'Dépense enregistrée avec succès!');
+
+      // Opérations lourdes en arrière-plan (async sans await)
+      Promise.all([
+        // Synchronisation backend
+        performSyncOp({
+          url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+          method: isEdit ? 'PUT' : 'POST',
+          data: finalExpense
+        }).catch(e => console.error('Erreur sync backend:', e)),
+
+        // Envoi email en arrière-plan
+        (async () => {
+          try {
+            console.log('🔍 [DEBUG] Début envoi email dépense', { isEdit, expenseId: finalExpense.id });
+            const dbInstance = await getDB();
+            
+            // Vérifier les paramètres d'email pour les dépenses
+            const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
+            console.log('🔍 [DEBUG] Email settings:', emailSettings);
+            const shouldSendEmail = emailSettings?.expenses !== false; // Par défaut true si pas de config
+            
+            if (!shouldSendEmail) {
+              console.log('📧 Email désactivé pour les dépenses');
+            } else {
+              console.log('📧 [EXPENSE] Envoi email à tous les admins du store:', user?.storeId);
+              
+              // Récupérer le nom du magasin depuis la base locale
+              const store = await dbInstance.get('stores', user?.storeId);
+              const storeName = store?.name || user?.storeId || '';
+              // Construction du résumé HTML
+              const resume = `
 <div style="margin: 20px 0;">
   <div class="info-block">
     <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💸 Dépense ${isEdit ? 'modifiée' : 'ajoutée'}</h3>
@@ -704,45 +781,46 @@ export default function Expenses() {
 </div>
 `;
 
-          
-          // Envoyer à TOUS les admins du store
-          try {
-            console.log('📧 [DEBUG] Envoi email dépense à tous les admins du store...');
-            const result = await pendingEmailService.sendToAllAdmins({
-              message: resume,
-              storeName: storeName,
-              type: 'expense',
-              relatedId: finalExpense.id,
-              storeId: user?.storeId || '',
-              userId: user?.id || ''
-            });
-            
-            console.log(`📊 [EXPENSE] Résultats: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
-            if (result.sent > 0) {
-              console.log('✅ Emails dépense envoyés directement');
-            }
-            if (result.queued > 0) {
-              console.log('📦 Emails dépense mis en attente, seront envoyés lors de la sync');
+              
+              // Envoyer à TOUS les admins du store
+              try {
+                console.log('📧 [DEBUG] Envoi email dépense à tous les admins du store...');
+                const result = await pendingEmailService.sendToAllAdmins({
+                  message: resume,
+                  storeName: storeName,
+                  type: 'expense',
+                  relatedId: finalExpense.id,
+                  storeId: user?.storeId || '',
+                  userId: user?.id || ''
+                });
+                
+                console.log(`📊 [EXPENSE] Résultats: ${result.sent} envoyés, ${result.queued} en attente sur ${result.totalAdmins} admins`);
+                if (result.sent > 0) {
+                  console.log('✅ Emails dépense envoyés directement');
+                }
+                if (result.queued > 0) {
+                  console.log('📦 Emails dépense mis en attente, seront envoyés lors de la sync');
+                }
+              } catch (e) {
+                console.warn('❌ Erreur service email dépense:', e);
+              }
             }
           } catch (e) {
-            console.warn('❌ Erreur service email dépense:', e);
+            console.warn('❌ Erreur lors de l\'envoi automatique du mail admin pour dépense:', e);
+            console.warn('🔍 [DEBUG] Détails erreur:', { isEdit, userId: user?.id, storeId: user?.storeId });
           }
-        }
-      } catch (e) {
-        console.warn('❌ Erreur lors de l\'envoi automatique du mail admin pour dépense:', e);
-        console.warn('🔍 [DEBUG] Détails erreur:', { isEdit, userId: user?.id, storeId: user?.storeId });
-      }
+        })(),
 
-      setFormData({
-        amount: '',
-        description: '',
-        date: new Date().toISOString().slice(0, 16),
-        directProductId: '',
-        directProductQuantity: '',
-        categoryId: '',
-      });
-      setShowAddDialog(false);
-      loadData();
+        // Actualisation des données en arrière-plan
+        (async () => {
+          try {
+            await loadData();
+            await loadExpensesForRange(db, filterOption, customStart, customEnd);
+          } catch (e) {
+            console.error('Erreur actualisation données:', e);
+          }
+        })()
+      ]).catch(e => console.error('Erreur opérations arrière-plan:', e));
     } catch (error) {
       console.error('Erreur lors de l\'ajout de la dépense:', error);
       toast.error('Erreur lors de l\'ajout de la dépense');
@@ -762,28 +840,28 @@ export default function Expenses() {
 
 
 
-  const getProductName = (productId: string) => {
+  const getProductName = useCallback((productId: string) => {
     const product = products.find(p => p.id === productId);
     return product ? product.name : 'Produit inconnu';
-  };
+  }, [products]);
 
-  const getCategoryName = (categoryId: string) => {
+  const getCategoryName = useCallback((categoryId: string) => {
     const category = expenseCategories.find(c => c.id === categoryId);
     return category ? category.name : 'Catégorie inconnue';
-  };
+  }, [expenseCategories]);
 
-  const getFilteredCategories = () => {
+  const getFilteredCategories = useCallback(() => {
     return expenseCategories.filter(c => c.type === expenseType);
-  };
+  }, [expenseCategories, expenseType]);
 
-  // Fonction pour filtrer les dépenses selon les critères
-  const getFilteredExpenses = () => {
-    // Utiliser filteredExpenses au lieu d'expenses pour avoir toutes les dépenses de la période
-    let filtered = filteredExpenses;
+  // Fonction pour filtrer les dépenses selon les critères (mémorisée)
+  const getFilteredExpenses = useMemo(() => {
+    // Utiliser expenses (liste paginée) pour l'affichage au lieu de filteredExpenses (tous les résultats)
+    let filtered = expenses;
 
     // Filtrage par recherche textuelle
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
+    if (debouncedSearchQuery.trim()) {
+      const query = debouncedSearchQuery.toLowerCase();
       filtered = filtered.filter(expense => {
         const matchName = expense.name.toLowerCase().includes(query);
         const matchDescription = expense.description?.toLowerCase().includes(query) || false;
@@ -803,11 +881,11 @@ export default function Expenses() {
     }
 
     return filtered;
-  };
+  }, [expenses, debouncedSearchQuery, typeFilter, products, expenseCategories]);
 
-  // Fonction pour calculer les données du graphique
-  const getChartData = () => {
-    const filtered = getFilteredExpenses();
+  // Fonction pour calculer les données du graphique (mémorisée)
+  const getChartData = useMemo(() => {
+    const filtered = getFilteredExpenses;
     
     if (chartMode === 'type') {
       const totals = {
@@ -863,11 +941,33 @@ export default function Expenses() {
         data
       };
     }
-  };
+  }, [getFilteredExpenses, chartMode, products, expenseCategories]);
 
   // Fonction helper pour calculer les totaux après filtrage
   const calculateTotalsForChart = () => {
-    const filtered = getFilteredExpenses();
+    // Utiliser filteredExpenses pour les statistiques (tous les résultats de la période)
+    let filtered = filteredExpenses;
+
+    // Appliquer les mêmes filtres de recherche et type que pour l'affichage
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(expense => {
+        const matchName = expense.name.toLowerCase().includes(query);
+        const matchDescription = expense.description?.toLowerCase().includes(query) || false;
+        const matchAmount = expense.amount.toString().includes(query);
+        const matchProductName = expense.type === 'direct' && expense.directProduct ? 
+          getProductName(expense.directProduct.productId).toLowerCase().includes(query) : false;
+        const matchCategoryName = (expense.type === 'indirect' || expense.type === 'operational') && expense.categoryId ? 
+          getCategoryName(expense.categoryId).toLowerCase().includes(query) : false;
+        
+        return matchName || matchDescription || matchAmount || matchProductName || matchCategoryName;
+      });
+    }
+
+    if (typeFilter !== 'all') {
+      filtered = filtered.filter(expense => expense.type === typeFilter);
+    }
+
     const totals = {
       direct: { count: 0, total: 0 },
       indirect: { count: 0, total: 0 },
@@ -882,6 +982,158 @@ export default function Expenses() {
 
     return totals;
   };
+
+  // Optimisation mémoire pour le composant graphique
+  const memoizedChartComponent = useMemo(() => {
+    if (chartType === 'bar') {
+      const chartResult = getChartData;
+      const dataArray = Object.entries(chartResult.data).map(([key, value]) => ({
+        name: (value as any).name,
+        montant: (value as any).total,
+        quantité: (value as any).count
+      }));
+
+      return dataArray.length > 0 ? (
+        <BarChart data={dataArray}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis 
+            dataKey="name" 
+            interval={0}
+            angle={-45}
+            textAnchor="end"
+            height={80}
+          />
+          <YAxis />
+          <Tooltip formatter={(value, name) => [
+            name === 'montant' ? `${Number(value).toLocaleString('fr-FR')} FCFA` : value,
+            name === 'montant' ? 'Montant' : 'Quantité'
+          ]} />
+          <Bar dataKey="montant" fill="#3b82f6" />
+        </BarChart>
+      ) : (
+        <div className="text-center text-muted-foreground py-8">Aucune donnée disponible</div>
+      );
+    }
+
+    // chartType === 'pie'
+    const chartResult = getChartData;
+    let totalAmount = 0;
+    let dataArray: Array<{ type: string, name: string, amount: number, count: number, percentage: number, color: string }> = [];
+
+    if (chartMode === 'type') {
+      const totals = calculateTotalsForChart();
+      totalAmount = totals.direct.total + totals.indirect.total + totals.operational.total;
+      
+      dataArray = [
+        { 
+          type: 'direct', 
+          name: 'Dépenses Directes', 
+          amount: totals.direct.total,
+          count: totals.direct.count,
+          percentage: totalAmount > 0 ? Math.round((totals.direct.total / totalAmount) * 100) : 0,
+          color: '#3b82f6'
+        },
+        { 
+          type: 'indirect', 
+          name: 'Dépenses Indirectes', 
+          amount: totals.indirect.total,
+          count: totals.indirect.count,
+          percentage: totalAmount > 0 ? Math.round((totals.indirect.total / totalAmount) * 100) : 0,
+          color: '#10b981'
+        },
+        { 
+          type: 'operational', 
+          name: 'Dépenses Opérationnelles', 
+          amount: totals.operational.total,
+          count: totals.operational.count,
+          percentage: totalAmount > 0 ? Math.round((totals.operational.total / totalAmount) * 100) : 0,
+          color: '#f59e0b'
+        }
+      ].filter(item => item.amount > 0);
+    } else {
+      // Mode par catégories
+      const categoryEntries = Object.entries(chartResult.data);
+      totalAmount = categoryEntries.reduce((sum, [, data]) => sum + (data as any).total, 0);
+      
+      const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#f97316', '#06b6d4', '#84cc16'];
+      
+      dataArray = categoryEntries
+        .filter(([, data]) => (data as any).total > 0)
+        .sort(([, a], [, b]) => (b as any).total - (a as any).total)
+        .map(([key, data], index) => ({
+          type: key,
+          name: (data as any).name,
+          amount: (data as any).total,
+          count: (data as any).count,
+          percentage: totalAmount > 0 ? Math.round(((data as any).total / totalAmount) * 100) : 0,
+          color: colors[index % colors.length]
+        }));
+    }
+
+    if (dataArray.length === 0 || totalAmount === 0) {
+      return <div className="text-center text-muted-foreground py-8">Aucune donnée disponible</div>;
+    }
+
+    let cumulativePercentage = 0;
+    const radius = 80;
+    const strokeWidth = 16;
+
+    return (
+      <div className="relative w-48 h-48">
+        <svg width="192" height="192" className="transform -rotate-90">
+          <circle
+            cx="96"
+            cy="96"
+            r={radius}
+            fill="none"
+            stroke="#e5e7eb"
+            strokeWidth={strokeWidth}
+          />
+          {dataArray.map((item, index) => {
+            const circumference = 2 * Math.PI * radius;
+            const strokeDasharray = circumference;
+            const strokeDashoffset = circumference - (circumference * item.percentage) / 100;
+            const rotation = (cumulativePercentage * 360) / 100;
+            
+            cumulativePercentage += item.percentage;
+
+            return (
+              <circle
+                key={item.type}
+                cx="96"
+                cy="96"
+                r={radius}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={strokeWidth}
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                style={{
+                  transformOrigin: '96px 96px',
+                  transform: `rotate(${rotation}deg)`
+                }}
+                className="transition-all duration-500"
+              />
+            );
+          })}
+        </svg>
+        
+        {/* Centre du graphique avec total */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <div className="text-xs text-muted-foreground">Total</div>
+          <div className="text-lg font-bold text-center">
+            {totalAmount.toLocaleString('fr-FR', { 
+              minimumFractionDigits: 0, 
+              maximumFractionDigits: 0, 
+              useGrouping: true 
+            })}
+          </div>
+          <div className="text-xs text-muted-foreground">FCFA</div>
+        </div>
+      </div>
+    );
+  }, [chartType, chartMode, getFilteredExpenses, expenseCategories, products, getChartData]);
 
   return (
     <div className="p-6 space-y-6">
@@ -1105,11 +1357,11 @@ export default function Expenses() {
               {user?.role === 'admin' ? (
                 <div className="flex gap-2 overflow-x-auto pb-2 hide-scrollbar">
                   <div className="flex items-center space-x-2">
-                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'today' ? 'default' : 'outline'} onClick={async () => { setFilterOption('today'); const db = await getDB(); loadExpensesForRange(db, 'today'); }}>Aujourd'hui</Button>
-                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'yesterday' ? 'default' : 'outline'} onClick={async () => { setFilterOption('yesterday'); const db = await getDB(); loadExpensesForRange(db, 'yesterday'); }}>Hier</Button>
-                    <Button className="min-w-[110px]" size="sm" variant={filterOption === 'thisWeek' ? 'default' : 'outline'} onClick={async () => { setFilterOption('thisWeek'); const db = await getDB(); loadExpensesForRange(db, 'thisWeek'); }}>Cette semaine</Button>
-                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'thisMonth' ? 'default' : 'outline'} onClick={async () => { setFilterOption('thisMonth'); const db = await getDB(); loadExpensesForRange(db, 'thisMonth'); }}>Ce mois</Button>
-                    <Button className="min-w-[110px]" size="sm" variant={filterOption === 'thisYear' ? 'default' : 'outline'} onClick={async () => { setFilterOption('thisYear'); const db = await getDB(); loadExpensesForRange(db, 'thisYear'); }}>Cette année</Button>
+                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'today' ? 'default' : 'outline'} onClick={() => handleFilterOptionChange('today')}>Aujourd'hui</Button>
+                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'yesterday' ? 'default' : 'outline'} onClick={() => handleFilterOptionChange('yesterday')}>Hier</Button>
+                    <Button className="min-w-[110px]" size="sm" variant={filterOption === 'thisWeek' ? 'default' : 'outline'} onClick={() => handleFilterOptionChange('thisWeek')}>Cette semaine</Button>
+                    <Button className="min-w-[90px]" size="sm" variant={filterOption === 'thisMonth' ? 'default' : 'outline'} onClick={() => handleFilterOptionChange('thisMonth')}>Ce mois</Button>
+                    <Button className="min-w-[110px]" size="sm" variant={filterOption === 'thisYear' ? 'default' : 'outline'} onClick={() => handleFilterOptionChange('thisYear')}>Cette année</Button>
                     <Button className="min-w-[110px]" size="sm" variant={filterOption === 'custom' ? 'default' : 'outline'} onClick={() => setFilterOption('custom')}>Personnalisé</Button>
                   </div>
                 </div>
@@ -1165,12 +1417,12 @@ export default function Expenses() {
                   <Input
                     placeholder="Rechercher par nom, description, montant, produit ou catégorie..."
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={handleSearchChange}
                     className="w-full"
                   />
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  <Select value={typeFilter} onValueChange={(value: 'all' | 'direct' | 'indirect' | 'operational') => setTypeFilter(value)}>
+                  <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
                     <SelectTrigger className="w-40">
                       <SelectValue placeholder="Type" />
                     </SelectTrigger>
@@ -1204,7 +1456,7 @@ export default function Expenses() {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <CardTitle>Répartition des Dépenses</CardTitle>
                 <div className="flex gap-2">
-                  <Select value={chartMode} onValueChange={(value: 'type' | 'category') => setChartMode(value)}>
+                  <Select value={chartMode} onValueChange={handleChartModeChange}>
                     <SelectTrigger className="w-36">
                       <SelectValue />
                     </SelectTrigger>
@@ -1213,7 +1465,7 @@ export default function Expenses() {
                       <SelectItem value="category">Par catégorie</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select value={chartType} onValueChange={(value: 'pie' | 'bar') => setChartType(value)}>
+                  <Select value={chartType} onValueChange={handleChartTypeChange}>
                     <SelectTrigger className="w-36">
                       <SelectValue />
                     </SelectTrigger>
@@ -1229,190 +1481,14 @@ export default function Expenses() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Graphique */}
                 <div className="flex items-center justify-center">
-                  {(() => {
-                    const chartResult = getChartData();
-                    let totalAmount = 0;
-                    let dataArray: Array<{ type: string, label: string, amount: number, count: number, percentage: number, color: string }> = [];
-                    
-                    if (chartMode === 'type') {
-                      const totals = calculateTotalsForChart();
-                      totalAmount = totals.direct.total + totals.indirect.total + totals.operational.total;
-                    
-                      dataArray = [
-                        { 
-                          type: 'direct', 
-                          label: 'Directes', 
-                          amount: totals.direct.total,
-                          count: totals.direct.count,
-                          percentage: totalAmount > 0 ? Math.round((totals.direct.total / totalAmount) * 100) : 0,
-                          color: '#3b82f6'
-                        },
-                        { 
-                          type: 'indirect', 
-                          label: 'Indirectes', 
-                          amount: totals.indirect.total,
-                          count: totals.indirect.count,
-                          percentage: totalAmount > 0 ? Math.round((totals.indirect.total / totalAmount) * 100) : 0,
-                          color: '#10b981'
-                        },
-                        { 
-                          type: 'operational', 
-                          label: 'Opérationnelles', 
-                          amount: totals.operational.total,
-                          count: totals.operational.count,
-                          percentage: totalAmount > 0 ? Math.round((totals.operational.total / totalAmount) * 100) : 0,
-                          color: '#f59e0b'
-                        }
-                      ].filter(item => item.amount > 0);
-                    } else {
-                      // Mode par catégories
-                      const categoryEntries = Object.entries(chartResult.data);
-                      totalAmount = categoryEntries.reduce((sum, [, data]) => sum + (data as any).total, 0);
-                      
-                      const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#f97316', '#06b6d4', '#84cc16'];
-                      
-                      dataArray = categoryEntries
-                        .filter(([, data]) => (data as any).total > 0)
-                        .sort(([, a], [, b]) => (b as any).total - (a as any).total) // Trier par montant décroissant
-                        .map(([key, data], index) => ({
-                          type: key,
-                          label: (data as any).name,
-                          amount: (data as any).total,
-                          count: (data as any).count,
-                          percentage: totalAmount > 0 ? Math.round(((data as any).total / totalAmount) * 100) : 0,
-                          color: colors[index % colors.length]
-                        }));
-                    }
-                    
-                    if (totalAmount === 0) {
-                      return (
-                        <div className="flex items-center justify-center w-48 h-48 rounded-full border-2 border-dashed border-gray-300">
-                          <span className="text-muted-foreground text-sm">Aucune donnée</span>
-                        </div>
-                      );
-                    }
-
-                    if (chartType === 'bar') {
-                      // Graphique en barres horizontales
-                      const maxAmount = Math.max(...dataArray.map(item => item.amount));
-                      
-                      return (
-                        <div className="w-full space-y-3">
-                          {dataArray.map((item, index) => (
-                            <div key={item.type} className="space-y-1">
-                              <div className="flex items-center justify-between text-sm">
-                                <div className="flex items-center gap-2">
-                                  <div 
-                                    className="w-3 h-3 rounded-full flex-shrink-0"
-                                    style={{ backgroundColor: item.color }}
-                                  ></div>
-                                  <span className="font-medium truncate">{item.label}</span>
-                                </div>
-                                <div className="text-right flex-shrink-0 ml-2">
-                                  <div className="font-bold">
-                                    {item.amount.toLocaleString('fr-FR', { 
-                                      minimumFractionDigits: 0, 
-                                      maximumFractionDigits: 0, 
-                                      useGrouping: true 
-                                    })} FCFA
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {item.percentage}% • {item.count} dépense{item.count > 1 ? 's' : ''}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="w-full bg-gray-200 rounded-full h-2">
-                                <div 
-                                  className="h-2 rounded-full transition-all duration-500"
-                                  style={{ 
-                                    backgroundColor: item.color,
-                                    width: `${(item.amount / maxAmount) * 100}%` 
-                                  }}
-                                ></div>
-                              </div>
-                            </div>
-                          ))}
-                          <div className="mt-4 pt-4 border-t text-center">
-                            <div className="text-sm text-muted-foreground">Total</div>
-                            <div className="text-lg font-bold">
-                              {totalAmount.toLocaleString('fr-FR', { 
-                                minimumFractionDigits: 0, 
-                                maximumFractionDigits: 0, 
-                                useGrouping: true 
-                              })} FCFA
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    let cumulativePercentage = 0;
-                    const radius = 80;
-                    const strokeWidth = 16;
-
-                    return (
-                      <div className="relative w-48 h-48">
-                        <svg width="192" height="192" className="transform -rotate-90">
-                          <circle
-                            cx="96"
-                            cy="96"
-                            r={radius}
-                            fill="none"
-                            stroke="#e5e7eb"
-                            strokeWidth={strokeWidth}
-                          />
-                          {dataArray.map((item, index) => {
-                            const circumference = 2 * Math.PI * radius;
-                            const strokeDasharray = circumference;
-                            const strokeDashoffset = circumference - (circumference * item.percentage) / 100;
-                            const rotation = (cumulativePercentage * 360) / 100;
-                            
-                            cumulativePercentage += item.percentage;
-
-                            return (
-                              <circle
-                                key={item.type}
-                                cx="96"
-                                cy="96"
-                                r={radius}
-                                fill="none"
-                                stroke={item.color}
-                                strokeWidth={strokeWidth}
-                                strokeDasharray={strokeDasharray}
-                                strokeDashoffset={strokeDashoffset}
-                                strokeLinecap="round"
-                                style={{
-                                  transformOrigin: '96px 96px',
-                                  transform: `rotate(${rotation}deg)`
-                                }}
-                                className="transition-all duration-500"
-                              />
-                            );
-                          })}
-                        </svg>
-                        
-                        {/* Centre du graphique avec total */}
-                        <div className="absolute inset-0 flex flex-col items-center justify-center">
-                          <div className="text-xs text-muted-foreground">Total</div>
-                          <div className="text-lg font-bold text-center">
-                            {totalAmount.toLocaleString('fr-FR', { 
-                              minimumFractionDigits: 0, 
-                              maximumFractionDigits: 0, 
-                              useGrouping: true 
-                            })}
-                          </div>
-                          <div className="text-xs text-muted-foreground">FCFA</div>
-                        </div>
-                      </div>
-                    );
-                  })()}
+                  {memoizedChartComponent}
                 </div>
 
                 {/* Légende et détails */}
                 {chartType === 'pie' && (
                 <div className="space-y-4">
                   {(() => {
-                    const chartResult = getChartData();
+                    const chartResult = getChartData;
                     let totalAmount = 0;
                     let legendData: Array<{ type: string, label: string, amount: number, count: number, percentage: number, color: string }> = [];
 
@@ -1507,7 +1583,7 @@ export default function Expenses() {
               <div className="flex items-center justify-between">
                 <CardTitle>Historique des Dépenses</CardTitle>
                 <div className="text-sm text-muted-foreground">
-                  {getFilteredExpenses().length} résultat{getFilteredExpenses().length > 1 ? 's' : ''}
+                  {getFilteredExpenses.length} résultat{getFilteredExpenses.length > 1 ? 's' : ''}
                 </div>
               </div>
             </CardHeader>
@@ -1528,13 +1604,20 @@ export default function Expenses() {
                 </Card>
               ))}
             </div>
-          ) : getFilteredExpenses().length === 0 ? (
+          ) : getFilteredExpenses.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               {filteredExpenses.length === 0 ? 'Aucune dépense enregistrée' : 'Aucune dépense ne correspond aux critères de recherche'}
             </div>
           ) : (
-            <div className="space-y-3">
-              {getFilteredExpenses().map(expense => (
+            <div>
+              <div className="mb-4 text-sm text-muted-foreground">
+                Affichage: {getFilteredExpenses.length} / {filteredExpenses.length} • Chargé: {loadedCount} • HasMore: {hasMore ? 'Oui' : 'Non'}
+              </div>
+              <div 
+                ref={listScrollRef}
+                className="space-y-3 max-h-[600px] overflow-y-auto"
+              >
+              {getFilteredExpenses.map(expense => (
                 <Card key={expense.id} className="border-l-4 border-l-primary">
                   <CardContent className="p-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1591,6 +1674,12 @@ export default function Expenses() {
                   </CardContent>
                 </Card>
               ))}
+              {loadingMore && (
+                <div className="text-center py-4">
+                  <div className="text-sm text-muted-foreground">Chargement...</div>
+                </div>
+              )}
+              </div>
             </div>
           )}
         </CardContent>

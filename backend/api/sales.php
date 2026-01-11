@@ -18,24 +18,52 @@ $method = $_SERVER['REQUEST_METHOD'];
 switch ($method) {
     case 'GET':
         $storeId = $_GET['storeId'] ?? null;
+        $all = isset($_GET['all']) && $_GET['all'] === '1'; // Désactiver la pagination si all=1
+        $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
+        $limit = isset($_GET['limit']) ? intval($_GET['limit']) : 25;
         $sql = 'SELECT * FROM sales';
+        $params = [];
         if ($storeId) {
             $sql .= ' WHERE storeId = ?';
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$storeId]);
-        } else {
-            $stmt = $pdo->query($sql);
+            $params[] = $storeId;
         }
-        $sales = $stmt->fetchAll();
+        $sql .= ' ORDER BY createdAt DESC';
         
+        // Ajouter la pagination seulement si all=1 n'est pas passé
+        if (!$all) {
+            $sql .= ' LIMIT ? OFFSET ?';
+            $params[] = $limit;
+            $params[] = $offset;
+        }
+        
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $sales = $stmt->fetchAll();
+
         // Charger les items pour chaque vente
         foreach ($sales as &$sale) {
             $itemsStmt = $pdo->prepare('SELECT * FROM sale_items WHERE saleId = ?');
             $itemsStmt->execute([$sale['id']]);
             $sale['items'] = $itemsStmt->fetchAll();
         }
-        
-        echo json_encode($sales);
+
+        // Compter le total pour la pagination
+        $countSql = 'SELECT COUNT(*) as total FROM sales';
+        $countParams = [];
+        if ($storeId) {
+            $countSql .= ' WHERE storeId = ?';
+            $countParams[] = $storeId;
+        }
+        $countStmt = $pdo->prepare($countSql);
+        $countStmt->execute($countParams);
+        $total = $countStmt->fetchColumn();
+
+        echo json_encode([
+            'data' => $sales,
+            'total' => intval($total),
+            'offset' => $offset,
+            'limit' => $limit
+        ]);
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
@@ -83,6 +111,35 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        
+        // Vérifier si c'est un remboursement (refunded = true et refundedAt défini)
+        $isRefund = isset($data['refunded']) && $data['refunded'] === true && isset($data['refundedAt']);
+        
+        // Si c'est un remboursement, restaurer le stock des produits
+        if ($isRefund && isset($data['items']) && is_array($data['items'])) {
+            foreach ($data['items'] as $item) {
+                try {
+                    // Récupérer le stock actuel du produit pour ce magasin
+                    $stockStmt = $pdo->prepare('SELECT stock FROM product_stock WHERE productId = ? AND storeId = ?');
+                    $stockStmt->execute([$item['productId'], $data['storeId']]);
+                    $currentStock = $stockStmt->fetchColumn();
+                    
+                    if ($currentStock !== false) {
+                        // Le produit a un suivi de stock, restaurer la quantité vendue
+                        $newStock = intval($currentStock) + intval($item['quantity']);
+                        $updateStockStmt = $pdo->prepare('UPDATE product_stock SET stock = ? WHERE productId = ? AND storeId = ?');
+                        $updateStockStmt->execute([$newStock, $item['productId'], $data['storeId']]);
+                        
+                        error_log("Stock restauré pour produit {$item['productId']}: {$currentStock} + {$item['quantity']} = {$newStock}");
+                    } else {
+                        error_log("Produit {$item['productId']} sans suivi de stock - pas de restauration");
+                    }
+                } catch (Exception $e) {
+                    error_log("Erreur lors de la restauration du stock pour le produit {$item['productId']}: " . $e->getMessage());
+                }
+            }
+        }
+        
         $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
@@ -127,7 +184,13 @@ switch ($method) {
             }
         }
         
-        echo json_encode(['success' => true]);
+        $response = ['success' => true];
+        if ($isRefund) {
+            $response['stockRestored'] = true;
+            $response['message'] = 'Vente remboursée et stock restauré';
+        }
+        
+        echo json_encode($response);
         break;
     case 'DELETE':
         $id = $_GET['id'] ?? null;

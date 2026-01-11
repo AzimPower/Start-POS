@@ -335,7 +335,7 @@ const sendLoginNotificationEmail = async (userData: User) => {
     </div>
     <div class="info-row">
       <span class="info-label">Rôle :&nbsp;</span>
-      <span class="info-value">${userData.role === 'admin' ? '👨‍💼 Administrateur' : userData.role === 'cashier' ? '💰 Caissier' : '🔧 Super Admin'}</span>
+      <span class="info-value">${userData.role === 'admin' ? '👨‍💼 Administrateur' : userData.role === 'cashier' ? '💰 Caissier' : userData.role === 'manager' ? '👥 Gestionnaire' : '🔧 Super Admin'}</span>
     </div>
     <div class="info-row">
       <span class="info-label">Téléphone :&nbsp;</span>
@@ -396,15 +396,17 @@ interface User {
   username: string;
   phone: string; // Téléphone unique pour la connexion
   email?: string; // Email optionnel
-  role: 'super_admin' | 'admin' | 'cashier';
+  role: 'super_admin' | 'admin' | 'cashier' | 'manager';
   storeId: string;
   storeIds?: string[]; // liste des magasins liés à l'utilisateur
   active?: boolean;
+  pinEnabled?: boolean; // Activation du code PIN
 }
 
 interface UserRecord extends User {
   password?: string;
   pin?: string;
+  pinEnabled?: boolean;
   createdAt?: number;
   updatedAt?: string | number;
 }
@@ -458,27 +460,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (storedUser) {
           try {
             const parsed = JSON.parse(storedUser);
-            // On cold start, restore the user object but mark the session as locked.
-            // Keeping `user` defined prevents pages from unmounting or losing local
-            // component state; `isLocked` controls access and shows the PIN overlay.
+            
+            // Check if user has PIN enabled before locking
+            const db = await getDB();
+            let userRecord = await db.get('users', parsed.id) as any;
+            
+            // For existing users without pinEnabled field, initialize it to false
+            let hasPinEnabled = false;
+            if (userRecord) {
+              // If pinEnabled is explicitly undefined, null, or not present, set it to false in the database
+              if (userRecord.pinEnabled === undefined || userRecord.pinEnabled === null || !('pinEnabled' in userRecord)) {
+                console.log('🔓 [PIN] Initializing pinEnabled to false for user:', parsed.username);
+                try {
+                  const updated = { ...userRecord, pinEnabled: false };
+                  await db.put('users', updated);
+                  userRecord = updated; // Use the updated record
+                  hasPinEnabled = false;
+                } catch (e) {
+                  console.warn('Failed to initialize pinEnabled field:', e);
+                  hasPinEnabled = false;
+                }
+              } else {
+                // Check explicitly for true or 1 (anything else is considered disabled)
+                hasPinEnabled = userRecord.pinEnabled === true || userRecord.pinEnabled === 1;
+                console.log('🔓 [PIN] User PIN enabled status:', hasPinEnabled, 'value:', userRecord.pinEnabled);
+              }
+            } else {
+              console.warn('⚠️ [PIN] No user record found in DB for:', parsed.id);
+              hasPinEnabled = false;
+            }
+            
+            // On cold start, restore the user object
             setUser(parsed);
             setPendingUser(null);
-            // Activate PIN mode: set flag and proactively close existing dialogs so
-            // they don't intercept the first PIN click. Also set body attribute
-            // so CSS can immediately disable pointer-events on underlying overlays.
-            try {
-              document.body.setAttribute('data-pin-active', 'true');
-            } catch (e) {}
-            try {
-              const REGISTRY_KEY = '__radix_dialog_registry_v1';
-              const reg = (window as any)[REGISTRY_KEY];
-              if (reg && typeof reg.forEach === 'function') {
-                reg.forEach((entry: any) => {
-                  try { if (entry && typeof entry.forceClose === 'function') entry.forceClose(); } catch (e) {}
-                });
-              }
-            } catch (e) {}
-            setIsLocked(true);
+            
+            // Only lock if PIN is enabled for this user
+            if (hasPinEnabled) {
+              console.log('🔒 [PIN] Locking session - PIN is enabled');
+              // Activate PIN mode: set flag and proactively close existing dialogs so
+              // they don't intercept the first PIN click. Also set body attribute
+              // so CSS can immediately disable pointer-events on underlying overlays.
+              try {
+                document.body.setAttribute('data-pin-active', 'true');
+              } catch (e) {}
+              try {
+                const REGISTRY_KEY = '__radix_dialog_registry_v1';
+                const reg = (window as any)[REGISTRY_KEY];
+                if (reg && typeof reg.forEach === 'function') {
+                  reg.forEach((entry: any) => {
+                    try { if (entry && typeof entry.forceClose === 'function') entry.forceClose(); } catch (e) {}
+                  });
+                }
+              } catch (e) {}
+              setIsLocked(true);
+            } else {
+              console.log('✅ [PIN] Session unlocked - PIN is disabled');
+              // PIN not enabled, don't lock the session
+              setIsLocked(false);
+            }
+            
             // ensure localStorage mirror exists for PIN/visibility flows
             try {
               localStorage.setItem('pos-user', JSON.stringify(parsed));
@@ -507,193 +547,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const raw = String(phone || '').replace(/[^0-9+]/g, '');
       if (raw.startsWith('+')) candidatePhones.push(raw);
       else candidatePhones.push(`+226${raw}`);
-      // also include raw digits
       candidatePhones.push(raw.replace(/^\+/, ''));
 
-      let userRecord: UserRecord | undefined = undefined;
-  for (const p of candidatePhones) {
-        try {
-          // db.getFromIndex may return unknown; cast to UserRecord
-          userRecord = (await db.getFromIndex('users', 'by-phone', p)) as UserRecord | undefined;
-          if (userRecord) break;
-        } catch (e) {
-          console.warn('getFromIndex error', e);
-        }
-    }
-    // Check backend reachability once and reuse the result for subsequent decisions
-  const backendIsUp = await backendAvailable();
-  if (userRecord && userRecord.password === password) {
-        // Vérifier si l'utilisateur est actif
-        if (userRecord.active === false) {
-          return false; // Utilisateur désactivé
-        }
-  // If backend is reachable, verify coherence with backend user (ensure server didn't change password/active)
-  if (backendIsUp) {
-          try {
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
-            if (res.ok) {
-              const remoteUsers = (await res.json()) as UserRecord[];
-              const remote = remoteUsers.find((u) => candidatePhones.includes(String(u.phone || '')));
-              if (remote) {
-                // If server record differs (password or active), require re-login online
-                if (remote.active === false || remote.password !== userRecord.password || (remote.updatedAt && userRecord.updatedAt && remote.updatedAt !== userRecord.updatedAt)) {
-                  localStorage.setItem('pos-login-last-error', 'Votre compte a été modifié côté serveur. Veuillez vous reconnecter en ligne.');
-                  return false;
-                }
-              }
-            }
-          } catch (e) {
-            console.warn('users fetch error (coherence check)', e);
-          }
-        }
+      const backendIsUp = await backendAvailable();
+      let remoteUser: UserRecord | undefined = undefined;
+      let localUser: UserRecord | undefined = undefined;
 
-        const userData = {
-          id: userRecord.id,
-          username: userRecord.username,
-          phone: userRecord.phone,
-          email: userRecord.email,
-          role: userRecord.role,
-          storeId: userRecord.storeId,
-          storeIds: (userRecord as any).storeIds || (userRecord.storeId ? [userRecord.storeId] : []),
-          active: userRecord.active,
-        };
-  // successful local login (either offline or coherence verified)
-  // persist user for future PIN-based unlocks
-  setUser(userData);
-  setPendingUser(null);
-  // interactive login should unlock the session immediately
-  setIsLocked(false);
-  try {
-    await secureStorage.setItem('pos-user', JSON.stringify(userData));
-    try { localStorage.setItem('pos-user', JSON.stringify(userData)); } catch (e) {}
-  } catch (e) {
-    console.warn('secureStorage set pos-user error', e);
-    try { localStorage.setItem('pos-user', JSON.stringify(userData)); } catch (ee) {}
-  }
-  // reset pin failures and locked flag for this user
-  try {
-    localStorage.removeItem(`pos-pin-fails-${userData.id}`);
-    localStorage.removeItem(`pos-pin-locked-${userData.id}`);
-  } catch (e) {
-    console.warn('clear pin flags error', e);
-  }
-  setPinFailState({ userId: userData.id, count: 0 });
-  localStorage.removeItem('pos-login-last-error');
-  
-  // Nettoyer le cache admin avant de le mettre à jour
-  try {
-    await cleanupAdminCache();
-  } catch (e) {
-    console.warn('⚠️ [AUTH] Échec nettoyage cache admin:', e);
-  }
-
-  // Mise en cache de l'admin pour les futurs emails (important pour fonctionnement hors ligne)
-  if (backendIsUp) {
-    try {
-      const cacheResult = await cacheAdminData(userData.storeId);
-      if (cacheResult) {
-        const adminCount = (cacheResult as any)?.allStoreAdmins?.length || 1;
-        console.log('✅ [AUTH] Cache admins créé avec succès:', adminCount, 'admins');
-      }
-    } catch (e) {
-      console.warn('⚠️ [AUTH] Échec mise en cache admins (continuera sans cache):', e);
-      // Ne pas bloquer la connexion si le cache échoue
-    }
-  } else {
-    console.log('📵 [AUTH] Backend inaccessible, cache admins non mis à jour');
-  }
-  
-  // Envoi automatique d'un email à l'admin après connexion réussie
-  try {
-    await sendLoginNotificationEmail(userData);
-  } catch (e) {
-    console.warn('Failed to send login notification email:', e);
-  }
-  
-  // If backend is reachable, refresh user record from backend to get up-to-date PIN
-  if (backendIsUp) {
-          try {
-            const localDb = await getDB();
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
-            if (res.ok) {
-              const remoteUsers = (await res.json()) as UserRecord[];
-              const remote = remoteUsers.find((u) => String(u.phone || '') === String(userData.phone));
-              if (remote) {
-                try {
-                  const toSave = {
-                    id: remote.id,
-                    username: remote.username,
-                    phone: remote.phone,
-                    password: remote.password || '',
-                    pin: remote.pin || '',
-                    role: remote.role,
-                    storeId: remote.storeId,
-                    storeIds: (remote as any).storeIds || (remote.storeId ? [remote.storeId] : []),
-                    active: remote.active,
-                    createdAt: (remote.createdAt as number) || Date.now(),
-                  } as any;
-                  await localDb.put('users', toSave);
-                } catch (e) {
-                  console.warn('put remote user to db error', e);
-                }
-                // after syncing remote user, ensure local PIN lock state is cleared
-                try {
-                  localStorage.removeItem(`pos-pin-fails-${userData.id}`);
-                  localStorage.removeItem(`pos-pin-locked-${userData.id}`);
-                } catch (e) {
-                  console.warn('clear pin flags after sync error', e);
-                }
-                setPinFailState({ userId: userData.id, count: 0 });
-              }
-            }
-          } catch (e) {
-            console.warn('refresh remote user error', e);
-          }
-        }
-        return true;
-      }
-
-      // If no local user, require backend access for first-time login
-      if (!userRecord && !backendIsUp) {
-        localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
-        return false;
-      }
-
-      // Try to verify against backend when reachable
-      if (!userRecord && backendIsUp) {
+      // 1. Toujours prioriser la vérification sur le serveur si possible
+      if (backendIsUp) {
         try {
           const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
           if (res.ok) {
-            const backendUsers = (await res.json()) as UserRecord[];
-            const found = backendUsers.find((u) => candidatePhones.includes(String(u.phone || '')) && u.password === password);
-            if (found) {
+            const remoteUsers = (await res.json()) as UserRecord[];
+            remoteUser = remoteUsers.find((u) => candidatePhones.includes(String(u.phone || '')) && u.password === password);
+            if (remoteUser) {
               // persist into local DB for future offline login
               try {
                 const toSave = {
-                  id: found.id,
-                  username: found.username,
-                  phone: found.phone,
-                  password: found.password || '',
-                  pin: found.pin || '',
-                  role: found.role,
-                  storeId: found.storeId,
-                  storeIds: (found as any).storeIds || (found.storeId ? [found.storeId] : []),
-                  active: found.active,
-                  createdAt: found.createdAt || Date.now(),
+                  id: remoteUser.id,
+                  username: remoteUser.username,
+                  phone: remoteUser.phone,
+                  password: remoteUser.password || '',
+                  pin: remoteUser.pin || '',
+                  pinEnabled: (remoteUser as any).pinEnabled || false,
+                  role: remoteUser.role,
+                  storeId: remoteUser.storeId,
+                  storeIds: (remoteUser as any).storeIds || (remoteUser.storeId ? [remoteUser.storeId] : []),
+                  active: remoteUser.active,
+                  createdAt: (remoteUser.createdAt as number) || Date.now(),
+                  updatedAt: remoteUser.updatedAt || Date.now(),
                 } as any;
                 await db.put('users', toSave);
               } catch (e) {
-                console.warn('put found user to db error', e);
+                console.warn('put remote user to db error', e);
               }
               const userData = {
-                id: found.id,
-                username: found.username,
-                phone: found.phone,
-                email: found.email,
-                role: found.role,
-                storeId: found.storeId,
-                storeIds: (found as any).storeIds || (found.storeId ? [found.storeId] : []),
-                active: found.active,
+                id: remoteUser.id,
+                username: remoteUser.username,
+                phone: remoteUser.phone,
+                email: remoteUser.email,
+                role: remoteUser.role,
+                storeId: remoteUser.storeId,
+                storeIds: (remoteUser as any).storeIds || (remoteUser.storeId ? [remoteUser.storeId] : []),
+                active: remoteUser.active,
+                pinEnabled: (remoteUser as any).pinEnabled || false,
               };
               setUser(userData);
               setPendingUser(null);
@@ -714,28 +611,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               setPinFailState({ userId: userData.id, count: 0 });
               localStorage.removeItem('pos-login-last-error');
-              
               // Mise en cache de l'admin pour les futurs emails
               try {
-                // Mettre en cache les admins du store lors de la reconnexion
                 const cacheResult = await cacheAdminData(userData.storeId);
                 if (cacheResult) {
                   const adminCount = (cacheResult as any)?.allStoreAdmins?.length || 1;
-                  console.log('✅ [AUTH] Cache admins rafraìhi lors reconnexion:', adminCount, 'admins');
+                  console.log('✅ [AUTH] Cache admins rafraichi lors reconnexion:', adminCount, 'admins');
                 } else {
                   console.log('⚠️ [AUTH] Pas de mise à jour cache admins lors reconnexion');
                 }
               } catch (cacheError) {
                 console.warn('⚠️ [AUTH] Échec cache admins lors reconnexion:', cacheError);
               }
-              
               // Envoi automatique d'un email à l'admin après connexion réussie
               try {
                 await sendLoginNotificationEmail(userData);
               } catch (e) {
                 console.warn('Failed to send login notification email:', e);
               }
-              
               return true;
             }
           }
@@ -744,8 +637,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // default: failed login
-      localStorage.setItem('pos-login-last-error', 'Numéro de téléphone ou mot de passe incorrect');
+      // 2. Si offline ou si le backend n'a pas validé, tenter la connexion locale (hors-ligne)
+      for (const p of candidatePhones) {
+        try {
+          localUser = (await db.getFromIndex('users', 'by-phone', p)) as UserRecord | undefined;
+          if (localUser && localUser.password === password) {
+            if (localUser.active === false) {
+              return false; // Utilisateur désactivé
+            }
+            // login local (hors-ligne)
+            const userData = {
+              id: localUser.id,
+              username: localUser.username,
+              phone: localUser.phone,
+              email: localUser.email,
+              role: localUser.role,
+              storeId: localUser.storeId,
+              storeIds: (localUser as any).storeIds || (localUser.storeId ? [localUser.storeId] : []),
+              active: localUser.active,
+              pinEnabled: (localUser as any).pinEnabled || false,
+            };
+            setUser(userData);
+            setPendingUser(null);
+            setIsLocked(false);
+            try {
+              await secureStorage.setItem('pos-user', JSON.stringify(userData));
+              try { localStorage.setItem('pos-user', JSON.stringify(userData)); } catch (e) {}
+            } catch (e) {
+              console.warn('secureStorage set pos-user error', e);
+              try { localStorage.setItem('pos-user', JSON.stringify(userData)); } catch (ee) {}
+            }
+            // reset pin failures and locked flag for this user
+            try {
+              localStorage.removeItem(`pos-pin-fails-${userData.id}`);
+              localStorage.removeItem(`pos-pin-locked-${userData.id}`);
+            } catch (e) {
+              console.warn('clear pin flags error', e);
+            }
+            setPinFailState({ userId: userData.id, count: 0 });
+            localStorage.removeItem('pos-login-last-error');
+            // Mise en cache de l'admin pour les futurs emails (offline)
+            try {
+              await cleanupAdminCache();
+            } catch (e) {
+              console.warn('⚠️ [AUTH] Échec nettoyage cache admin:', e);
+            }
+            return true;
+          }
+        } catch (e) {
+          console.warn('getFromIndex error', e);
+        }
+      }
+
+      // Si aucune méthode n'a fonctionné
+      if (!backendIsUp) {
+        localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
+      } else {
+        localStorage.setItem('pos-login-last-error', 'Numéro de téléphone ou mot de passe incorrect');
+      }
       return false;
     } catch (error) {
       console.error('Login error:', error);
@@ -825,6 +774,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPinFailState({ count: 0 });
         return false;
       }
+      
+      // Check if PIN is enabled for this user
+      // Treat undefined, null, 0, and false as "PIN disabled"
+      const isPinEnabled = record.pinEnabled === true || record.pinEnabled === 1;
+      console.log('🔓 [verifyPin] PIN enabled status:', isPinEnabled, 'value:', record.pinEnabled);
+      if (!isPinEnabled) {
+        console.log('✅ [verifyPin] PIN disabled - auto-unlocking');
+        // PIN not enabled, automatically unlock
+        setUser(parsed);
+        setPendingUser(null);
+        setIsLocked(false);
+        return true;
+      }
+      
+      console.log('🔐 [verifyPin] PIN enabled - checking PIN...');
+      
   const storedPinRaw = String(record.pin || '').trim();
   const inputPinRaw = String(pin || '').trim();
   const storedDigits = storedPinRaw.replace(/\D/g, '');
@@ -914,18 +879,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Auto-lock on page visibility change / blur: when user switches app, require PIN again
   useEffect(() => {
-    const handleVisibility = () => {
+    const handleVisibility = async () => {
       // Respect a temporary suppression flag (e.g., file picker/upload flows)
       try {
         if ((window as any).__suppressPinLock) return;
       } catch (e) {}
       if (document.hidden) {
-        // move to pending state (require PIN to unlock)
-        // keep the user object but mark session as locked so overlay appears
+        // Check if PIN is enabled before locking
         const stored = localStorage.getItem('pos-user');
         if (stored) {
           try {
             const parsed = JSON.parse(stored);
+            
+            // Check if user has PIN enabled
+            const db = await getDB();
+            const userRecord = await db.get('users', parsed.id) as any;
+            const isPinEnabled = userRecord && (userRecord.pinEnabled === true || userRecord.pinEnabled === 1);
+            
+            console.log('👁️ [Visibility] Tab hidden - PIN enabled:', isPinEnabled);
+            
+            // Only lock if PIN is enabled
+            if (!isPinEnabled) {
+              console.log('✅ [Visibility] PIN disabled - not locking');
+              return;
+            }
+            
+            console.log('🔒 [Visibility] Locking session');
+            // move to pending state (require PIN to unlock)
+            // keep the user object but mark session as locked so overlay appears
             setUser(parsed);
             setPendingUser(null);
             // Activate PIN mode early: set body attribute and force-close any dialogs
@@ -942,7 +923,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
             } catch (e) {}
             setIsLocked(true);
-          } catch (e) {}
+          } catch (e) {
+            console.warn('Error in visibility handler:', e);
+          }
         }
       }
     };

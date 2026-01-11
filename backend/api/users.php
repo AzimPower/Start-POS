@@ -18,7 +18,7 @@ $method = $_SERVER['REQUEST_METHOD'];
 switch ($method) {
     case 'GET':
         // Récupérer tous les utilisateurs et leurs magasins (storeIds)
-        $stmt = $pdo->query('SELECT id, username, phone, email, password, pin, role, storeId, active, createdAt FROM users');
+        $stmt = $pdo->query('SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt FROM users');
         $users = $stmt->fetchAll();
         foreach ($users as &$u) {
             try {
@@ -35,7 +35,7 @@ switch ($method) {
     case 'POST':
         // Ajouter un utilisateur
         $data = json_decode(file_get_contents('php://input'), true);
-        $sql = 'INSERT INTO users (id, username, phone, email, password, pin, role, storeId, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $sql = 'INSERT INTO users (id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
         // storeId kept for backward compatibility: use first storeId if provided
@@ -52,6 +52,7 @@ switch ($method) {
             $data['email'] ?? null,
             $data['password'],
             $data['pin'] ?? null,
+            isset($data['pinEnabled']) ? ($data['pinEnabled'] ? 1 : 0) : 0,
             $data['role'],
             $firstStore,
             $data['active'] ?? true,
@@ -83,7 +84,7 @@ switch ($method) {
     case 'PUT':
         // Modifier un utilisateur
         $data = json_decode(file_get_contents('php://input'), true);
-        $sql = 'UPDATE users SET username=?, phone=?, email=?, password=?, pin=?, role=?, storeId=?, active=?, createdAt=? WHERE id=?';
+        $sql = 'UPDATE users SET username=?, phone=?, email=?, password=?, pin=?, pinEnabled=?, role=?, storeId=?, active=?, createdAt=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
 
         // determine primary store for backward compatibility
@@ -100,6 +101,7 @@ switch ($method) {
             $data['email'] ?? null,
             $data['password'],
             $data['pin'] ?? null,
+            isset($data['pinEnabled']) ? ($data['pinEnabled'] ? 1 : 0) : 0,
             $data['role'],
             $firstStore,
             $data['active'],

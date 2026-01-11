@@ -68,19 +68,19 @@ export default function Layout({ children }: LayoutProps) {
 
   const menuItems = [
   { icon: LayoutDashboard, label: 'Tableau de bord', path: '/dashboard', roles: ['admin', 'super_admin'] },
-  { icon: ShoppingCart, label: 'Vente', path: '/pos', roles: ['admin', 'cashier'] },
-  { icon: Clock, label: 'Services', path: '/shifts', roles: ['admin', 'cashier'] },
-  { icon: FileText, label: 'Reçus', path: '/receipts', roles: ['admin', 'cashier'] },
-  { icon: Users, label: 'Clients', path: '/customers', roles: ['admin', 'cashier'] },
-  { icon: DollarSign, label: 'Dépenses', path: '/expenses', roles: ['admin', 'cashier'] },
-  { icon: AlertTriangle, label: 'Stock', path: '/stock-signals', roles: ['admin', 'cashier'] },
-  { icon: Package, label: 'Produits', path: '/products', roles: ['admin'] },
+  { icon: ShoppingCart, label: 'Vente', path: '/pos', roles: ['admin', 'cashier', 'manager'] },
+  { icon: Clock, label: 'Services', path: '/shifts', roles: ['admin', 'cashier', 'manager'] },
+  { icon: FileText, label: 'Reçus', path: '/receipts', roles: ['admin', 'cashier', 'manager'] },
+  { icon: Users, label: 'Clients', path: '/customers', roles: ['admin', 'cashier', 'manager'] },
+  { icon: DollarSign, label: 'Dépenses', path: '/expenses', roles: ['admin', 'cashier', 'manager'] },
+  { icon: AlertTriangle, label: 'Stock', path: '/stock-signals', roles: ['admin', 'cashier', 'manager'] },
+  { icon: Package, label: 'Produits', path: '/products', roles: ['admin', 'manager'] },
   { icon: Building2, label: 'Catégories', path: '/categories', roles: ['admin', 'super_admin'] },
   { icon: UserCircle, label: 'Utilisateurs', path: '/users', roles: ['admin', 'super_admin'] }, 
   { icon: Store, label: 'Magasins', path: '/stores', roles: ['admin', 'super_admin'] },
   // Ajout gestion des abonnements pour super admin
   { icon: Shield, label: 'Abonnements', path: '/subscriptions', roles: ['super_admin'] },
-  { icon: Menu, label: 'Paramètres', path: '/settings', roles: ['admin', 'cashier'] },
+  { icon: Menu, label: 'Paramètres', path: '/settings', roles: ['admin', 'cashier', 'manager'] },
   ];
 
   const filteredMenu = menuItems.filter(item => item.roles.includes(user?.role || ''));
@@ -101,7 +101,7 @@ export default function Layout({ children }: LayoutProps) {
           <div>
             <h2 className="font-bold text-sidebar-foreground">Système POS</h2>
             <p className="text-xs text-sidebar-foreground/60">
-              {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : 'Caissier'}
+              {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
             </p>
           </div>
         </div>
@@ -156,7 +156,7 @@ export default function Layout({ children }: LayoutProps) {
         <div className="mb-3 p-3 bg-sidebar-accent rounded-lg">
           <p className="text-sm font-medium text-sidebar-foreground">{user?.username}</p>
           <p className="text-xs text-sidebar-foreground/60">
-            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrateur' : 'Caissier'}
+            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrateur' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
           </p>
         </div>
         <Button
