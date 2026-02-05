@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, memo } from 'react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
@@ -103,13 +104,14 @@ interface Sale {
   total: number;
   createdAt: number;
   draft?: boolean;
+  refunded?: boolean;
 }
 
 export default function StockSignals() {
   const { user } = useAuth();
   // treat super_admin as admin for UI purposes
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
-  const { isOnline, manualSync } = useNetwork();
+  const { isOnline, isBackendReachable, manualSync } = useNetwork();
   const [activeStocks, setActiveStocks] = useState<ExpenseAdvanced[]>([]);
   const [completedSignals, setCompletedSignals] = useState<StockSignal[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -642,10 +644,11 @@ export default function StockSignals() {
     
     for (const sale of sales) {
       if (sale.createdAt < adjustedStartDate || sale.createdAt > endDate || sale.draft === true) continue;
-      
+      if (sale.refunded) continue; // Ignorer les ventes remboursées
+
       const items = sale.items;
       if (!items) continue;
-      
+
       for (const item of items) {
         if (item.productId === productId) {
           const quantity = Number(item.quantity) || 0;
@@ -663,25 +666,80 @@ export default function StockSignals() {
   }, [user?.storeId]);
 
   const calculateSalesForMultipleProducts = async (startDate: number, endDate: number, productIds: string[], excludeAlreadySignaled: boolean = true) => {
+    // Optimisation : charger toutes les ventes et signaux en une seule fois
+    const db = await getDB();
+    const now = Date.now();
+    let sales: Sale[];
+    if (salesCache.data && (now - salesCache.timestamp) < CACHE_TTL) {
+      sales = salesCache.data;
+    } else {
+      sales = await db.getAll('sales');
+      salesCache.data = sales;
+      salesCache.timestamp = now;
+    }
+
+    let stockSignals: StockSignal[] = [];
+    if (excludeAlreadySignaled) {
+      if (signalsCache.data && (now - signalsCache.timestamp) < CACHE_TTL) {
+        stockSignals = signalsCache.data;
+      } else {
+        stockSignals = await db.getAll('stockSignals');
+        signalsCache.data = stockSignals;
+        signalsCache.timestamp = now;
+      }
+    }
+
+    // Pour chaque produit, trouver la date de fin de signalement la plus récente
+    const storeId = user?.storeId;
+    const latestEndDates: Record<string, number> = {};
+    if (excludeAlreadySignaled) {
+      for (const productId of productIds) {
+        let latestEndDate = 0;
+        for (const signal of stockSignals) {
+          if (signal.productId === productId && signal.storeId === storeId && signal.endDate > latestEndDate) {
+            latestEndDate = signal.endDate;
+          }
+        }
+        latestEndDates[productId] = latestEndDate;
+      }
+    }
+
     let totalQuantity = 0;
     let totalRevenue = 0;
     let effectiveStartDate = startDate;
-    
-    // Pour chaque produit, calculer les ventes et prendre la date de début la plus récente
-    for (const productId of productIds) {
-      const productSales = await calculateSalesBetween(startDate, endDate, productId, excludeAlreadySignaled);
-      totalQuantity += productSales.totalQuantity;
-      totalRevenue += productSales.totalRevenue;
-      // Prendre la date de début effective la plus récente
-      if (productSales.adjustedStartDate > effectiveStartDate) {
-        effectiveStartDate = productSales.adjustedStartDate;
+
+    for (const sale of sales) {
+      if (sale.createdAt > endDate || sale.draft === true || sale.refunded) continue;
+      const items = sale.items;
+      if (!items) continue;
+      for (const item of items) {
+        if (!productIds.includes(item.productId)) continue;
+        // Calculer la date de début effective pour ce produit
+        let productStart = startDate;
+        if (excludeAlreadySignaled && latestEndDates[item.productId] > 0) {
+          productStart = Math.max(startDate, latestEndDates[item.productId] + 60000);
+        }
+        if (sale.createdAt < productStart) continue;
+        // Prendre la date de début effective la plus récente
+        if (productStart > effectiveStartDate) effectiveStartDate = productStart;
+        const quantity = Number(item.quantity) || 0;
+        let itemTotal = Number(item.total) || 0;
+        if (itemTotal === 0 && item.price) {
+          itemTotal = (Number(item.price) || 0) * quantity;
+        }
+        totalQuantity += quantity;
+        totalRevenue += itemTotal;
       }
     }
-    
+
     return { totalQuantity, totalRevenue, adjustedStartDate: effectiveStartDate };
   };
 
   const handleStockEnd = async (expense: ExpenseAdvanced) => {
+    if (!isBackendReachable) {
+      toast.error("Impossible de signaler un stock fini : le serveur n'est pas joignable (hors ligne ou backend down). Veuillez vérifier votre connexion et réessayer.");
+      return;
+    }
     // Show end-date picker dialog before computing margins
     setSelectedExpense(expense);
     // Compute a sensible default for the end date: prefer now, but never before the stock start
@@ -1445,61 +1503,142 @@ export default function StockSignals() {
 
         {user?.role === 'admin' && (
           <TabsContent value="completed" className="space-y-4">
-            {/* Filtres */}
-            <Card>
-            <CardContent className="p-4">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div>
-                  <Label>Rechercher</Label>
-                  <Input
-                    placeholder="Produit, date, heure..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label>Période</Label>
-                  <Select value={periodFilter} onValueChange={(value: any) => setPeriodFilter(value)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tout l'historique</SelectItem>
-                      <SelectItem value="day">Aujourd'hui</SelectItem>
-                      <SelectItem value="week">Cette semaine</SelectItem>
-                      <SelectItem value="month">Ce mois</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Type</Label>
-                  <Select value={typeFilter} onValueChange={(value: any) => setTypeFilter(value)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tous</SelectItem>
-                      <SelectItem value="surplus">Surplus uniquement</SelectItem>
-                      <SelectItem value="manque">Manque uniquement</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-end">
-                  <Button 
-                    variant="outline" 
-                      onClick={() => {
-                      // Réinitialiser la recherche et remettre la période par défaut sur "Aujourd'hui"
-                      setSearchTerm('');
-                      setPeriodFilter('day');
-                      setTypeFilter('all');
-                    }}
-                  >
-                    Réinitialiser
-                  </Button>
-                </div>
+            {/* Graphique + Filtres sur la même ligne en desktop */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* Graphique circulaire pertes/surplus */}
+              <div className="lg:col-span-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Répartition Surplus / Manque</CardTitle>
+                  </CardHeader>
+                  <CardContent style={{ height: 320 }}>
+                    {(() => {
+                      // Filtrer uniquement les dépenses de type 'direct' pour le graphique
+                      const directSignals = filteredSignals.filter(s => {
+                        // On considère direct si la dépense d'origine était de type direct
+                        // On peut vérifier si le productId n'est pas une catégorie ou 'indirect'
+                        // Mais le plus sûr est de vérifier dans completedSignals ou d'ajouter un champ type dans StockSignal
+                        // Ici, on suppose que les indirects ont productId === 'indirect' ou une catégorie
+                        // Si vous avez un champ type dans StockSignal, préférez l'utiliser
+                        return s.productId !== 'indirect' && categoryMap.get(s.productId) === undefined;
+                      });
+                      const totalSurplus = Math.round(directSignals.reduce((sum, s) => sum + (s.margin >= 0 ? Math.round(s.margin) : 0), 0));
+                      const totalManque = Math.round(directSignals.reduce((sum, s) => sum + (s.margin < 0 ? Math.round(Math.abs(s.margin)) : 0), 0));
+                      if (totalSurplus === 0 && totalManque === 0) {
+                        return <div className="flex items-center justify-center h-full text-muted-foreground">Aucune donnée à afficher pour cette période/type.</div>;
+                      }
+                      // Responsive settings
+                      const isMobile = window.innerWidth < 768;
+                      const chartHeight = isMobile ? 250 : 280;
+                      const outerRadius = isMobile ? 70 : 100;
+                      return (
+                        <>
+                          <ResponsiveContainer width="100%" height={chartHeight}>
+                            <PieChart>
+                              <Pie
+                                data={[
+                                  { name: 'Surplus', value: totalSurplus },
+                                  { name: 'Manque', value: totalManque }
+                                ]}
+                                dataKey="value"
+                                nameKey="name"
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={outerRadius}
+                                label={isMobile ? 
+                                  ({ percent }) => `${(percent * 100).toFixed(0)}%` :
+                                  ({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`
+                                }
+                                labelLine={false}
+                              >
+                                <Cell key="surplus" fill="#22c55e" />
+                                <Cell key="manque" fill="#ef4444" />
+                              </Pie>
+                              <Tooltip 
+                                formatter={v => `${Number(v).toLocaleString('fr-FR')} FCFA`}
+                                contentStyle={{ 
+                                  fontSize: isMobile ? '12px' : '14px',
+                                  padding: isMobile ? '8px' : '12px'
+                                }}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                          <div className="flex justify-center gap-4 mt-2 text-xs">
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block w-3 h-3 rounded-full" style={{background:'#22c55e'}}></span>
+                              Surplus : {totalSurplus.toLocaleString('fr-FR')} FCFA
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block w-3 h-3 rounded-full" style={{background:'#ef4444'}}></span>
+                              Manque : {totalManque.toLocaleString('fr-FR')} FCFA
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
               </div>
-            </CardContent>
-          </Card>
+              {/* Filtres */}
+              <div className="lg:col-span-1">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Filtres</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div>
+                      <Label>Rechercher</Label>
+                      <Input
+                        placeholder="Produit, date, heure..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label>Période</Label>
+                      <Select value={periodFilter} onValueChange={(value: any) => setPeriodFilter(value)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tout l'historique</SelectItem>
+                          <SelectItem value="day">Aujourd'hui</SelectItem>
+                          <SelectItem value="week">Cette semaine</SelectItem>
+                          <SelectItem value="month">Ce mois</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Type</Label>
+                      <Select value={typeFilter} onValueChange={(value: any) => setTypeFilter(value)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous</SelectItem>
+                          <SelectItem value="surplus">Surplus uniquement</SelectItem>
+                          <SelectItem value="manque">Manque uniquement</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Button 
+                        variant="outline" 
+                        className="w-full"
+                        onClick={() => {
+                        // Réinitialiser la recherche et remettre la période par défaut sur "Aujourd'hui"
+                        setSearchTerm('');
+                        setPeriodFilter('day');
+                        setTypeFilter('all');
+                      }}
+                      >
+                        Réinitialiser
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
 
           {loading ? (
             <div className="space-y-3">

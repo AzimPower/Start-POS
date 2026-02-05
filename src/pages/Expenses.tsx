@@ -689,7 +689,49 @@ export default function Expenses() {
         finalExpense = expense;
       }
 
-      // Reset du formulaire et fermeture immédiate du dialog
+      // Message de succès immédiat
+      toast.success(isEdit ? 'Dépense modifiée avec succès!' : 'Dépense enregistrée avec succès!');
+
+      // Actualisation immédiate et visible des données
+      try {
+        await loadData();
+        await loadExpensesForRange(db, filterOption, customStart, customEnd);
+      } catch (e) {
+        console.error('Erreur actualisation données:', e);
+      }
+
+      // Mise à jour optimiste de l'UI : afficher la dépense immédiatement
+      try {
+        const amt = Number(finalExpense.amount) || 0;
+        // Si édition, remplacer l'élément existant
+        if (isEdit) {
+          setFilteredExpenses(prev => prev.map(e => e.id === finalExpense.id ? finalExpense : e));
+          setExpenses(prev => prev.map(e => e.id === finalExpense.id ? finalExpense : e));
+          // ajuster le total de la plage
+          const oldAmt = Number(editingExpense?.amount || 0);
+          setRangeTotal(prev => prev - oldAmt + amt);
+        } else {
+          // Ajout : préfixer aux listes paginées et globales
+          setFilteredExpenses(prev => [finalExpense, ...prev]);
+          setExpenses(prev => {
+            const updated = [finalExpense, ...prev];
+            // Conserver la taille de la première page
+            if (updated.length > pageSize) return updated.slice(0, pageSize);
+            return updated;
+          });
+          setLoadedCount(prev => prev + 1);
+          setRangeTotal(prev => prev + amt);
+        }
+        // recalculer hasMore
+        setHasMore(prev => {
+          const total = (isEdit ? filteredExpenses.length : filteredExpenses.length + 1);
+          return total > pageSize;
+        });
+      } catch (err) {
+        console.warn('Optimistic UI update failed', err);
+      }
+
+      // Reset du formulaire et fermeture du dialog après actualisation
       setFormData({
         amount: '',
         description: '',
@@ -700,12 +742,8 @@ export default function Expenses() {
       });
       setShowAddDialog(false);
       setEditingExpense(null);
-      setLoading(false);
 
-      // Message de succès immédiat
-      toast.success(isEdit ? 'Dépense modifiée avec succès!' : 'Dépense enregistrée avec succès!');
-
-      // Opérations lourdes en arrière-plan (async sans await)
+      // Opérations en arrière-plan (async sans await)
       Promise.all([
         // Synchronisation backend
         performSyncOp({
@@ -808,16 +846,6 @@ export default function Expenses() {
           } catch (e) {
             console.warn('❌ Erreur lors de l\'envoi automatique du mail admin pour dépense:', e);
             console.warn('🔍 [DEBUG] Détails erreur:', { isEdit, userId: user?.id, storeId: user?.storeId });
-          }
-        })(),
-
-        // Actualisation des données en arrière-plan
-        (async () => {
-          try {
-            await loadData();
-            await loadExpensesForRange(db, filterOption, customStart, customEnd);
-          } catch (e) {
-            console.error('Erreur actualisation données:', e);
           }
         })()
       ]).catch(e => console.error('Erreur opérations arrière-plan:', e));
@@ -1611,7 +1639,7 @@ export default function Expenses() {
           ) : (
             <div>
               <div className="mb-4 text-sm text-muted-foreground">
-                Affichage: {getFilteredExpenses.length} / {filteredExpenses.length} • Chargé: {loadedCount} • HasMore: {hasMore ? 'Oui' : 'Non'}
+                Affichage: {getFilteredExpenses.length} / {filteredExpenses.length} • Encore ? {hasMore ? 'Oui' : 'Non'}
               </div>
               <div 
                 ref={listScrollRef}

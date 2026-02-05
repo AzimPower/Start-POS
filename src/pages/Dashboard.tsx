@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSpreadsheet, FileText } from 'lucide-react';
+import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSpreadsheet, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
@@ -100,16 +100,16 @@ export default function Dashboard() {
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
         setStartDate(startOfMonth);
         setEndDate(today);
-        setStartTime('00:00');
-        setEndTime('23:59');
+        setStartTime('08:00'); // Heure d'ouverture par défaut
+        setEndTime('18:00');   // Heure de fermeture par défaut
         break;
       case 'lastMonth':
         const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
         setStartDate(lastMonthStart);
         setEndDate(lastMonthEnd);
-        setStartTime('00:00');
-        setEndTime('23:59');
+        setStartTime('08:00'); // Heure d'ouverture par défaut
+        setEndTime('18:00');   // Heure de fermeture par défaut
         break;
       case 'last7days':
         const last7 = new Date(today);
@@ -131,6 +131,43 @@ export default function Dashboard() {
     setShowPeriodSelector(false);
   };
 
+  // Fonction pour calculer le nombre de jours dans la période actuelle
+  const getPeriodDurationInDays = () => {
+    const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 pour inclure le dernier jour
+  };
+
+  // Fonction pour naviguer vers la période précédente
+  const goToPreviousPeriod = () => {
+    const durationDays = getPeriodDurationInDays();
+    const newEndDate = new Date(startDate);
+    newEndDate.setDate(startDate.getDate() - 1);
+    const newStartDate = new Date(newEndDate);
+    newStartDate.setDate(newEndDate.getDate() - durationDays + 1);
+    
+    setStartDate(newStartDate);
+    setEndDate(newEndDate);
+  };
+
+  // Fonction pour naviguer vers la période suivante
+  const goToNextPeriod = () => {
+    const durationDays = getPeriodDurationInDays();
+    const newStartDate = new Date(endDate);
+    newStartDate.setDate(endDate.getDate() + 1);
+    const newEndDate = new Date(newStartDate);
+    newEndDate.setDate(newStartDate.getDate() + durationDays - 1);
+    
+    // Ne pas aller au-delà d'aujourd'hui
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (newEndDate > today) {
+      return; // Ne rien faire si la période suivante dépasse aujourd'hui
+    }
+    
+    setStartDate(newStartDate);
+    setEndDate(newEndDate);
+  };
+
   async function filterDataByPeriod() {
     // Call backend for stats/chart data so charts source from server-side
     let start, end;
@@ -149,6 +186,13 @@ export default function Dashboard() {
       params.set('start', String(start));
       params.set('end', String(end));
       params.set('groupBy', groupBy);
+      
+      // Ajouter les paramètres d'heure pour filtrer par heures de la journée
+      if (user?.role !== 'cashier') {
+        params.set('startHour', startTime);
+        params.set('endHour', endTime);
+      }
+      
       if (user?.role === 'cashier') params.set('userId', String(user.id));
       else if (user?.storeId) params.set('storeId', String(user.storeId));
 
@@ -791,71 +835,101 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {/* Affichage de la période sélectionnée */}
-                <Popover open={showPeriodSelector} onOpenChange={setShowPeriodSelector}>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !startDate && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {startDate && endDate ? (
-                        `${format(startDate, 'dd/MM/yyyy', { locale: fr })} - ${format(endDate, 'dd/MM/yyyy', { locale: fr })}`
-                      ) : (
-                        <span>Sélectionner une période</span>
-                      )}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0 flex flex-col xl:flex-row max-w-none" align="start">
-                    {/* Raccourcis à gauche - optimisé pour desktop */}
-                    <div className="xl:border-r p-2 space-y-1 w-full xl:min-w-[220px]">
-                      <p className="text-xs font-medium text-muted-foreground px-2 py-1">Raccourcis</p>
-                      <div className="grid grid-cols-2 xl:grid-cols-1 gap-1">
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('today')}>
-                          Aujourd'hui
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('yesterday')}>
-                          Hier
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisWeek')}>
-                          Cette semaine
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastWeek')}>
-                          La semaine dernière
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisMonth')}>
-                          Ce mois
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastMonth')}>
-                          Le mois dernier
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last7days')}>
-                          Il y a 7 jours
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last30days')}>
-                          Il y a 30 jours
-                        </Button>
-                        <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisYear')}>
-                          Cette année
-                        </Button>
+                {/* Affichage de la période sélectionnée avec boutons de navigation */}
+                <div className="flex gap-2 items-center">
+                  <Button 
+                    variant="outline" 
+                    size="icon"
+                    onClick={goToPreviousPeriod}
+                    title="Période précédente"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  
+                  <Popover open={showPeriodSelector} onOpenChange={setShowPeriodSelector}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className={cn("flex-1 justify-start text-left font-normal", !startDate && "text-muted-foreground")}>
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {startDate && endDate ? (
+                          `${format(startDate, 'dd/MM/yyyy', { locale: fr })} - ${format(endDate, 'dd/MM/yyyy', { locale: fr })}`
+                        ) : (
+                          <span>Sélectionner une période</span>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 flex flex-col xl:flex-row max-w-none" align="start">
+                      {/* Raccourcis à gauche - optimisé pour desktop */}
+                      <div className="xl:border-r p-2 space-y-1 w-full xl:min-w-[220px]">
+                        <p className="text-xs font-medium text-muted-foreground px-2 py-1">Raccourcis</p>
+                        <div className="grid grid-cols-2 xl:grid-cols-1 gap-1">
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('today')}>
+                            Aujourd'hui
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('yesterday')}>
+                            Hier
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisWeek')}>
+                            Cette semaine
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastWeek')}>
+                            La semaine dernière
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisMonth')}>
+                            Ce mois
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastMonth')}>
+                            Le mois dernier
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last7days')}>
+                            Il y a 7 jours
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last30days')}>
+                            Il y a 30 jours
+                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisYear')}>
+                            Cette année
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                    {/* Calendrier à droite - optimisé pour desktop */}
-                    <div className="p-3">
-                      <Calendar
-                        mode="range"
-                        selected={{ from: startDate, to: endDate }}
-                        onSelect={(range) => {
-                          if (range?.from) setStartDate(range.from);
-                          if (range?.to) setEndDate(range.to);
-                        }}
-                        locale={fr}
-                        numberOfMonths={window.innerWidth >= 1280 ? 2 : 1} // 2 mois sur desktop, 1 sur mobile
-                        disabled={(date) => date > new Date() || date < new Date('1900-01-01')}
-                        defaultMonth={endDate}
-                        toDate={new Date()}
-                        className="xl:border-0"
-                      />
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                      {/* Calendrier à droite - optimisé pour desktop */}
+                      <div className="p-3">
+                        <Calendar
+                          mode="range"
+                          selected={{ from: startDate, to: endDate }}
+                          onSelect={(range) => {
+                            if (range?.from) setStartDate(range.from);
+                            if (range?.to) setEndDate(range.to);
+                          }}
+                          locale={fr}
+                          numberOfMonths={window.innerWidth >= 1280 ? 2 : 1} // 2 mois sur desktop, 1 sur mobile
+                          disabled={(date) => date > new Date() || date < new Date('1900-01-01')}
+                          defaultMonth={endDate}
+                          toDate={new Date()}
+                          className="xl:border-0"
+                        />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+
+                  <Button 
+                    variant="outline" 
+                    size="icon"
+                    onClick={goToNextPeriod}
+                    title="Période suivante"
+                    disabled={(() => {
+                      const durationDays = getPeriodDurationInDays();
+                      const newStartDate = new Date(endDate);
+                      newStartDate.setDate(endDate.getDate() + 1);
+                      const newEndDate = new Date(newStartDate);
+                      newEndDate.setDate(newStartDate.getDate() + durationDays - 1);
+                      const today = new Date();
+                      today.setHours(23, 59, 59, 999);
+                      return newEndDate > today;
+                    })()}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
                 
                 {/* Sélection des heures */}
                 <div className="grid grid-cols-2 gap-4">

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Search, Printer, Undo2, Wifi, WifiOff } from 'lucide-react';
+import { Search, Printer, Undo2, Wifi, WifiOff, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
@@ -544,15 +544,19 @@ export default function Receipts() {
         if (productsToRestoreStock.length > 0) {
           console.log(`🔄 Synchronisation du stock restauré pour ${productsToRestoreStock.length} produit(s)`);
           
-          for (const { product, restoredQuantity } of productsToRestoreStock) {
+              for (const { product, restoredQuantity } of productsToRestoreStock) {
             try {
               // Préparer les données pour l'API backend
-              const productDataForBackend = {
+              // N'envoyer le flag `trackStock` au backend QUE si le produit le contient déjà.
+              // Cela évite de forcer le produit à devenir suivi lorsqu'il ne l'était pas.
+              const productDataForBackend: any = {
                 ...product,
-                stock: product.stock[saleToRefund.storeId], // Envoyer seulement le stock pour ce magasin
-                trackStock: true, // Confirmer que ce produit a un suivi de stock
+                stock: product.stock ? product.stock[saleToRefund.storeId] : undefined, // Envoyer seulement le stock pour ce magasin
                 storeId: saleToRefund.storeId
               };
+              if (product.trackStock !== undefined) {
+                productDataForBackend.trackStock = product.trackStock;
+              }
               
               await performSyncOp({
                 url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
@@ -811,6 +815,19 @@ export default function Receipts() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1">
+                            {user?.role === 'admin' && (
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => {
+                                  setSelectedSale(sale);
+                                  setShowReceipt(true);
+                                }}
+                                title="Voir le détail du reçu"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                            )}
                             {user?.role !== 'cashier' && (
                               <Button
                                 variant="outline"
@@ -886,16 +903,17 @@ export default function Receipts() {
           tax={selectedSale.tax}
           total={selectedSale.total}
           paymentMethod={selectedSale.paymentMethod}
-          cashReceived={selectedSale.payments.find(p => p.method === 'cash')?.amount}
+          cashReceived={(selectedSale.payments || []).find(p => p.method === 'cash')?.amount}
           change={(() => {
+            const payments = selectedSale.payments || [];
             if (selectedSale.paymentMethod === 'cash') {
-              return (selectedSale.payments[0]?.amount || 0) - selectedSale.total;
+              return (payments[0]?.amount || 0) - selectedSale.total;
             }
             if (selectedSale.paymentMethod === 'mobile_money') {
-              return (selectedSale.payments[0]?.amount || 0) - selectedSale.total;
+              return (payments[0]?.amount || 0) - selectedSale.total;
             }
             if (selectedSale.paymentMethod === 'mixed') {
-              const totalPaid = (selectedSale.payments.find(p => p.method === 'cash')?.amount || 0) + (selectedSale.payments.find(p => p.method === 'mobile_money')?.amount || 0);
+              const totalPaid = (payments.find(p => p.method === 'cash')?.amount || 0) + (payments.find(p => p.method === 'mobile_money')?.amount || 0);
               return totalPaid - selectedSale.total;
             }
             return undefined;

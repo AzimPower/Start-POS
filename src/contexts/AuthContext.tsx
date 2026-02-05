@@ -482,7 +482,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 }
               } else {
                 // Check explicitly for true or 1 (anything else is considered disabled)
-                hasPinEnabled = userRecord.pinEnabled === true || userRecord.pinEnabled === 1;
+                hasPinEnabled = userRecord.pinEnabled === true || (typeof userRecord.pinEnabled === 'number' && userRecord.pinEnabled === 1);
                 console.log('🔓 [PIN] User PIN enabled status:', hasPinEnabled, 'value:', userRecord.pinEnabled);
               }
             } else {
@@ -777,7 +777,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       // Check if PIN is enabled for this user
       // Treat undefined, null, 0, and false as "PIN disabled"
-      const isPinEnabled = record.pinEnabled === true || record.pinEnabled === 1;
+      const isPinEnabled = record.pinEnabled === true || (typeof record.pinEnabled === 'number' && record.pinEnabled === 1);
       console.log('🔓 [verifyPin] PIN enabled status:', isPinEnabled, 'value:', record.pinEnabled);
       if (!isPinEnabled) {
         console.log('✅ [verifyPin] PIN disabled - auto-unlocking');
@@ -894,7 +894,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Check if user has PIN enabled
             const db = await getDB();
             const userRecord = await db.get('users', parsed.id) as any;
-            const isPinEnabled = userRecord && (userRecord.pinEnabled === true || userRecord.pinEnabled === 1);
+            const isPinEnabled = userRecord && (userRecord.pinEnabled === true || (typeof userRecord.pinEnabled === 'number' && userRecord.pinEnabled === 1));
             
             console.log('👁️ [Visibility] Tab hidden - PIN enabled:', isPinEnabled);
             

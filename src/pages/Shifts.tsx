@@ -88,6 +88,10 @@ export default function Shifts() {
   // State pour suivre la synchronisation
   const [syncing, setSyncing] = useState(false);
   const [adminUser, setAdminUser] = useState<any>(null);
+  // Cache des ventes en mémoire pour éviter les appels DB répétés
+  const salesCache = useRef<any[]>([]);
+  const salesCacheTimestamp = useRef<number>(0);
+  const SALES_CACHE_TTL = 30000; // 30 secondes de validité du cache
   
   // Debounce pour la recherche (optimisation)
   useEffect(() => {
@@ -133,9 +137,10 @@ export default function Shifts() {
   }, []);
 
   // Calculs asynchrones optimisés avec useEffect et cache intelligent
+  // Optimisation : réutiliser shiftsCache.current au lieu de créer new Map()
   useEffect(() => {
     let mounted = true;
-    
+
     const calculateShiftsData = async () => {
       if (filteredShifts.length === 0) {
         setComputedDiffsState({});
@@ -145,94 +150,99 @@ export default function Shifts() {
 
       const results: Record<string, {expected: number|null, difference: number|null}> = {};
       const encaissesResults: Record<string, number> = {};
-      
-      // Traitement par batch pour optimiser
-      const promises = filteredShifts.map(async (shift) => {
-        try {
-          const db = await getDB();
-          const allShiftSales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
-          const sales = allShiftSales.filter((s: any) => {
-            const saleTime = s.createdAt || s.timestamp || 0;
-            const shiftStart = shift.openedAt;
-            const shiftEnd = shift.closedAt || Date.now();
-            return saleTime >= shiftStart && saleTime <= shiftEnd;
-          });
-          
-          let cash = 0, mobile = 0;
-          
-          if (shift.status === 'closed' && (shift.cashAmount !== undefined || shift.mobileMoneyAmount !== undefined)) {
-            const rawCash = toNum(shift.cashAmount || 0);
-            const openingAmount = toNum(shift.openingAmount || 0);
-            cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
-            mobile = toNum(shift.mobileMoneyAmount || 0);
-          } else {
-            for (const sale of sales) {
-              const isRefunded = Boolean(sale.refunded);
-              let saleCash = 0, saleMobile = 0;
-              
-              if (sale.cashAmount !== undefined || sale.mobileMoneyAmount !== undefined) {
-                saleCash = toNum(sale.cashAmount || 0);
-                saleMobile = toNum(sale.mobileMoneyAmount || 0);
-              } else if (sale.payments && Array.isArray(sale.payments)) {
-                for (const p of sale.payments) {
-                  if (p.method === 'cash') saleCash += toNum(p.amount);
-                  if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
-                }
-              } else {
-                if (sale.paymentMethod === 'cash') saleCash = toNum(sale.total);
-                if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
-              }
-              
-              if (isRefunded) {
-                cash -= saleCash;
-                mobile -= saleMobile;
-              } else {
-                cash += saleCash;
-                mobile += saleMobile;
-              }
-            }
+
+      // Utiliser le cache de ventes en mémoire au lieu de getAll à chaque fois
+      let allSales = salesCache.current;
+      const now = Date.now();
+      if (allSales.length === 0 || (now - salesCacheTimestamp.current) > SALES_CACHE_TTL) {
+        const db = await getDB();
+        allSales = await db.getAll('sales');
+        salesCache.current = allSales;
+        salesCacheTimestamp.current = now;
+      }
+
+      for (const shift of filteredShifts) {
+        // Utiliser shiftsCache.current pour persister entre les rendus
+        if (shiftsCache.current.has(shift.id)) {
+          const cached = shiftsCache.current.get(shift.id)!;
+          encaissesResults[shift.id] = cached.encaissé;
+          if (shift.status === 'closed') {
+            results[shift.id] = { expected: cached.expected, difference: cached.difference };
           }
-          
-          encaissesResults[shift.id] = cash + mobile;
-          
-          if (shift.status === 'closed' && shift.closingAmount !== null) {
-            const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
-            // Calculer le montant attendu basé sur les ventes réelles (sans remboursements)
-            let encaisseNet = 0;
-            for (const sale of sales) {
-              const isRefunded = Boolean(sale.refunded);
-              if (isRefunded) {
-                encaisseNet -= toNum(sale.total ?? 0); // Déduire les remboursements
-              } else {
-                encaisseNet += toNum(sale.total ?? 0); // Ajouter les ventes
-              }
-            }
-            const expected = opening + encaisseNet;
-            const difference = Number(shift.closingAmount) - expected;
-            results[shift.id] = {expected, difference};
-          }
-          
-          return { shiftId: shift.id, results: results[shift.id], encaisse: encaissesResults[shift.id] };
-        } catch {
-          encaissesResults[shift.id] = 0;
-          if (shift.status === 'closed' && shift.closingAmount !== null) {
-            results[shift.id] = {expected: null, difference: null};
-          }
-          return { shiftId: shift.id, results: results[shift.id], encaisse: 0 };
+          continue;
         }
-      });
-      
-      // Traitement par batch avec Promise.all pour optimiser
-      await Promise.all(promises);
-      
+
+        // Filtrer les ventes pour ce shift
+        const sales = allSales.filter((s: any) => {
+          if (s.shiftId && s.shiftId === shift.id) return true;
+          // fallback: by time interval
+          const saleTime = s.createdAt || s.timestamp || 0;
+          const shiftStart = shift.openedAt;
+          const shiftEnd = shift.closedAt || Date.now();
+          return saleTime >= shiftStart && saleTime <= shiftEnd;
+        });
+
+        let cash = 0, mobile = 0;
+        if (shift.status === 'closed' && (shift.cashAmount !== undefined || shift.mobileMoneyAmount !== undefined)) {
+          const rawCash = toNum(shift.cashAmount || 0);
+          const openingAmount = toNum(shift.openingAmount || 0);
+          cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
+          mobile = toNum(shift.mobileMoneyAmount || 0);
+        } else {
+          for (const sale of sales) {
+            const isRefunded = Boolean(sale.refunded);
+            let saleCash = 0, saleMobile = 0;
+            if (sale.cashAmount !== undefined || sale.mobileMoneyAmount !== undefined) {
+              saleCash = toNum(sale.cashAmount || 0);
+              saleMobile = toNum(sale.mobileMoneyAmount || 0);
+            } else if (sale.payments && Array.isArray(sale.payments)) {
+              for (const p of sale.payments) {
+                if (p.method === 'cash') saleCash += toNum(p.amount);
+                if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
+              }
+            } else {
+              if (sale.paymentMethod === 'cash') saleCash = toNum(sale.total);
+              if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
+            }
+            if (isRefunded) {
+              cash -= saleCash;
+              mobile -= saleMobile;
+            } else {
+              cash += saleCash;
+              mobile += saleMobile;
+            }
+          }
+        }
+        encaissesResults[shift.id] = cash + mobile;
+
+        if (shift.status === 'closed' && shift.closingAmount !== null) {
+          const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
+          let encaisseNet = 0;
+          for (const sale of sales) {
+            const isRefunded = Boolean(sale.refunded);
+            if (isRefunded) {
+              encaisseNet -= toNum(sale.total ?? 0);
+            } else {
+              encaisseNet += toNum(sale.total ?? 0);
+            }
+          }
+          const expected = opening + encaisseNet;
+          const difference = Number(shift.closingAmount) - expected;
+          results[shift.id] = { expected, difference };
+          shiftsCache.current.set(shift.id, { encaissé: cash + mobile, expected, difference });
+        } else {
+          shiftsCache.current.set(shift.id, { encaissé: cash + mobile, expected: null, difference: null });
+        }
+      }
+
       if (mounted) {
+        // Batch les deux setState en un seul pour éviter double rendu
         setComputedDiffsState(results);
         setEncaissesState(encaissesResults);
       }
     };
-    
-    // Debounce les calculs pour éviter les recalculs excessifs
-    const timer = setTimeout(calculateShiftsData, 100);
+    // Réduire le délai de 100ms à 50ms pour réactivité
+    const timer = setTimeout(calculateShiftsData, 50);
     return () => {
       clearTimeout(timer);
       mounted = false;
@@ -289,7 +299,12 @@ export default function Shifts() {
       );
     }
     return (
-      <div className="relative p-4 rounded-xl shadow border border-gray-100 bg-gradient-to-br from-white to-gray-50 flex flex-col gap-2">
+      <div className={
+        `relative p-4 rounded-xl shadow flex flex-col gap-2 ` +
+        (isOpen
+          ? 'border-2 border-blue-400 bg-blue-50/80'
+          : 'border border-gray-100 bg-gradient-to-br from-white to-gray-50')
+      }>
         <div className="flex items-center gap-3 mb-1">
           <div className="shrink-0">{statusIcon}</div>
           <div className="flex-1 min-w-0">
@@ -320,18 +335,24 @@ export default function Shifts() {
           </span>
           <span className="flex items-center gap-1 text-gray-600">
             <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M8 12h8" stroke="currentColor" strokeWidth="2"/></svg>
-            {isOpen && encaissé === 0 ? '***' : Math.round(encaissé)} FCFA encaissé
+            {(isOpen && user?.role !== 'admin') ? '***' : Math.round(encaissé)} FCFA encaissé
           </span>
         </div>
         <div className="flex gap-2 mt-2">
-          <Button
-            className="flex-1 py-1.5 rounded-lg bg-primary text-white font-medium shadow hover:bg-primary/90 transition text-sm"
-            onClick={() => showShiftDetails(shift)}
-            title="Voir les détails"
-          >
-            <Eye className="w-4 h-4 inline-block mr-1 -mt-0.5 align-middle" />
-            Détails
-          </Button>
+          {(isOpen && user?.role !== 'admin') ? (
+            <div className="flex-1 py-1.5 rounded-lg bg-gray-100 text-gray-500 font-medium text-center text-sm">
+              Accès restreint
+            </div>
+          ) : (
+            <Button
+              className="flex-1 py-1.5 rounded-lg bg-primary text-white font-medium shadow hover:bg-primary/90 transition text-sm"
+              onClick={() => showShiftDetails(shift)}
+              title="Voir les détails"
+            >
+              <Eye className="w-4 h-4 inline-block mr-1 -mt-0.5 align-middle" />
+              Détails
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -565,6 +586,9 @@ export default function Shifts() {
 
   const loadShifts = async () => {
     setLoading(true);
+    // Invalider le cache de ventes pour forcer le rechargement
+    salesCache.current = [];
+    salesCacheTimestamp.current = 0;
     try {
       const db = await getDB();
       
@@ -647,6 +671,9 @@ export default function Shifts() {
                         salesTx.done
                       ]);
                       console.log(`✅ ${backendSales.length} ventes synchronisées depuis le backend`);
+                      // Mettre à jour le cache de ventes immédiatement
+                      salesCache.current = backendSales;
+                      salesCacheTimestamp.current = Date.now();
                     }
                   } catch (salesParseError) {
                     console.warn('Erreur parsing JSON ventes:', salesParseError);
@@ -1695,10 +1722,11 @@ export default function Shifts() {
         <CardContent className="p-0">
           <div className="overflow-auto max-h-[57vh] min-h-[200px]" ref={listScrollRef} onScroll={handleListScroll}>
             {isMobile ? (
-              // Mobile: render compact cards instead of wide table
-              <div className="space-y-3 p-2">
+              // Mobile: render compact cards with virtualization for performance
+              <div className="p-2">
                 {loading ? (
-                  Array.from({ length: 6 }).map((_, i) => (
+                  <div className="space-y-3">
+                  {Array.from({ length: 6 }).map((_, i) => (
                     <div key={`skeleton-${i}`} className="p-3 border rounded-lg bg-white animate-pulse">
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -1711,7 +1739,8 @@ export default function Shifts() {
                         </div>
                       </div>
                     </div>
-                  ))
+                  ))}
+                  </div>
                 ) : filteredShifts.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 px-4 bg-gradient-to-b from-white to-gray-50 rounded-xl shadow-sm border border-gray-100 mx-2">
                     <div className="mb-4">
@@ -1738,7 +1767,6 @@ export default function Shifts() {
                   </div>
                 ) : (
                   filteredShifts.map(shift => {
-                    // Utiliser la même logique flexible que ShiftReceiptDetails pour trouver le caissier
                     const cashier = cashiers.find(u => String(u.id) === String(shift.userId));
                     const cashierName = cashier ? cashier.username : 'Inconnu';
                     const encaissé = encaissesState[shift.id] ?? 0;
