@@ -58,6 +58,7 @@ export default function Settings() {
   // Store balance admin section state
   const [store, setStore] = useState<any | null>(null);
   const [loadingStore, setLoadingStore] = useState(false);
+  const [storeError, setStoreError] = useState<string | null>(null);
   const [manualValue, setManualValue] = useState<string>('');
   const [note, setNote] = useState<string>('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -149,11 +150,17 @@ export default function Settings() {
   // Fetch store info for admin
   const fetchStore = async () => {
     setLoadingStore(true);
+    setStoreError(null);
     try {
       const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
       if (!res.ok) throw new Error('Erreur fetch stores');
       const data = await res.json();
       const myStore = data && Array.isArray(data) ? data.find((s: any) => s.id === user?.storeId) : null;
+      
+      if (!myStore) {
+        setStoreError('Aucun magasin correspondant à votre compte trouvé dans la base de données.');
+      }
+      
       setStore(myStore);
       if (myStore) {
         setFondValue(String(typeof myStore.fond_roulement !== 'undefined' && myStore.fond_roulement !== null ? myStore.fond_roulement : 0));
@@ -177,7 +184,8 @@ export default function Settings() {
       }
     } catch (e) {
       console.warn('fetchStore error', e);
-      toast.error('Impossible de récupérer les informations du magasin');
+      setStoreError('Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+      toast.error('Connexion au backend impossible - Mode hors ligne');
     } finally {
       setLoadingStore(false);
     }
@@ -411,6 +419,7 @@ export default function Settings() {
     const p = localStorage.getItem('printer_paper');
     return p || '80';
   });
+  const [lastPrinterDiagAt, setLastPrinterDiagAt] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Verify that a remote logo URL actually exists on the server. If the server
@@ -724,6 +733,18 @@ export default function Settings() {
       toast.success(size === '58' ? 'Papier 58mm sélectionné' : 'Papier 80mm sélectionné');
     } catch (e) {
       console.warn('save paper size error', e);
+    }
+  };
+
+  const handlePrinterDiagnostics = () => {
+    try {
+      const info = NativePrinter.inspectPlugin();
+      console.log('[PrinterDiagnostics]', info);
+      setLastPrinterDiagAt(new Date().toLocaleString());
+      toast.info('Diagnostic imprimante envoyé au journal');
+    } catch (e) {
+      console.warn('printer diagnostics error', e);
+      toast.error('Impossible de générer le diagnostic imprimante');
     }
   };
 
@@ -1248,7 +1269,57 @@ export default function Settings() {
                   {loadingStore ? (
                     <div className="space-y-4 animate-pulse">{/* ...squelettes... */}</div>
                   ) : !store ? (
-                    <p>Aucun magasin trouvé pour votre compte.</p>
+                    <div className="space-y-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 bg-yellow-100 rounded-full">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-yellow-600">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                          </svg>
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-yellow-900 mb-1">
+                            {storeError || 'Impossible de charger les informations du magasin'}
+                          </h3>
+                          <p className="text-sm text-yellow-800">
+                            {storeError?.includes('serveur') || storeError?.includes('connexion') ? (
+                              <>
+                                Assurez-vous que :
+                                <ul className="list-disc list-inside mt-2 space-y-1">
+                                  <li>Vous êtes connecté à internet</li>
+                                  <li>Le serveur backend est accessible</li>
+                                  <li>Aucun pare-feu ne bloque la connexion</li>
+                                </ul>
+                              </>
+                            ) : (
+                              <>
+                                Contactez votre administrateur système pour :
+                                <ul className="list-disc list-inside mt-2 space-y-1">
+                                  <li>Vérifier que votre compte est lié à un magasin</li>
+                                  <li>Confirmer que le magasin existe dans la base de données</li>
+                                  <li>Valider vos permissions d'accès</li>
+                                </ul>
+                              </>
+                            )}
+                          </p>
+                          <p className="text-xs text-yellow-700 mt-3">
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 border-t border-yellow-200 pt-3">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={fetchStore} 
+                          disabled={loadingStore}
+                          className="flex items-center gap-2"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          Réessayer
+                        </Button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="space-y-4">
                       {/* Bloc principal solde + nouveaux indicateurs */}
@@ -1504,6 +1575,11 @@ export default function Settings() {
                   <CardTitle className="flex items-center gap-2 text-sm">Imprimante</CardTitle>
                   <p className="text-xs text-muted-foreground">Connectez une imprimante thermique via Bluetooth ou utilisez les plugins natifs sur mobile.</p>
                 </div>
+                  {!nativePrinterAvailable && (
+                    <div className="ml-auto text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-100">
+                      Plugin natif non detecte
+                    </div>
+                  )}
               </div>
             </CardHeader>
             <CardContent>
@@ -1520,9 +1596,13 @@ export default function Settings() {
                       toast.error('Impossible de lister les appareils appairés');
                     }
                   }} className="w-full sm:w-auto">Rechercher imprimantes</Button>
+                  <Button variant="outline" onClick={handlePrinterDiagnostics} className="w-full sm:w-auto">Diagnostic</Button>
                   <div className="flex-1" />
                   {/* Test d'impression disponible ci-dessous — un seul bouton centralisé */}
                 </div>
+                {lastPrinterDiagAt && (
+                  <p className="text-xs text-muted-foreground">Dernier diagnostic: {lastPrinterDiagAt}</p>
+                )}
 
                 {/* Afficher l'avertissement et la liste des imprimantes directement
                     sous le bouton Rechercher imprimantes pour une meilleure UX */}

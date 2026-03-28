@@ -18,14 +18,19 @@ try {
     switch ($method) {
         case 'GET':
             $storeId = $_GET['storeId'] ?? null;
+            $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 100; // Par défaut 100 shifts max
+            
+            // Requête optimisée: tri + limite côté serveur
             $sql = 'SELECT * FROM shifts';
+            $params = [];
             if ($storeId) {
                 $sql .= ' WHERE storeId = ?';
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([$storeId]);
-            } else {
-                $stmt = $pdo->query($sql);
+                $params[] = $storeId;
             }
+            $sql .= ' ORDER BY openedAt DESC LIMIT ' . $limit;
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
             $shifts = $stmt->fetchAll();
             echo json_encode($shifts ?: []);
             break;
@@ -40,9 +45,6 @@ try {
         
         if ($existingShift) {
             // Un shift ouvert existe déjà pour cet utilisateur dans ce magasin
-            error_log('⚠️ Tentative d\'ouverture de shift: shift déjà ouvert pour userId=' . $data['userId'] . ' storeId=' . $data['storeId']);
-            
-            // Option 1: Refuser la création
             http_response_code(409); // Conflict
             echo json_encode([
                 'error' => 'Un shift est déjà ouvert pour cet utilisateur dans ce magasin',
@@ -50,15 +52,6 @@ try {
                 'openedAt' => $existingShift['openedAt']
             ]);
             exit;
-            
-            // Option 2 (alternative): Fermer automatiquement l'ancien et ouvrir le nouveau
-            // Décommentez ci-dessous si vous préférez cette approche
-            /*
-            error_log('🔄 Fermeture automatique de l\'ancien shift: ' . $existingShift['id']);
-            $closeSql = 'UPDATE shifts SET status="closed", closedAt=?, closingAmount=openingAmount, expectedAmount=openingAmount, difference=0 WHERE id=?';
-            $closeStmt = $pdo->prepare($closeSql);
-            $closeStmt->execute([time()*1000, $existingShift['id']]);
-            */
         }
         
         $sql = 'INSERT INTO shifts (id, userId, storeId, openingAmount, closingAmount, expectedAmount, difference, cashAmount, mobileMoneyAmount, otherAmount, openedAt, closedAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -83,12 +76,6 @@ try {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
-        
-        // Log pour déboguer les données reçues
-        error_log('Données PUT reçues: ' . json_encode($data));
-        error_log('cashAmount: ' . ($data['cashAmount'] ?? 'NULL'));
-        error_log('mobileMoneyAmount: ' . ($data['mobileMoneyAmount'] ?? 'NULL'));
-        error_log('otherAmount: ' . ($data['otherAmount'] ?? 'NULL'));
         
         $sql = 'UPDATE shifts SET userId=?, storeId=?, openingAmount=?, closingAmount=?, expectedAmount=?, difference=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, openedAt=?, closedAt=?, status=? WHERE id=?';
         $stmt = $pdo->prepare($sql);

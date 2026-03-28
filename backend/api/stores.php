@@ -10,6 +10,10 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
 header('Content-Type: application/json');
+// ✅ Désactiver le cache pour garantir des données fraîches
+header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
 
 // Gestion des requêtes OPTIONS (preflight)
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -25,8 +29,17 @@ try {
     switch ($method) {
         case 'GET':
             // Retourne la liste des magasins en incluant le solde calculé
-            $stmt = $pdo->query('SELECT * FROM stores');
-            $stores = $stmt->fetchAll();
+            // Par défaut on ne renvoie que les magasins actifs (active = 1)
+            // Pour le super-admin ou debug vous pouvez ajouter `?include_inactive=1`
+            $includeInactive = isset($_GET['include_inactive']) && $_GET['include_inactive'] === '1';
+            if ($includeInactive) {
+                $stmt = $pdo->query('SELECT * FROM stores');
+                $stores = $stmt->fetchAll();
+            } else {
+                $stmt = $pdo->prepare('SELECT * FROM stores WHERE active = 1');
+                $stmt->execute();
+                $stores = $stmt->fetchAll();
+            }
 
             // Pour chaque magasin, calculer le solde et les overrides manuels
             foreach ($stores as &$store) {
@@ -60,7 +73,7 @@ try {
                     // margins are calculated per product (price - costPrice).
                     if ($appliedAt) {
                         // total revenue (excluding tax) since appliedAt - only from closed shifts
-                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt > ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                         $revStmt->execute([$store['id'], $appliedAt]);
                         $salesRevenue = (float)$revStmt->fetchColumn();
 
@@ -75,19 +88,19 @@ try {
                                     WHEN p.costPrice IS NOT NULL THEN (p.costPrice * si.quantity)
                                     ELSE 0
                                 END
-                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt > ? AND (s.shiftId IS NULL OR sh.status = "closed")'
+                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")'
                         );
                         $cogsStmt->execute([$store['id'], $appliedAt]);
                         $cogs = (float)$cogsStmt->fetchColumn();
 
-                        $expStmt = $pdo->prepare('SELECT IFNULL(SUM(amount),0) as totalExpenses FROM expenses WHERE storeId = ? AND createdAt > ?');
+                        $expStmt = $pdo->prepare('SELECT IFNULL(SUM(amount),0) as totalExpenses FROM expenses WHERE storeId = ? AND createdAt >= ?');
                         $expStmt->execute([$store['id'], $appliedAt]);
                         $expenses = (float)$expStmt->fetchColumn();
-                        $expAdvStmt = $pdo->prepare('SELECT IFNULL(SUM(amount),0) as totalExpensesAdv FROM expenses_advanced WHERE storeId = ? AND date > ?');
+                        $expAdvStmt = $pdo->prepare('SELECT IFNULL(SUM(amount),0) as totalExpensesAdv FROM expenses_advanced WHERE storeId = ? AND date >= ?');
                         $expAdvStmt->execute([$store['id'], $appliedAt]);
                         $expensesAdv = (float)$expAdvStmt->fetchColumn();
                         $expenses += $expensesAdv;
-                        $expDirectStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'direct'");
+                        $expDirectStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'direct'");
                         $expDirectStmt->execute([$store['id'], $appliedAt]);
                         $expensesDirect = (float)$expDirectStmt->fetchColumn();
                         // indirect expenses split by configured categories
@@ -95,7 +108,7 @@ try {
                         $expensesIndirectBenef = 0.0;
                         if (!empty($fondCats)) {
                             $ph = implode(',', array_fill(0, count($fondCats), '?'));
-                            $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'indirect' AND categoryId IN ($ph)";
+                            $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'indirect' AND categoryId IN ($ph)";
                             $params = array_merge([$store['id'], $appliedAt], $fondCats);
                             $stmt2 = $pdo->prepare($sql);
                             $stmt2->execute($params);
@@ -103,14 +116,14 @@ try {
                         }
                         if (!empty($benefCats)) {
                             $ph = implode(',', array_fill(0, count($benefCats), '?'));
-                            $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'indirect' AND categoryId IN ($ph)";
+                            $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'indirect' AND categoryId IN ($ph)";
                             $params = array_merge([$store['id'], $appliedAt], $benefCats);
                             $stmt3 = $pdo->prepare($sql);
                             $stmt3->execute($params);
                             $expensesIndirectBenef = (float)$stmt3->fetchColumn();
                         }
                         $expensesIndirect = $expensesIndirectFond + $expensesIndirectBenef;
-                        $expOpStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'operational'");
+                        $expOpStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'operational'");
                         $expOpStmt->execute([$store['id'], $appliedAt]);
                         $expensesOperational = (float)$expOpStmt->fetchColumn();
                     } else {
@@ -213,17 +226,17 @@ try {
                                     WHEN p.costPrice IS NOT NULL THEN (p.costPrice * si.quantity)
                                     ELSE 0
                                 END
-                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt > ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                             $cogsSinceStmt->execute([$store['id'], $fondAppliedAt]);
                             $cogsSince = (float)$cogsSinceStmt->fetchColumn();
-                            $dStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'direct'");
+                            $dStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'direct'");
                             $dStmt->execute([$store['id'], $fondAppliedAt]);
                             $expensesDirectSince = (float)$dStmt->fetchColumn();
                             // indirect expenses for fond since appliedAt
                             $expensesIndirectFondSince = 0.0;
                             if (!empty($fondCats)) {
                                 $ph = implode(',', array_fill(0, count($fondCats), '?'));
-                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'indirect' AND categoryId IN ($ph)";
+                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'indirect' AND categoryId IN ($ph)";
                                 $params = array_merge([$store['id'], $fondAppliedAt], $fondCats);
                                 $stmtInd = $pdo->prepare($sql);
                                 $stmtInd->execute($params);
@@ -270,7 +283,7 @@ try {
                         $benAppliedAt = $benRow['appliedAt'] ? (int)$benRow['appliedAt'] : null;
                         if ($benAppliedAt) {
                             // revenue since appliedAt - only from closed shifts
-                            $revSinceStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt > ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                            $revSinceStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                             $revSinceStmt->execute([$store['id'], $benAppliedAt]);
                             $salesSince = (float)$revSinceStmt->fetchColumn();
                             // cogs since appliedAt - only from closed shifts
@@ -280,10 +293,10 @@ try {
                                     WHEN p.costPrice IS NOT NULL THEN (p.costPrice * si.quantity)
                                     ELSE 0
                                 END
-                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt > ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                            ),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN products p ON p.id = si.productId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                             $cogsSinceStmt->execute([$store['id'], $benAppliedAt]);
                             $cogsSince = (float)$cogsSinceStmt->fetchColumn();
-                            $dStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'direct'");
+                            $dStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'direct'");
                             $dStmt->execute([$store['id'], $benAppliedAt]);
                             $expensesDirectSince = (float)$dStmt->fetchColumn();
                             // indirect expenses since appliedAt split by configured categories
@@ -291,7 +304,7 @@ try {
                             $expensesIndirectBenefSince = 0.0;
                             if (!empty($fondCats)) {
                                 $ph = implode(',', array_fill(0, count($fondCats), '?'));
-                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'indirect' AND categoryId IN ($ph)";
+                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'indirect' AND categoryId IN ($ph)";
                                 $params = array_merge([$store['id'], $benAppliedAt], $fondCats);
                                 $stmt2 = $pdo->prepare($sql);
                                 $stmt2->execute($params);
@@ -299,14 +312,14 @@ try {
                             }
                             if (!empty($benefCats)) {
                                 $ph = implode(',', array_fill(0, count($benefCats), '?'));
-                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'indirect' AND categoryId IN ($ph)";
+                                $sql = "SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'indirect' AND categoryId IN ($ph)";
                                 $params = array_merge([$store['id'], $benAppliedAt], $benefCats);
                                 $stmt3 = $pdo->prepare($sql);
                                 $stmt3->execute($params);
                                 $expensesIndirectBenefSince = (float)$stmt3->fetchColumn();
                             }
                             $expensesIndirectSince = $expensesIndirectFondSince + $expensesIndirectBenefSince;
-                            $opStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date > ? AND type = 'operational'");
+                            $opStmt = $pdo->prepare("SELECT IFNULL(SUM(amount),0) FROM expenses_advanced WHERE storeId = ? AND date >= ? AND type = 'operational'");
                             $opStmt->execute([$store['id'], $benAppliedAt]);
                             $expensesOperationalSince = (float)$opStmt->fetchColumn();
                             $margeSince = ($salesSince - $cogsSince) - ($expensesIndirectBenefSince ?? 0);
@@ -562,15 +575,36 @@ try {
             // Essayer d'obtenir l'id depuis le body JSON ou la query string
             $data = json_decode(file_get_contents('php://input'), true);
             $id = $data['id'] ?? ($_GET['id'] ?? null);
+            // Support de la suppression douce (soft delete) : ?soft=1 ou {"soft": true} dans le body
+            $soft = (isset($_GET['soft']) && $_GET['soft'] === '1') || (!empty($data) && !empty($data['soft']));
             if ($id) {
+                // If soft delete requested, simply deactivate the store instead of removing all data
+                if ($soft) {
+                    try {
+                        $upd = $pdo->prepare('UPDATE stores SET active = 0 WHERE id = ?');
+                        $upd->execute([$id]);
+                        echo json_encode(['success' => true, 'soft' => true, 'id' => $id]);
+                    } catch (PDOException $ex) {
+                        http_response_code(500);
+                        echo json_encode(['success' => false, 'error' => $ex->getMessage()]);
+                    }
+                    exit;
+                }
                 // Log de debug
                 error_log('Suppression magasin id=' . $id);
                 try {
+                    $pdo->beginTransaction();
                     // Supprimer les mappings user_stores pour ce magasin (ne pas supprimer les utilisateurs eux-mêmes)
                     $stmt = $pdo->prepare('DELETE FROM user_stores WHERE storeId=?');
                     $stmt->execute([$id]);
+                    // Supprimer les items de vente liés aux ventes du magasin
+                    $stmt = $pdo->prepare('DELETE si FROM sale_items si INNER JOIN sales s ON si.saleId = s.id WHERE s.storeId = ?');
+                    $stmt->execute([$id]);
                     // Supprimer les ventes liées
                     $stmt = $pdo->prepare('DELETE FROM sales WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    // Supprimer les clients liés
+                    $stmt = $pdo->prepare('DELETE FROM customers WHERE storeId=?');
                     $stmt->execute([$id]);
                     // Supprimer les produits liés
                     $stmt = $pdo->prepare('DELETE FROM products WHERE storeId=?');
@@ -581,7 +615,6 @@ try {
                     // Supprimer les dépenses liées
                     $stmt = $pdo->prepare('DELETE FROM expenses WHERE storeId=?');
                     $stmt->execute([$id]);
-                    // Correction des noms de tables
                     $stmt = $pdo->prepare('DELETE FROM expenses_advanced WHERE storeId=?');
                     $stmt->execute([$id]);
                     $stmt = $pdo->prepare('DELETE FROM expense_categories WHERE storeId=?');
@@ -592,13 +625,29 @@ try {
                     // Supprimer les signaux de stock liés
                     $stmt = $pdo->prepare('DELETE FROM stock_signals WHERE storeId=?');
                     $stmt->execute([$id]);
+                    // Supprimer les réglages email liés (store_id)
+                    try {
+                        $stmt = $pdo->prepare('DELETE FROM email_settings WHERE store_id=?');
+                        $stmt->execute([$id]);
+                    } catch (Exception $e) {
+                        // ignore if table/column not present
+                    }
+                    // Supprimer les overrides/paramètres de solde liés
+                    $stmt = $pdo->prepare('DELETE FROM store_balance_overrides WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    $stmt = $pdo->prepare('DELETE FROM store_balance_settings WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    $stmt = $pdo->prepare('DELETE FROM store_indicator_overrides WHERE storeId=?');
+                    $stmt->execute([$id]);
                     // Enfin, supprimer le magasin
                     $stmt = $pdo->prepare('DELETE FROM stores WHERE id=?');
                     $stmt->execute([$id]);
                     $deleted = $stmt->rowCount();
+                    $pdo->commit();
                     error_log('Résultat suppression magasin: ' . $deleted . ' ligne(s) supprimée(s)');
                     echo json_encode(['success' => true, 'deleted' => $deleted]);
                 } catch (PDOException $ex) {
+                    $pdo->rollBack();
                     error_log('Erreur SQL suppression magasin: ' . $ex->getMessage());
                     http_response_code(500);
                     echo json_encode(['success' => false, 'error' => $ex->getMessage()]);

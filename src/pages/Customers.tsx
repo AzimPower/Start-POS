@@ -101,10 +101,12 @@ export default function Customers() {
           const response = await fetch(url);
           if (response.ok) {
             const backendCustomers = await response.json();
+            // Filtrer côté client aussi pour sécurité
+            const storeCustomers = backendCustomers.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
             // Mettre à jour la base locale
             const tx = db.transaction('customers', 'readwrite');
             await Promise.all([
-              ...backendCustomers.map(c => tx.store.put(c)),
+              ...storeCustomers.map(c => tx.store.put(c)),
               tx.done
             ]);
             // reset pagination and load first page

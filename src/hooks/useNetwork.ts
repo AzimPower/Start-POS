@@ -43,14 +43,34 @@ export const useNetwork = () => {
     let mounted = true;
 
     // Au montage, valider que le backend est joignable (pas seulement la connexion réseau)
-    (async () => {
+    const checkBackend = async () => {
       try {
         const up = await backendAvailable();
         if (mounted) setStatus(prev => ({ ...prev, isBackendReachable: up }));
       } catch (e) {
-        // ignore
+        if (mounted) setStatus(prev => ({ ...prev, isBackendReachable: false }));
       }
-    })();
+    };
+
+    // Vérification initiale
+    checkBackend();
+
+    // ✅ Vérifier quand la page redevient visible (écran sort de veille, retour depuis autre onglet)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('👁️ [useNetwork] Page visible - vérification backend...');
+        checkBackend();
+      }
+    };
+
+    // ✅ Vérifier quand la fenêtre reprend le focus (retour d'une autre app)
+    const handleFocus = () => {
+      console.log('🎯 [useNetwork] Fenêtre focus - vérification backend...');
+      checkBackend();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
 
     const unsubscribe = onConnectionStateChange((newState) => {
       (async () => {
@@ -98,8 +118,11 @@ export const useNetwork = () => {
     const interval = setInterval(updatePendingCount, 10000); // Toutes les 10 secondes
 
     return () => {
+      mounted = false;
       unsubscribe();
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [toast, updatePendingCount]);
 

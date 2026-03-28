@@ -154,16 +154,20 @@ export default function CustomerReceipts() {
     let allCustomers;
     if (isOnline) {
       try {
-        const customersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php');
+        let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
+        if (user?.storeId) url += `?storeId=${user.storeId}`;
+        const customersResponse = await fetch(url);
         if (customersResponse.ok) {
           const backendCustomers = await customersResponse.json();
+          // Filtrer côté client aussi pour sécurité
+          const storeCustomers = backendCustomers.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
           // Mettre à jour la base locale
           const tx = db.transaction('customers', 'readwrite');
           await Promise.all([
-            ...backendCustomers.map(c => tx.store.put(c)),
+            ...storeCustomers.map(c => tx.store.put(c)),
             tx.done
           ]);
-          allCustomers = backendCustomers;
+          allCustomers = storeCustomers;
         } else {
           allCustomers = await db.getAll('customers');
         }

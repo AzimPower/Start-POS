@@ -40,11 +40,24 @@ switch ($method) {
         $stmt->execute($params);
         $sales = $stmt->fetchAll();
 
-        // Charger les items pour chaque vente
-        foreach ($sales as &$sale) {
-            $itemsStmt = $pdo->prepare('SELECT * FROM sale_items WHERE saleId = ?');
-            $itemsStmt->execute([$sale['id']]);
-            $sale['items'] = $itemsStmt->fetchAll();
+        // OPTIMISATION: Charger tous les items en une seule requête (évite N+1)
+        if (!empty($sales)) {
+            $saleIds = array_column($sales, 'id');
+            $placeholders = str_repeat('?,', count($saleIds) - 1) . '?';
+            $itemsStmt = $pdo->prepare("SELECT * FROM sale_items WHERE saleId IN ($placeholders)");
+            $itemsStmt->execute($saleIds);
+            $allItems = $itemsStmt->fetchAll();
+            
+            // Grouper les items par saleId
+            $itemsBySale = [];
+            foreach ($allItems as $item) {
+                $itemsBySale[$item['saleId']][] = $item;
+            }
+            
+            // Assigner les items à chaque vente
+            foreach ($sales as &$sale) {
+                $sale['items'] = $itemsBySale[$sale['id']] ?? [];
+            }
         }
 
         // Compter le total pour la pagination

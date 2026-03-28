@@ -1,0 +1,62 @@
+# ============================================================
+# OPTIMISATIONS PHP POUR HOSTINGER PREMIUM
+# ============================================================
+# Ce fichier configure PHP pour des performances optimales
+# Compatible avec hébergement mutualisé Hostinger
+# ============================================================
+
+# === PERFORMANCE PHP ===
+php_value memory_limit 256M
+php_value max_execution_time 60
+php_value max_input_time 60
+php_value upload_max_filesize 10M
+php_value post_max_size 10M
+
+# === COMPRESSION GZIP ===
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/javascript
+</IfModule>
+
+# === CACHE HTTP ===
+<IfModule mod_expires.c>
+    ExpiresActive On
+    # Cache court pour les API (5 minutes)
+    ExpiresByType application/json "access plus 5 minutes"
+</IfModule>
+
+# === HEADERS DE SÉCURITÉ ===
+<IfModule mod_headers.c>
+    # Protection XSS
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # CORS - À ajuster selon vos besoins
+    # Header set Access-Control-Allow-Origin "https://votre-domaine.com"
+    # Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    # Header set Access-Control-Allow-Headers "Content-Type, Authorization"
+</IfModule>
+
+# === SÉCURITÉ - BLOQUER ACCÈS AUX FICHIERS SENSIBLES ===
+<FilesMatch "\.(env|sql|log|md|txt|ini|bak)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# === DÉSACTIVER LA NAVIGATION DE RÉPERTOIRES ===
+Options -Indexes
+
+# === PROTECTION CONTRE LES INJECTIONS ===
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Bloquer les requêtes suspectes
+    RewriteCond %{QUERY_STRING} (<|%3C).*script.*(>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} GLOBALS(=|[|%[0-9A-Z]{0,2}) [OR]
+    RewriteCond %{QUERY_STRING} _REQUEST(=|[|%[0-9A-Z]{0,2})
+    RewriteRule ^(.*)$ - [F,L]
+</IfModule>

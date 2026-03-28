@@ -202,33 +202,64 @@ export default function Dashboard() {
       if (json.chartData) setChartData(json.chartData);
       if (json.salesByProduct) setSalesByProduct(json.salesByProduct);
       if (json.recapStats) {
-        // Calculer surplus/manque localement pour la période sélectionnée
+        // Calculer surplus/manque localement (période courante + précédente) pour overrider le backend
         try {
-          const local = await computeSurplusManqueForRange(start, end);
+          const periodLength = end - start;
+          const prevStart = start - periodLength - 1;
+          const prevEnd = start - 1;
+          const [local, localPrev] = await Promise.all([
+            computeSurplusManqueForRange(start, end),
+            computeSurplusManqueForRange(prevStart, prevEnd),
+          ]);
+          const evolSurplusVal = local.surplus - localPrev.surplus;
+          const evolManqueVal = local.manque - localPrev.manque;
+          const pct = (delta: number, prev: number) =>
+            prev === 0 ? (delta === 0 ? 0 : 100) : (delta / prev) * 100;
           setRecapStats({
             ...json.recapStats,
             surplus: local.surplus,
             manque: local.manque,
+            evolSurplus: evolSurplusVal,
+            evolManque: evolManqueVal,
+            evolSurplusPercent: pct(evolSurplusVal, localPrev.surplus),
+            evolManquePercent: pct(evolManqueVal, localPrev.manque),
           });
         } catch (e) {
-          // Si erreur, fallback aux valeurs du serveur (ou précédentes)
           console.warn('Failed to compute local surplus/manque for range', e);
           setRecapStats((prev: any) => ({
             ...json.recapStats,
             surplus: prev.surplus,
             manque: prev.manque,
+            evolSurplus: prev.evolSurplus,
+            evolManque: prev.evolManque,
+            evolSurplusPercent: prev.evolSurplusPercent,
+            evolManquePercent: prev.evolManquePercent,
           }));
         }
       }
     } catch (err) {
       console.error('Failed to fetch server stats, falling back to local DB aggregation', err);
-      // Fallback: compute surplus/manque locally for the selected period
+      // Fallback: compute surplus/manque locally pour la période courante + précédente
       try {
-        const local = await computeSurplusManqueForRange(start, end);
+        const periodLength = end - start;
+        const prevStart = start - periodLength - 1;
+        const prevEnd = start - 1;
+        const [local, localPrev] = await Promise.all([
+          computeSurplusManqueForRange(start, end),
+          computeSurplusManqueForRange(prevStart, prevEnd),
+        ]);
+        const evolSurplusVal = local.surplus - localPrev.surplus;
+        const evolManqueVal = local.manque - localPrev.manque;
+        const pct = (delta: number, prev: number) =>
+          prev === 0 ? (delta === 0 ? 0 : 100) : (delta / prev) * 100;
         setRecapStats((prev: any) => ({
           ...prev,
           surplus: local.surplus,
           manque: local.manque,
+          evolSurplus: evolSurplusVal,
+          evolManque: evolManqueVal,
+          evolSurplusPercent: pct(evolSurplusVal, localPrev.surplus),
+          evolManquePercent: pct(evolManqueVal, localPrev.manque),
         }));
       } catch (e) {
         console.warn('Failed fallback local surplus/manque computation', e);
@@ -249,29 +280,34 @@ export default function Dashboard() {
     }
     let surplus = 0, manque = 0;
     for (const shift of closedShifts) {
-      const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
-      let salesTotal = 0;
-      let expensesTotal = 0;
-      try {
-        const db2 = await getDB();
-        const sales = await db2.getAllFromIndex('sales', 'by-shift', shift.id);
-        // Exclure les ventes remboursées du calcul du manque
-        const validSales = sales.filter((sale: any) => !sale.refunded);
-        for (const sale of validSales) {
-          salesTotal += (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
+      let difference: number | null = null;
+
+      // Lire shift.difference tel que stocké à la fermeture (sans dépenses)
+      // Formule de Shifts.tsx : expectedAmount = opening + encaisseNet (dépenses exclues)
+      if (shift.difference !== null && shift.difference !== undefined && !isNaN(Number(shift.difference))) {
+        difference = Number(shift.difference);
+      } else if (shift.closingAmount !== null && shift.closingAmount !== undefined) {
+        // Fallback pour anciens shifts sans difference stocké
+        const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
+        let encaisseNet = 0;
+        try {
+          const db2 = await getDB();
+          const sales = await db2.getAllFromIndex('sales', 'by-shift', shift.id);
+          for (const sale of sales) {
+            const t = Number(sale.total) || 0;
+            if (sale.refunded) {
+              encaisseNet -= t;
+            } else {
+              encaisseNet += t;
+            }
+          }
+        } catch (e) {
+          // ignore per-shift read errors
         }
-        const expenses = await db2.getAllFromIndex('expenses', 'by-shift', shift.id);
-        for (const ex of expenses) {
-          expensesTotal += (typeof ex.amount === 'number' && !isNaN(ex.amount)) ? Number(ex.amount) : (Number(ex.amount) || 0);
-        }
-      } catch (e) {
-        // ignore per-shift read errors
-      }
-      const expected = opening + salesTotal - expensesTotal;
-      let difference = null;
-      if (shift.closingAmount !== null && shift.closingAmount !== undefined) {
+        const expected = opening + encaisseNet;
         difference = Number(shift.closingAmount) - expected;
       }
+
       if (typeof difference === 'number' && !isNaN(difference)) {
         if (difference > 0) surplus += difference;
         if (difference < 0) manque += Math.abs(difference);
@@ -542,42 +578,19 @@ export default function Dashboard() {
     
     const todaySalesTotal = todaySalesData.reduce((sum, sale) => sum + sale.total, 0);
     
-    // Calculer surplus et manque à partir des shifts fermés en recalculant l'écart comme dans ShiftReceiptDetails
+    // Calculer la balance à partir des shifts fermés d'aujourd'hui uniquement
     const allShifts = await db.getAll('shifts');
-    let closedShifts = allShifts.filter(s => s.status === 'closed');
+    let closedShifts = allShifts.filter(s => s.status === 'closed' && s.closedAt && s.closedAt >= todayTimestamp);
     if (user?.role === 'cashier') {
       closedShifts = closedShifts.filter(s => s.userId === user.id);
     } else if (user?.storeId) {
       closedShifts = closedShifts.filter(s => s.storeId === user.storeId);
     }
-    let surplus = 0, manque = 0, balance = 0;
+    let balance = 0;
     for (const shift of closedShifts) {
-      // Recalcule l'écart comme dans ShiftReceiptDetails
-      const opening = shift.openingAmount ? Number(shift.openingAmount) : 0;
-      let salesTotal = 0;
-      let expensesTotal = 0;
-      try {
-        const db2 = await getDB();
-        const sales = await db2.getAllFromIndex('sales', 'by-shift', shift.id);
-        // Exclure les ventes remboursées du calcul du manque
-        const validSales = sales.filter((sale: any) => !sale.refunded);
-        for (const sale of validSales) {
-          salesTotal += (typeof sale.total === 'number' && !isNaN(sale.total)) ? Number(sale.total) : (Number(sale.total) || 0);
-        }
-        const expenses = await db2.getAllFromIndex('expenses', 'by-shift', shift.id);
-        for (const ex of expenses) {
-          expensesTotal += (typeof ex.amount === 'number' && !isNaN(ex.amount)) ? Number(ex.amount) : (Number(ex.amount) || 0);
-        }
-      } catch {}
-      const expected = opening + salesTotal - expensesTotal;
-      let difference = null;
-      if (shift.closingAmount !== null && shift.closingAmount !== undefined) {
-        difference = Number(shift.closingAmount) - expected;
-      }
-      if (typeof difference === 'number' && !isNaN(difference)) {
-        balance += difference;
-        if (difference > 0) surplus += difference;
-        if (difference < 0) manque += Math.abs(difference);
+      // Utiliser shift.difference directement (valeur stockée à la fermeture, sans dépenses)
+      if (shift.difference !== null && shift.difference !== undefined && !isNaN(Number(shift.difference))) {
+        balance += Number(shift.difference);
       }
     }
     // Get active shift
@@ -590,11 +603,7 @@ export default function Dashboard() {
       balance: balance,
       activeShift: userShift,
     });
-    setRecapStats((prev: any) => ({
-      ...prev,
-      surplus,
-      manque,
-    }));
+    // Ne pas mettre à jour surplus/manque ici, c'est géré par filterDataByPeriod()
   };
 
   // Compute cashier stats purely from local DB: ventes, transactions, remboursements, pending ops, shifts

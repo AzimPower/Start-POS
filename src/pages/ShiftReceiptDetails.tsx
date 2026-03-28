@@ -40,7 +40,21 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
       if (!selectedShift) return;
       try {
         const db = await import('@/lib/db').then(m => m.getDB());
-        const sales = await db.getAllFromIndex('sales', 'by-shift', selectedShift.id);
+        let sales = await db.getAllFromIndex('sales', 'by-shift', selectedShift.id);
+        // Fallback: include ventes sans shiftId dans l'intervalle du shift
+        try {
+          const allSales = await db.getAll('sales');
+          const shiftStart = selectedShift.openedAt;
+          const shiftEnd = selectedShift.closedAt || Date.now();
+          const extra = allSales.filter((s: any) => {
+            if (s.shiftId) return false;
+            const t = s.createdAt || s.timestamp || 0;
+            return t >= shiftStart && t <= shiftEnd;
+          });
+          if (extra.length > 0) sales = sales.length > 0 ? [...sales, ...extra] : extra;
+        } catch {
+          // ignore fallback errors
+        }
         // helper to coerce values to numbers and avoid NaN
         // Accepts numbers or strings like "5 000", "5,000", "5000.00" and strips non-numeric separators
         const toNum = (v: any) => {
@@ -56,23 +70,28 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
           return Number.isFinite(n) ? n : 0;
         };
 
-        // Utiliser les montants saisis lors de la fermeture du shift au lieu de calculer à partir des ventes
+        // Utiliser les montants saisis lors de la fermeture du shift au lieu de calculer ? partir des ventes
         let cash = 0, mobile_money = 0;
         
-        // Priorité aux montants saisis lors de la fermeture du shift
-        if (selectedShift.cashAmount !== undefined || selectedShift.mobileMoneyAmount !== undefined) {
-          // Pour les espèces, soustraire le montant d'ouverture car il est inclus dans cashAmount
-          const rawCash = toNum(selectedShift.cashAmount || 0);
-          const openingAmount = toNum(selectedShift.openingAmount || 0);
-          cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
-          mobile_money = toNum(selectedShift.mobileMoneyAmount || 0);
+        if (selectedShift.status === 'closed') {
+          // Priorit? aux montants saisis lors de la fermeture du shift
+          if (selectedShift.cashAmount !== undefined || selectedShift.mobileMoneyAmount !== undefined) {
+            // Pour les esp?ces, soustraire le montant d'ouverture car il est inclus dans cashAmount
+            const rawCash = toNum(selectedShift.cashAmount || 0);
+            const openingAmount = toNum(selectedShift.openingAmount || 0);
+            cash = rawCash > openingAmount ? rawCash - openingAmount : 0;
+            mobile_money = toNum(selectedShift.mobileMoneyAmount || 0);
+          } else {
+            cash = 0;
+            mobile_money = 0;
+          }
         } else {
-          // Fallback: calculer à partir des ventes (ancien comportement)
+          // Shift ouvert : calculer ? partir des ventes
           for (const sale of sales) {
             const isRefunded = Boolean(sale.refunded);
             let saleCash = 0, saleMobile = 0;
             
-            // Priorité aux champs directs cashAmount et mobileMoneyAmount
+            // Priorit? aux champs directs cashAmount et mobileMoneyAmount
             if (sale.cashAmount !== undefined || sale.mobileMoneyAmount !== undefined) {
               saleCash = toNum(sale.cashAmount || 0);
               saleMobile = toNum(sale.mobileMoneyAmount || 0);
@@ -83,14 +102,14 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
                 if (p.method === 'mobile_money') saleMobile += toNum(p.amount);
               }
             } else {
-              // Dernière fallback: utiliser paymentMethod et total (ancienne logique)
+              // Derni?re fallback: utiliser paymentMethod et total (ancienne logique)
               if (sale.paymentMethod === 'cash') saleCash = toNum(sale.total);
               if (sale.paymentMethod === 'mobile_money') saleMobile = toNum(sale.total);
             }
             
-            // Ajouter aux ventes ou déduire des remboursements
+            // Ajouter aux ventes ou d?duire des remboursements
             if (isRefunded) {
-              cash -= saleCash;  // Déduire les remboursements
+              cash -= saleCash;  // D?duire les remboursements
               mobile_money -= saleMobile;
             } else {
               cash += saleCash;  // Ajouter les ventes
@@ -128,27 +147,24 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
           }
         }
 
-        // compute expected: opening + encaissé net basé sur les ventes réelles (cohérent avec Shifts.tsx)
-        const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
-        
-        // Calculer le montant attendu basé sur les ventes réelles (sans remboursements)
-        let encaisseNetVentes = 0;
-        for (const sale of sales) {
-          const isRefunded = Boolean(sale.refunded);
-          if (isRefunded) {
-            encaisseNetVentes -= toNum(sale.total ?? 0); // Déduire les remboursements
-          } else {
-            encaisseNetVentes += toNum(sale.total ?? 0); // Ajouter les ventes
-          }
-        }
-        
-        const expected = opening + encaisseNetVentes;
-
-        // compute difference: if closed use closingAmount - expected, else use encaisseNetVentes - expected
+        let expected: number | null = null;
         let difference: number | null = null;
-        if (selectedShift.closingAmount !== null && selectedShift.closingAmount !== undefined) {
-          difference = Number(selectedShift.closingAmount) - expected;
+        if (selectedShift.status === 'closed') {
+          expected = (selectedShift.expectedAmount !== null && selectedShift.expectedAmount !== undefined) ? toNum(selectedShift.expectedAmount) : null;
+          difference = (selectedShift.difference !== null && selectedShift.difference !== undefined) ? toNum(selectedShift.difference) : null;
         } else {
+          // Calculer le montant attendu bas? sur les ventes r?elles (sans remboursements)
+          const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
+          let encaisseNetVentes = 0;
+          for (const sale of sales) {
+            const isRefunded = Boolean(sale.refunded);
+            if (isRefunded) {
+              encaisseNetVentes -= toNum(sale.total ?? 0); // D?duire les remboursements
+            } else {
+              encaisseNetVentes += toNum(sale.total ?? 0); // Ajouter les ventes
+            }
+          }
+          expected = opening + encaisseNetVentes;
           difference = encaisseNetVentes - expected;
         }
 
@@ -255,8 +271,8 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
       <div style={{ marginTop: 8, textAlign: 'center' }}>
         <Button variant="outline" onClick={async () => {
           // Recompute expected and difference just before printing to ensure up-to-date values
-          let expected = 0;
-          let difference = 0;
+          let expected: number | null = null;
+          let difference: number | null = null;
           let salesTotal = 0;
           let cash = 0, mobile_money = 0;
           let refundsCash = 0, refundsMobile = 0;
@@ -338,21 +354,22 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
               }
             }
             
-            // Calculer le montant attendu basé sur les ventes réelles (cohérent avec Shifts.tsx)
-            const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
-            let encaisseNetVentesPrint = 0;
-            for (const sale of sales) {
-              const isRefunded = Boolean(sale.refunded);
-              if (isRefunded) {
-                encaisseNetVentesPrint -= toNum(sale.total ?? 0); // Déduire les remboursements
-              } else {
-                encaisseNetVentesPrint += toNum(sale.total ?? 0); // Ajouter les ventes
-              }
-            }
-            expected = opening + encaisseNetVentesPrint; // Utiliser les ventes réelles
-            if (selectedShift.closingAmount !== null && selectedShift.closingAmount !== undefined) {
-              difference = Number(selectedShift.closingAmount) - expected;
+            if (selectedShift.status === 'closed') {
+              expected = (selectedShift.expectedAmount !== null && selectedShift.expectedAmount !== undefined) ? toNum(selectedShift.expectedAmount) : null;
+              difference = (selectedShift.difference !== null && selectedShift.difference !== undefined) ? toNum(selectedShift.difference) : null;
             } else {
+              // Calculer le montant attendu bas? sur les ventes r?elles (coh?rent avec Shifts.tsx)
+              const opening = selectedShift.openingAmount ? Number(selectedShift.openingAmount) : 0;
+              let encaisseNetVentesPrint = 0;
+              for (const sale of sales) {
+                const isRefunded = Boolean(sale.refunded);
+                if (isRefunded) {
+                  encaisseNetVentesPrint -= toNum(sale.total ?? 0); // D?duire les remboursements
+                } else {
+                  encaisseNetVentesPrint += toNum(sale.total ?? 0); // Ajouter les ventes
+                }
+              }
+              expected = opening + encaisseNetVentesPrint; // Utiliser les ventes r?elles
               difference = encaisseNetVentesPrint - expected;
             }
           }
@@ -414,9 +431,10 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: { selec
               lines.push(NativePrinter.formatColumns(sanitizeForPrinter('  Total remboursé'), sanitizeForPrinter(formatMoney(totalRefunds) + ' FCFA'), width));
             }
             
-            lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Montant attendu'), sanitizeForPrinter(formatMoney(expected) + ' FCFA'), width));
-            const diff = ((difference >= 0 ? '+' : '') + formatMoney(difference) + ' FCFA');
-            lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Écart'), sanitizeForPrinter(diff), width));
+            const expectedText = expected === null ? '-' : (formatMoney(expected) + ' FCFA');
+            const diffText = difference === null ? '-' : ((difference >= 0 ? '+' : '') + formatMoney(difference) + ' FCFA');
+            lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Montant attendu'), sanitizeForPrinter(expectedText), width));
+            lines.push(NativePrinter.formatColumns(sanitizeForPrinter('Écart'), sanitizeForPrinter(diffText), width));
             const durationMs = ((selectedShift?.closedAt || Date.now()) - (selectedShift?.openedAt || Date.now()));
             const h = Math.floor(durationMs / (1000*60*60));
             const m = Math.floor((durationMs % (1000*60*60)) / (1000*60));

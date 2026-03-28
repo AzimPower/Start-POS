@@ -62,7 +62,7 @@ export default function Receipts() {
   const navigate = useNavigate();
   const { isOnline, isBackendReachable, manualSync } = useNetwork();
   const isMobile = useIsMobile();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -482,6 +482,11 @@ export default function Receipts() {
       // Sauvegarder localement d'abord
       await db.put('sales', refundedSale);
 
+      // Mise à jour optimiste de l'UI : remplacer la vente remboursée localement
+      setSales(prev => prev.map(s => (s.id === refundedSale.id ? refundedSale : s)));
+      setFilteredSales(prev => prev.map(s => (s.id === refundedSale.id ? refundedSale : s)));
+      if (selectedSale && selectedSale.id === refundedSale.id) setSelectedSale(refundedSale);
+
       // Restore stock locally - Restaurer le stock des articles remboursés
       const productsToRestoreStock = [];
       for (const item of (saleToRefund.items || [])) {
@@ -711,7 +716,7 @@ export default function Receipts() {
             </div>
             <div className="flex items-center gap-2">
               <div className="text-sm text-muted-foreground hidden sm:block">
-                {loadedCount} chargés{hasMore ? ' (+)' : ''}
+                {loadedCount} chargés
               </div>
             </div>
           </div>

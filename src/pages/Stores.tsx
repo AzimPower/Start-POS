@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Store, Edit, Trash2, Plus } from 'lucide-react';
+import { Store, Edit, Trash2, Plus, RefreshCw, Power, ArrowLeftRight, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
 
 interface StoreData {
   id: string;
@@ -34,6 +36,9 @@ export default function Stores() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingStore, setEditingStore] = useState<StoreData | null>(null);
   const [formData, setFormData] = useState({ name: '', address: '' });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [subscriptionFilter, setSubscriptionFilter] = useState<string>('all');
   // Ajout du formulaire admin
   const [adminForm, setAdminForm] = useState({ username: '', phone: '', password: '' });
   // Single input to search/select existing admins or create new one
@@ -41,6 +46,11 @@ export default function Stores() {
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
   const [admins, setAdmins] = useState<Array<any>>([]);
   const [selectedAdminId, setSelectedAdminId] = useState<string | null>(null);
+  // Renouvellement abonnement
+  const PRICE_PER_MONTH = 5000;
+  const [renewalDialog, setRenewalDialog] = useState<{ open: boolean; store: StoreData | null; months: number }>({
+    open: false, store: null, months: 1
+  });
 
   useEffect(() => {
     (async () => {
@@ -63,8 +73,8 @@ export default function Stores() {
     if (isOnline) {
       try {
         const resp = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
-        if (resp.ok) {
-          let backendStores: any = await resp.json();
+      if (resp.ok) {
+        let backendStores: any = await resp.json();
 
           // Accept common wrapper shapes
           if (!Array.isArray(backendStores)) {
@@ -77,6 +87,22 @@ export default function Stores() {
               backendStores = [];
             }
           }
+
+          // Filter out stores pending local deletion
+          let pendingDeleteIds = new Set<string>();
+          try {
+            const pending = await db.getAll('syncQueue');
+            pendingDeleteIds = new Set(
+              pending
+                .filter((op: any) => String(op?.method || '').toUpperCase() === 'DELETE' && String(op?.url || '').includes('/stores.php'))
+                .map((op: any) => op?.data?.id)
+                .filter(Boolean)
+            );
+          } catch (e) {
+            // ignore if syncQueue unavailable
+          }
+
+          backendStores = backendStores.filter((s: any) => !pendingDeleteIds.has(s.id));
 
           // Normalize stores and ensure createdAt is numeric
           backendStores = backendStores.map((s: any) => ({
@@ -107,6 +133,19 @@ export default function Stores() {
     }
 
     let storesData = await db.getAll('stores');
+    // Hide stores pending deletion from local list too
+    try {
+      const pending = await db.getAll('syncQueue');
+      const pendingDeleteIds = new Set(
+        pending
+          .filter((op: any) => String(op?.method || '').toUpperCase() === 'DELETE' && String(op?.url || '').includes('/stores.php'))
+          .map((op: any) => op?.data?.id)
+          .filter(Boolean)
+      );
+      storesData = storesData.filter(s => !pendingDeleteIds.has(s.id));
+    } catch (e) {
+      // ignore
+    }
     
     // Vérifier et désactiver les abonnements expirés
     const now = Date.now();
@@ -386,10 +425,10 @@ export default function Stores() {
       });
       console.log('Réponse API suppression store:', apiRes);
       // Supprimer toutes les données locales liées au magasin
-      const tables: Array<
-        'users' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals'
+    const tables: Array<
+        'users' | 'userStores' | 'customers' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals' | 'hiddenCategories' | 'emailSettings' | 'pendingEmails'
       > = [
-        'users', 'sales', 'products', 'categories', 'expenses', 'expensesAdvanced', 'expenseCategories', 'shifts', 'stockSignals'
+        'users', 'userStores', 'customers', 'sales', 'products', 'categories', 'expenses', 'expensesAdvanced', 'expenseCategories', 'shifts', 'stockSignals', 'hiddenCategories', 'emailSettings', 'pendingEmails'
       ];
       for (const table of tables) {
         const all = await db.getAll(table);
@@ -418,16 +457,14 @@ export default function Stores() {
     });
   };
 
-  const renewSubscription = async (storeId: string) => {
-    if (!confirm('Renouveler l\'abonnement de ce magasin pour 30 jours supplémentaires ?')) return;
-
+  const renewSubscription = async (storeId: string, months: number) => {
     const db = await getDB();
     try {
       const store = await db.get('stores', storeId);
       if (store) {
         const now = Date.now();
         const currentEnd = (store as any).subscriptionEnd || now;
-        const newEnd = Math.max(currentEnd, now) + (30 * 24 * 60 * 60 * 1000); // 30 jours de plus
+        const newEnd = Math.max(currentEnd, now) + (months * 30 * 24 * 60 * 60 * 1000);
         
         const updatedStore = { 
           ...store, 
@@ -454,7 +491,29 @@ export default function Stores() {
           await db.put('users', { ...storeUser, active: true });
         }
         
-        toast.success('Abonnement renouvelé avec succès');
+        const total = months * PRICE_PER_MONTH;
+
+        // Enregistrer l'encaissement
+        try {
+          await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/subscription_payments.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: generateId(),
+              storeId,
+              storeName: store.name,
+              months,
+              amount: total,
+              paidAt: now,
+              note: `Renouvellement ${months} mois — nouvelle expiration: ${new Date(newEnd).toLocaleDateString('fr-FR')}`,
+            }),
+          });
+        } catch (e) {
+          console.warn('Erreur enregistrement encaissement:', e);
+        }
+
+        toast.success(`Abonnement renouvelé — ${months} mois — ${total.toLocaleString('fr-FR')} F`);
+        setRenewalDialog({ open: false, store: null, months: 1 });
         loadStores();
       }
     } catch (error) {
@@ -509,6 +568,30 @@ export default function Stores() {
     loadAdmins();
     setShowDialog(true);
   };
+
+  const filteredStores = stores.filter(store => {
+    // Filtre de recherche
+    const matchesSearch = !searchQuery || 
+      store.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (store.address && store.address.toLowerCase().includes(searchQuery.toLowerCase()));
+    
+    // Filtre par statut
+    const matchesStatus = statusFilter === 'all' || 
+      (statusFilter === 'active' && store.active !== false) ||
+      (statusFilter === 'inactive' && store.active === false);
+    
+    // Filtre par état d'abonnement
+    const matchesSubscription = subscriptionFilter === 'all' || (() => {
+      const now = Date.now();
+      const subEnd = (store as any).subscriptionEnd;
+      if (!subEnd) return subscriptionFilter === 'active'; // Si pas d'info, considérer comme actif
+      const isExpired = subEnd <= now;
+      return (subscriptionFilter === 'active' && !isExpired) ||
+             (subscriptionFilter === 'expired' && isExpired);
+    })();
+    
+    return matchesSearch && matchesStatus && matchesSubscription;
+  });
 
   return (
     <div className="p-4 sm:p-6 space-y-6 lg:max-w-7xl lg:mx-auto">
@@ -667,6 +750,62 @@ export default function Stores() {
         </Dialog>
       </div>
 
+      {/* Barre de recherche et filtres */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col gap-4">
+            {/* Barre de recherche */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Rechercher par nom ou adresse..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            
+            {/* Filtres */}
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <Label className="text-sm mb-2 block">Statut</Label>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les statuts" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les statuts</SelectItem>
+                    <SelectItem value="active">Actif</SelectItem>
+                    <SelectItem value="inactive">Inactif</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="flex-1">
+                <Label className="text-sm mb-2 block">Abonnement</Label>
+                <Select value={subscriptionFilter} onValueChange={setSubscriptionFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les abonnements" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les états</SelectItem>
+                    <SelectItem value="active">Abonnement actif</SelectItem>
+                    <SelectItem value="expired">Abonnement expiré</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Compteur de résultats */}
+              <div className="flex items-end">
+                <Badge variant="outline" className="h-10 px-4 flex items-center">
+                  {filteredStores.length} magasin{filteredStores.length > 1 ? 's' : ''}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:items-stretch lg:gap-6">
         {isLoading ? (
           Array.from({ length: 6 }).map((_, i) => (
@@ -693,73 +832,84 @@ export default function Stores() {
             </Card>
           ))
         ) : (
-          stores.map(store => (
-            <Card key={store.id} className="rounded-xl shadow-md border border-gray-200 bg-white transition hover:shadow-lg overflow-hidden lg:h-full lg:flex lg:flex-col lg:justify-between">
-            <div className="flex flex-col min-h-[180px] md:min-h-[220px] lg:h-full">
-              <div className="flex items-start justify-between p-4 border-b border-gray-100">
+          filteredStores.map(store => (
+            <Card key={store.id} className="rounded-2xl border border-border/60 bg-card shadow-sm hover:shadow-md transition overflow-hidden lg:h-full lg:flex lg:flex-col lg:justify-between">
+            <div className="flex flex-col min-h-[190px] md:min-h-[220px] lg:h-full">
+              <div className="flex items-start justify-between p-4 border-b border-border/60 bg-gradient-to-r from-slate-50 to-white">
                 <div className="flex items-center gap-3">
-                  <Store className="w-5 h-5 text-primary" />
+                  <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                    <Store className="w-5 h-5" />
+                  </div>
                   <div>
-                    <div className="font-semibold text-lg">{store.name}</div>
+                    <div className="font-semibold text-base sm:text-lg">{store.name}</div>
                     <div className="text-xs text-muted-foreground">{store.address || 'Pas d\'adresse'}</div>
                   </div>
                 </div>
-                <div>
-                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
-                    (store.active !== false) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                  }`}>
-                    {(store.active !== false) ? 'Actif' : 'Inactif'}
-                  </span>
-                </div>
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  (store.active !== false) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${(store.active !== false) ? 'bg-green-600' : 'bg-red-600'}`} />
+                  {(store.active !== false) ? 'Actif' : 'Inactif'}
+                </span>
               </div>
               <CardContent className="flex-1 p-4">
-                <div className="mb-3 space-y-1">
-                  <p className="text-[11px] sm:text-xs text-muted-foreground">
-                    Créé le: {new Date(store.createdAt).toLocaleDateString('fr-FR')}
-                  </p>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground">Créé le</p>
+                    <p className="font-medium">{new Date(store.createdAt).toLocaleDateString('fr-FR')}</p>
+                  </div>
                   {(store as any).subscriptionStart && (
-                    <p className="text-xs text-muted-foreground">
-                      Abonnement depuis: {new Date((store as any).subscriptionStart).toLocaleDateString('fr-FR')}
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-muted-foreground">Abonnement depuis</p>
+                      <p className="font-medium">{new Date((store as any).subscriptionStart).toLocaleDateString('fr-FR')}</p>
+                    </div>
                   )}
                   {(store as any).subscriptionEnd && (
-                    <p className={`text-[12px] sm:text-xs font-medium ${
-                      (store as any).subscriptionEnd > Date.now() 
-                        ? 'text-green-600' 
-                        : 'text-red-600'
-                    }`}>
-                      Expire le: {new Date((store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
-                      {(store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
-                    </p>
+                    <div className="space-y-1 col-span-2">
+                      <p className="text-muted-foreground">Expiration</p>
+                      <p className={`font-medium ${
+                        (store as any).subscriptionEnd > Date.now() 
+                          ? 'text-green-600' 
+                          : 'text-red-600'
+                      }`}>
+                        {new Date((store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
+                        {(store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
+                      </p>
+                    </div>
                   )}
                   {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() && (
-                    <p className="text-xs text-blue-600">
-                      Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
-                    </p>
+                    <div className="col-span-2">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700">
+                        Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
+                      </span>
+                    </div>
                   )}
                 </div>
               </CardContent>
-              <div className="p-4 pt-0 lg:pt-4 lg:flex lg:items-center lg:justify-between">
+              <div className="p-4 pt-2 lg:pt-4 lg:flex lg:items-center lg:justify-between">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full lg:flex-row lg:items-center lg:justify-between">
                   {/* Left group: Modifier, Renouveler */}
                   <div className="flex flex-row flex-wrap gap-2 items-center w-full sm:w-1/2 lg:w-1/2">
                     <Button
                       variant="outline"
-                      size="sm"
-                      className="w-full sm:w-auto sm:min-w-[120px] text-sm sm:text-base flex-shrink-0"
+                      size="icon"
+                      className="h-9 w-9"
                       onClick={() => handleEdit(store)}
+                      title="Modifier"
+                      aria-label="Modifier"
                     >
-                      <Edit className="w-4 h-4 mr-2" />
-                      <span className="sr-only">Modifier</span>
+                      <Edit className="w-4 h-4" />
                     </Button>
                     {user?.role === 'super_admin' && (
                       <Button
                         variant="default"
-                        size="sm"
-                        onClick={() => renewSubscription(store.id)}
-                        className="w-full sm:w-auto sm:min-w-[120px] bg-blue-600 hover:bg-blue-700 text-sm sm:text-base flex-shrink-0"
+                        size="icon"
+                        onClick={() => setRenewalDialog({ open: true, store: store, months: 1 })}
+                        className="h-9 w-9 bg-blue-600 hover:bg-blue-700"
+                        title="Renouveler l'abonnement"
+                        aria-label="Renouveler l'abonnement"
                       >
-                        Renouveler
+                        <RefreshCw className="w-4 h-4" />
                       </Button>
                     )}
                   </div>
@@ -771,14 +921,16 @@ export default function Stores() {
                       <>
                         <Button
                           variant="default"
-                          size="sm"
+                          size="icon"
                           onClick={() => {
                             // Open confirmation modal instead of switching immediately
                             setSwitchingStore({ id: store.id, name: store.name || store.id });
                           }}
-                          className="w-full sm:w-auto sm:min-w-[120px] text-sm sm:text-base flex-shrink-0"
+                          className="h-9 w-9"
+                          title="Basculer"
+                          aria-label="Basculer"
                         >
-                          Basculer
+                          <ArrowLeftRight className="w-4 h-4" />
                         </Button>
 
                         <Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching) setSwitchingStore(null); }}>
@@ -830,19 +982,23 @@ export default function Stores() {
                     {user?.role === 'super_admin' && (
                       <Button
                         variant={(store.active !== false) ? 'destructive' : 'default'}
-                        size="sm"
+                        size="icon"
                         onClick={() => toggleStoreStatus(store.id, store.active !== false)}
-                        className="w-full sm:w-auto sm:min-w-[120px] text-sm sm:text-base flex-shrink-0"
+                        className="h-9 w-9"
+                        title={(store.active !== false) ? 'Désactiver' : 'Activer'}
+                        aria-label={(store.active !== false) ? 'Désactiver' : 'Activer'}
                       >
-                        {(store.active !== false) ? 'Désactiver' : 'Activer'}
+                        <Power className="w-4 h-4" />
                       </Button>
                     )}
                     {user?.role === 'super_admin' && (
                       <Button
                         variant="outline"
-                        size="sm"
+                        size="icon"
                         onClick={() => handleDelete(store.id)}
-                        className="w-full sm:w-auto sm:min-w-[40px] text-sm flex-shrink-0"
+                        className="h-9 w-9"
+                        title="Supprimer"
+                        aria-label="Supprimer"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -856,10 +1012,105 @@ export default function Stores() {
         )}
       </div>
 
+      {/* Dialog renouvellement abonnement */}
+      <Dialog open={renewalDialog.open} onOpenChange={(open) => { if (!open) setRenewalDialog({ open: false, store: null, months: 1 }); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Renouveler l'abonnement</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Magasin : <strong>{renewalDialog.store?.name}</strong>
+            </p>
+            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (
+              <p className="text-sm text-muted-foreground">
+                Expiration actuelle :{' '}
+                <span className={(renewalDialog.store as any).subscriptionEnd <= Date.now() ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}>
+                  {new Date((renewalDialog.store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
+                  {(renewalDialog.store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
+                </span>
+              </p>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="renewal-months">Nombre de mois</Label>
+              <Select
+                value={String(renewalDialog.months)}
+                onValueChange={(v) => setRenewalDialog(d => ({ ...d, months: Number(v) }))}
+              >
+                <SelectTrigger id="renewal-months">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+                    <SelectItem key={m} value={String(m)}>
+                      {m} mois — {(m * PRICE_PER_MONTH).toLocaleString('fr-FR')} F
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 space-y-1">
+              <div className="flex justify-between text-sm">
+                <span>Prix par mois</span>
+                <span className="font-medium">{PRICE_PER_MONTH.toLocaleString('fr-FR')} F</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Durée</span>
+                <span className="font-medium">{renewalDialog.months} mois ({renewalDialog.months * 30} jours)</span>
+              </div>
+              <div className="flex justify-between text-base font-bold border-t border-blue-200 pt-2 mt-2">
+                <span>Total à payer</span>
+                <span className="text-blue-700">{(renewalDialog.months * PRICE_PER_MONTH).toLocaleString('fr-FR')} F</span>
+              </div>
+            </div>
+            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (
+              <p className="text-xs text-muted-foreground">
+                Nouvelle expiration :{' '}
+                <strong>
+                  {new Date(
+                    Math.max((renewalDialog.store as any).subscriptionEnd, Date.now()) +
+                    renewalDialog.months * 30 * 24 * 60 * 60 * 1000
+                  ).toLocaleDateString('fr-FR')}
+                </strong>
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setRenewalDialog({ open: false, store: null, months: 1 })}>
+                Annuler
+              </Button>
+              <Button
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                onClick={() => renewalDialog.store && renewSubscription(renewalDialog.store.id, renewalDialog.months)}
+              >
+                Confirmer — {(renewalDialog.months * PRICE_PER_MONTH).toLocaleString('fr-FR')} F
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {!isLoading && stores.length === 0 && (
         <Card className="p-12 text-center">
           <Store className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground">Aucun magasin. Créez-en un pour commencer.</p>
+        </Card>
+      )}
+      
+      {!isLoading && stores.length > 0 && filteredStores.length === 0 && (
+        <Card className="p-12 text-center">
+          <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <p className="text-muted-foreground">Aucun magasin ne correspond à votre recherche.</p>
+          <Button 
+            variant="link" 
+            className="mt-2"
+            onClick={() => {
+              setSearchQuery('');
+              setStatusFilter('all');
+              setSubscriptionFilter('all');
+            }}
+          >
+            Réinitialiser les filtres
+          </Button>
         </Card>
       )}
     </div>

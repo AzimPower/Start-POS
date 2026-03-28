@@ -140,7 +140,7 @@ export async function syncWithServer() {
 }
  
  // Helper générique pour récupérer et merger une entité depuis le backend
- export async function fetchAndMerge(endpoint: string, storeName: string, tableName?: string, normalizeFn?: (item: any)=>any, params?: Record<string, string>) {
+export async function fetchAndMerge(endpoint: string, storeName: string, tableName?: string, normalizeFn?: (item: any)=>any, params?: Record<string, string>) {
  	 try {
  		 // Append query params only when provided (avoid storeId=undefined)
  		 let url = endpoint;
@@ -165,6 +165,16 @@ export async function syncWithServer() {
 				 backendItems = [];
 			 }
 		 }
+		 
+		 // Filtrage côté client pour sécurité : si storeId est passé en paramètre, ne garder que les items de ce store
+		 // Exception: stores table n'a pas besoin d'être filtré (on veut tous les stores pour afficher les noms)
+		 if (params?.storeId && storeName !== 'stores') {
+			 backendItems = backendItems.filter((item: any) => {
+				 // Vérifier si l'item appartient au store demandé
+				 return item.storeId === params.storeId;
+			 });
+		 }
+		 
 		 const { getDB } = await import('./db');
 		 const db = await getDB();
 		 const pending = await db.getAll('syncQueue');
@@ -244,36 +254,137 @@ export async function syncWithServer() {
 		 writeSyncLog({ level: 'error', message: `Erreur merge ${storeName}`, entity: storeName, details: { error: String(e) } });
 	 }
  }
- 
- export async function refreshAllFromBackend() {
+
+// Réconcilier les ventes "orphelines" vers le dernier shift fermé par utilisateur + magasin.
+// Règle: si une vente n'a pas de shiftId, ou son shiftId n'existe pas localement,
+// ou si la vente a un timestamp > closedAt du shift (shift fermé),
+// alors on la rattache au dernier shift fermé du même user/store.
+// Le closedAt du shift devient le max entre son closedAt actuel et la vente la plus récente rattachée.
+export async function reconcileSalesToLastClosedShift(storeId?: string) {
+	try {
+		const { getDB } = await import('./db');
+		const db = await getDB();
+		let shifts = await db.getAll('shifts');
+		let sales = await db.getAll('sales');
+
+		if (storeId) {
+			shifts = shifts.filter((s: any) => s.storeId === storeId);
+			sales = sales.filter((s: any) => s.storeId === storeId);
+		}
+
+		if (!shifts.length || !sales.length) return;
+
+		const shiftById = new Map<string, any>(shifts.map((s: any) => [String(s.id), s]));
+
+		// Index last closed shift per user+store
+		const lastClosedByUserStore = new Map<string, any>();
+		for (const s of shifts) {
+			if (s.status !== 'closed' || !s.closedAt) continue;
+			const key = `${s.userId}__${s.storeId}`;
+			const prev = lastClosedByUserStore.get(key);
+			if (!prev || (s.closedAt > prev.closedAt)) {
+				lastClosedByUserStore.set(key, s);
+			}
+		}
+
+		const salesToUpdate: any[] = [];
+		const shiftsToUpdate = new Map<string, any>();
+
+		for (const sale of sales) {
+			const saleTime = sale.createdAt || sale.timestamp || 0;
+			const saleShiftId = sale.shiftId ? String(sale.shiftId) : '';
+			const shift = saleShiftId ? shiftById.get(saleShiftId) : null;
+
+			const isShiftMissing = !shift;
+			const isShiftClosedPastSale = Boolean(shift && shift.status === 'closed' && shift.closedAt && saleTime > shift.closedAt);
+			const needsReattach = !saleShiftId || isShiftMissing || isShiftClosedPastSale;
+
+			if (!needsReattach) continue;
+
+			const key = `${sale.userId}__${sale.storeId}`;
+			const lastClosed = lastClosedByUserStore.get(key);
+			if (!lastClosed) continue;
+
+			// Re-rattacher la vente
+			if (String(lastClosed.id) !== String(sale.shiftId)) {
+				salesToUpdate.push({ ...sale, shiftId: lastClosed.id });
+			}
+
+			// Étendre openedAt / closedAt si besoin
+			const updatedShift = shiftsToUpdate.get(String(lastClosed.id)) || { ...lastClosed };
+			if (!updatedShift.openedAt || saleTime < updatedShift.openedAt) {
+				updatedShift.openedAt = saleTime;
+			}
+			if (!updatedShift.closedAt || saleTime > updatedShift.closedAt) {
+				updatedShift.closedAt = saleTime;
+			}
+			shiftsToUpdate.set(String(lastClosed.id), updatedShift);
+		}
+
+		if (salesToUpdate.length === 0 && shiftsToUpdate.size === 0) return;
+
+		const tx = db.transaction(['sales', 'shifts'], 'readwrite');
+		for (const s of salesToUpdate) {
+			await tx.objectStore('sales').put(s);
+		}
+		for (const sh of shiftsToUpdate.values()) {
+			await tx.objectStore('shifts').put(sh);
+		}
+		await tx.done;
+
+		// Propager les corrections vers le backend si possible
+		if (navigator.onLine) {
+			try {
+				const salesUpdates = salesToUpdate.map((s: any) =>
+					fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
+						method: 'PUT',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(s),
+					})
+				);
+				const shiftUpdates = Array.from(shiftsToUpdate.values()).map((sh: any) =>
+					fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', {
+						method: 'PUT',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(sh),
+					})
+				);
+				await Promise.all([...salesUpdates, ...shiftUpdates]);
+			} catch (e) {
+				console.log('Erreur sync backend après reconciliation:', e);
+			}
+		}
+	} catch (e) {
+		console.log('Erreur reconciliation ventes->shift fermé:', e);
+	}
+}
+
+export async function refreshAllFromBackend(storeId?: string) {
 	 if (!navigator.onLine) return;
-	 // Accept optional storeId param via arguments if caller wants to scope requests
-	 // We expose storeId by letting callers pass params into refreshAllFromBackend
-	 return async function innerRefresh(storeId?: string) {
-		 // Double-check backend reachability before attempting the full refresh
-		 try {
-			 const backendUp = await backendAvailable();
-			 if (!backendUp) {
-				 console.log('refreshAllFromBackend: backend ping failed — skipping refresh');
-				 return;
-			 }
-		 } catch (e) {
-			 console.log('refreshAllFromBackend: backendAvailable check error, skipping refresh', e);
+	 // Double-check backend reachability before attempting the full refresh
+	 try {
+		 const backendUp = await backendAvailable();
+		 if (!backendUp) {
+			 console.log('refreshAllFromBackend: backend ping failed — skipping refresh');
 			 return;
 		 }
-		 const params = storeId ? { storeId } : undefined;
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', 'customers', 'customers', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', 'categories', 'categories', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php', 'expenseCategories', 'expenseCategories', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', 'stores', 'stores', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', 'users', 'users', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', 'shifts', 'shifts', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', 'sales', 'sales', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses.php', 'expenses', 'expenses', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', 'expensesAdvanced', 'expensesAdvanced', undefined, params);
-		 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', 'stockSignals', 'stockSignals', undefined, params);
-	 };
+	 } catch (e) {
+		 console.log('refreshAllFromBackend: backendAvailable check error, skipping refresh', e);
+		 return;
+	 }
+	 const params = storeId ? { storeId } : undefined;
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', 'customers', 'customers', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', 'categories', 'categories', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php', 'expenseCategories', 'expenseCategories', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', 'stores', 'stores', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', 'users', 'users', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', 'shifts', 'shifts', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', 'sales', 'sales', undefined, params);
+	 await reconcileSalesToLastClosedShift(storeId);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses.php', 'expenses', 'expenses', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', 'expensesAdvanced', 'expensesAdvanced', undefined, params);
+	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', 'stockSignals', 'stockSignals', undefined, params);
  }
 
 // Forcer la synchronisation manuelle

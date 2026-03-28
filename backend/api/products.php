@@ -40,25 +40,33 @@ switch ($method) {
         }
         $products = $stmt->fetchAll();
         
-        // Récupérer et ajouter les stocks depuis product_stock
-        foreach ($products as &$product) {
-            // Décoder les champs JSON
-            if (isset($product['variablePrices']) && $product['variablePrices']) {
-                $product['variablePrices'] = json_decode($product['variablePrices'], true);
+        // OPTIMISATION: Charger tous les stocks en une seule requête (évite N+1)
+        if (!empty($products)) {
+            $productIds = array_column($products, 'id');
+            $placeholders = str_repeat('?,', count($productIds) - 1) . '?';
+            $stockStmt = $pdo->prepare("SELECT productId, storeId, stock FROM product_stock WHERE productId IN ($placeholders)");
+            $stockStmt->execute($productIds);
+            $allStocks = $stockStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Grouper les stocks par productId
+            $stocksByProduct = [];
+            foreach ($allStocks as $stock) {
+                if (!isset($stocksByProduct[$stock['productId']])) {
+                    $stocksByProduct[$stock['productId']] = [];
+                }
+                $stocksByProduct[$stock['productId']][$stock['storeId']] = (int)$stock['stock'];
             }
             
-            // Récupérer le stock depuis product_stock
-            $stockSql = 'SELECT storeId, stock FROM product_stock WHERE productId = ?';
-            $stockStmt = $pdo->prepare($stockSql);
-            $stockStmt->execute([$product['id']]);
-            $stockData = $stockStmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            // Construire l'objet stock par magasin
-            $stockByStore = [];
-            foreach ($stockData as $stock) {
-                $stockByStore[$stock['storeId']] = (int)$stock['stock'];
+            // Assigner les stocks et décoder les JSON pour chaque produit
+            foreach ($products as &$product) {
+                // Décoder les champs JSON
+                if (isset($product['variablePrices']) && $product['variablePrices']) {
+                    $product['variablePrices'] = json_decode($product['variablePrices'], true);
+                }
+                
+                // Assigner les stocks
+                $product['stock'] = $stocksByProduct[$product['id']] ?? [];
             }
-            $product['stock'] = $stockByStore;
         }
         echo json_encode($products);
         break;

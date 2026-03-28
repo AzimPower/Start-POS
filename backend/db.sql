@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Hôte : 127.0.0.1:3306
--- Généré le : dim. 26 oct. 2025 à 23:49
+-- Généré le : lun. 16 mars 2026 à 02:16
 -- Version du serveur : 11.8.3-MariaDB-log
 -- Version de PHP : 7.2.34
 
@@ -35,23 +35,6 @@ CREATE TABLE `categories` (
   `storeId` varchar(255) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Déchargement des données de la table `categories`
---
-
-INSERT INTO `categories` (`id`, `name`, `description`, `createdAt`, `storeId`) VALUES
-('08ffddcf-e163-4326-97e6-c73f6fbace12', 'yfg', '', 1761313992572, 'c7c8bd04-6ceb-4ae4-9491-5f832150d4a2'),
-('1969d9ea-90a6-4723-b5dc-2c920a3da047', 'test', 'test', 1761009612369, 'c7c8bd04-6ceb-4ae4-9491-5f832150d4a2'),
-('250a2c11-c38c-4c42-98d9-6720b00c976c', 'v', '', 1760706328547, 'c7c8bd04-6ceb-4ae4-9491-5f832150d4a1'),
-('2cae43f8-4ec2-4c2a-b9d7-26721219d29e', 'tetdzeryt', '', 1761312580723, 'c7c8bd04-6ceb-4ae4-9491-5f832150d4a2'),
-('79b6c1cd-03c2-43d7-9753-3d454dfb4bb6', 'Plat de Base', '', 1761072215425, '4b7fd856-8cbd-471c-aec5-e98792c5c500'),
-('7a3109d8-4ce6-4490-98d2-bcf7febd925a', 'Eau', '', 1761072204624, '4b7fd856-8cbd-471c-aec5-e98792c5c500'),
-('9d49004a-c9fe-4794-8ad5-6a0fb6fc523c', 'Matière première', '', 1761305930742, '3d68e406-146c-4da2-97a2-8f605dcc0bd8'),
-('a8a7e308-8e87-4db2-8b09-2d719b54055e', 'Diverses', '', 1761060478109, NULL),
-('d557b4f2-ec85-4e23-ba8f-fef8d8e68007', 'Jus Naturel', '', 1761072198218, '4b7fd856-8cbd-471c-aec5-e98792c5c500'),
-('e670af0c-68df-4dd8-952c-347495c7d1e4', 'Boisson', '', 1761072186485, '4b7fd856-8cbd-471c-aec5-e98792c5c500'),
-('e9a894d2-385c-4468-bb13-a67a96de43ec', 'Accompagnant', '', 1761072174489, '4b7fd856-8cbd-471c-aec5-e98792c5c500');
-
 -- --------------------------------------------------------
 
 --
@@ -70,7 +53,22 @@ CREATE TABLE `customers` (
   `storeId` varchar(255) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
 
+--
+-- Structure de la table `email_settings`
+--
+
+CREATE TABLE `email_settings` (
+  `id` varchar(36) NOT NULL,
+  `store_id` varchar(36) NOT NULL,
+  `shifts` tinyint(1) DEFAULT 1,
+  `stock_signals` tinyint(1) DEFAULT 1,
+  `expenses` tinyint(1) DEFAULT 1,
+  `logins` tinyint(1) DEFAULT 1,
+  `refunds` tinyint(1) DEFAULT 1,
+  `updated_at` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -117,13 +115,30 @@ CREATE TABLE `expenses_advanced` (
 -- --------------------------------------------------------
 
 --
+-- Structure de la table `expense_categories`
+--
+
+CREATE TABLE `expense_categories` (
+  `id` varchar(36) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `type` enum('indirect','operational') NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `storeId` varchar(36) DEFAULT NULL,
+  `active` tinyint(1) DEFAULT 1,
+  `createdAt` bigint(20) NOT NULL,
+  `productIds` text DEFAULT NULL COMMENT 'JSON array of product IDs for indirect categories'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Structure de la table `payments`
 --
 
 CREATE TABLE `payments` (
   `id` int(11) NOT NULL,
   `saleId` varchar(36) DEFAULT NULL,
-  `method` enum('cash','mobile_money') DEFAULT NULL,
+  `method` enum('cash','mobile_money','card','check','credit') DEFAULT NULL,
   `amount` decimal(10,2) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -179,7 +194,7 @@ CREATE TABLE `sales` (
   `subtotal` decimal(10,2) DEFAULT NULL,
   `tax` decimal(10,2) DEFAULT NULL,
   `total` decimal(10,2) DEFAULT NULL,
-  `paymentMethod` enum('cash','mobile_money','mixed') DEFAULT NULL,
+  `paymentMethod` enum('cash','mobile_money','mixed','card','check','credit') DEFAULT NULL,
   `cashAmount` decimal(10,2) DEFAULT NULL,
   `mobileMoneyAmount` decimal(10,2) DEFAULT NULL,
   `otherAmount` decimal(10,2) DEFAULT NULL,
@@ -187,7 +202,12 @@ CREATE TABLE `sales` (
   `refunded` tinyint(1) DEFAULT 0,
   `refundedAt` bigint(20) DEFAULT NULL,
   `draft` tinyint(1) DEFAULT 0,
-  `completedAt` bigint(20) DEFAULT NULL
+  `completedAt` bigint(20) DEFAULT NULL,
+  `receiptSequence` int(11) DEFAULT NULL,
+  `receiptNumber` varchar(50) DEFAULT NULL,
+  `cardAmount` decimal(10,2) DEFAULT 0.00 COMMENT 'Montant payé par carte',
+  `checkAmount` decimal(10,2) DEFAULT 0.00 COMMENT 'Montant payé par chèque',
+  `creditAmount` decimal(10,2) DEFAULT 0.00 COMMENT 'Montant en crédit client'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -225,7 +245,31 @@ CREATE TABLE `shifts` (
   `otherAmount` decimal(10,2) DEFAULT NULL,
   `openedAt` bigint(20) NOT NULL,
   `closedAt` bigint(20) DEFAULT NULL,
-  `status` enum('open','closed') NOT NULL
+  `status` enum('open','closed') NOT NULL,
+  `open_constraint` varchar(73) GENERATED ALWAYS AS (case when `status` = 'open' then concat(`userId`,'_',`storeId`,'_open') else NULL end) STORED
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `stock_adjustments`
+--
+
+CREATE TABLE `stock_adjustments` (
+  `id` varchar(36) NOT NULL,
+  `sessionId` varchar(36) NOT NULL,
+  `productId` varchar(36) NOT NULL,
+  `productName` varchar(255) DEFAULT NULL,
+  `sku` varchar(100) DEFAULT NULL,
+  `userId` varchar(36) DEFAULT NULL,
+  `userName` varchar(255) DEFAULT NULL,
+  `storeId` varchar(36) NOT NULL,
+  `oldStock` int(11) DEFAULT NULL,
+  `delta` int(11) NOT NULL,
+  `newStock` int(11) DEFAULT NULL,
+  `reason` varchar(500) DEFAULT NULL,
+  `globalReason` varchar(500) DEFAULT NULL,
+  `createdAt` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -252,6 +296,8 @@ CREATE TABLE `stock_signals` (
   `createdAt` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
+
 --
 -- Structure de la table `stores`
 --
@@ -265,7 +311,8 @@ CREATE TABLE `stores` (
   `subscriptionStart` bigint(20) DEFAULT NULL,
   `subscriptionEnd` bigint(20) DEFAULT NULL,
   `lastPayment` bigint(20) DEFAULT NULL,
-  `logo` varchar(255) DEFAULT NULL
+  `logo` varchar(255) DEFAULT NULL,
+  `paymentMethods` text DEFAULT NULL COMMENT 'JSON array des moyens de paiement disponibles (cash, mobile_money, card, check, credit)'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -330,12 +377,14 @@ CREATE TABLE `users` (
   `id` varchar(36) NOT NULL,
   `username` varchar(50) NOT NULL,
   `phone` varchar(20) NOT NULL,
+  `email` varchar(100) DEFAULT NULL,
   `password` varchar(255) NOT NULL,
   `pin` varchar(255) DEFAULT NULL,
-  `role` enum('super_admin','admin','cashier','manager') NOT NULL,
+  `role` enum('super_admin','manager','admin','cashier') NOT NULL,
   `storeId` varchar(36) DEFAULT NULL,
   `active` tinyint(1) DEFAULT 1,
-  `createdAt` bigint(20) NOT NULL
+  `createdAt` bigint(20) NOT NULL,
+  `pinEnabled` tinyint(1) DEFAULT 0 COMMENT 'Activation du code PIN pour cet utilisateur'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -358,25 +407,49 @@ CREATE TABLE `user_stores` (
 -- Index pour la table `categories`
 --
 ALTER TABLE `categories`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_categories_storeId` (`storeId`),
+  ADD KEY `idx_categories_createdAt` (`createdAt`);
 
 --
 -- Index pour la table `customers`
 --
 ALTER TABLE `customers`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_customers_storeId` (`storeId`),
+  ADD KEY `idx_customers_phone` (`phone`),
+  ADD KEY `idx_customers_email` (`email`),
+  ADD KEY `idx_customers_createdAt` (`createdAt`);
+
+--
+-- Index pour la table `email_settings`
+--
+ALTER TABLE `email_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_store_id` (`store_id`),
+  ADD KEY `idx_store_id` (`store_id`);
 
 --
 -- Index pour la table `expenses`
 --
 ALTER TABLE `expenses`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_expenses_shiftId` (`shiftId`),
+  ADD KEY `idx_expenses_userId` (`userId`),
+  ADD KEY `idx_expenses_storeId` (`storeId`),
+  ADD KEY `idx_expenses_category` (`category`),
+  ADD KEY `idx_expenses_createdAt` (`createdAt`),
+  ADD KEY `idx_expenses_store_created` (`storeId`,`createdAt`);
 
 --
 -- Index pour la table `expenses_advanced`
 --
 ALTER TABLE `expenses_advanced`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_expenses_adv_storeId` (`storeId`),
+  ADD KEY `idx_expenses_adv_type` (`type`),
+  ADD KEY `idx_expenses_adv_createdAt` (`createdAt`),
+  ADD KEY `idx_expenses_adv_store_created` (`storeId`,`createdAt`);
 
 --
 -- Index pour la table `expense_categories`
@@ -395,31 +468,56 @@ ALTER TABLE `payments`
 --
 ALTER TABLE `products`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `sku` (`sku`);
+  ADD UNIQUE KEY `sku` (`sku`),
+  ADD KEY `idx_products_storeId` (`storeId`),
+  ADD KEY `idx_products_categoryId` (`categoryId`),
+  ADD KEY `idx_products_trackStock` (`trackStock`),
+  ADD KEY `idx_products_createdAt` (`createdAt`);
 
 --
 -- Index pour la table `product_stock`
 --
 ALTER TABLE `product_stock`
-  ADD PRIMARY KEY (`productId`,`storeId`);
+  ADD PRIMARY KEY (`productId`,`storeId`),
+  ADD KEY `idx_product_stock_storeId` (`storeId`);
 
 --
 -- Index pour la table `sales`
 --
 ALTER TABLE `sales`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_sales_storeId` (`storeId`),
+  ADD KEY `idx_sales_userId` (`userId`),
+  ADD KEY `idx_sales_createdAt` (`createdAt`),
+  ADD KEY `idx_sales_refunded` (`refunded`),
+  ADD KEY `idx_sales_draft` (`draft`),
+  ADD KEY `idx_sales_shiftId` (`shiftId`),
+  ADD KEY `idx_sales_customerId` (`customerId`),
+  ADD KEY `idx_sales_store_created` (`storeId`,`createdAt`),
+  ADD KEY `idx_sales_user_created` (`userId`,`createdAt`),
+  ADD KEY `idx_sales_shift_created` (`shiftId`,`createdAt`);
 
 --
 -- Index pour la table `sale_items`
 --
 ALTER TABLE `sale_items`
-  ADD PRIMARY KEY (`saleId`,`productId`);
+  ADD PRIMARY KEY (`saleId`,`productId`),
+  ADD KEY `idx_sale_items_productId` (`productId`);
 
 --
 -- Index pour la table `shifts`
 --
 ALTER TABLE `shifts`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_unique_open_shift` (`open_constraint`);
+
+--
+-- Index pour la table `stock_adjustments`
+--
+ALTER TABLE `stock_adjustments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_storeId` (`storeId`),
+  ADD KEY `idx_createdAt` (`createdAt`);
 
 --
 -- Index pour la table `stock_signals`
@@ -459,24 +557,9 @@ ALTER TABLE `store_indicator_overrides`
 ALTER TABLE `users`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `username` (`username`),
-  ADD UNIQUE KEY `phone` (`phone`);
-
--- --------------------------------------------------------
-
---
--- Structure de la table `email_settings`
---
-
-CREATE TABLE `email_settings` (
-  `id` varchar(36) NOT NULL,
-  `store_id` varchar(36) NOT NULL,
-  `shifts` tinyint(1) DEFAULT 1,
-  `stock_signals` tinyint(1) DEFAULT 1,
-  `expenses` tinyint(1) DEFAULT 1,
-  `logins` tinyint(1) DEFAULT 1,
-  `refunds` tinyint(1) DEFAULT 1,
-  `updated_at` bigint(20) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  ADD UNIQUE KEY `phone` (`phone`),
+  ADD KEY `idx_users_email` (`email`),
+  ADD KEY `idx_email` (`email`);
 
 --
 -- Index pour la table `user_stores`
@@ -485,14 +568,6 @@ ALTER TABLE `user_stores`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_user` (`userId`),
   ADD KEY `idx_store` (`storeId`);
-
---
--- Index pour la table `email_settings`
---
-ALTER TABLE `email_settings`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `unique_store_id` (`store_id`),
-  ADD KEY `idx_store_id` (`store_id`);
 
 --
 -- AUTO_INCREMENT pour les tables déchargées

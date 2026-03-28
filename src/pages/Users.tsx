@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { UserCircle, Edit, Trash2, Plus, Shield, User, Eye, EyeOff } from 'lucide-react';
+import { UserCircle, Edit, Trash2, Plus, Shield, User, Eye, EyeOff, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -39,6 +39,9 @@ export default function Users() {
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showPin, setShowPin] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [storeFilter, setStoreFilter] = useState<string>('all');
   const [formData, setFormData] = useState({
     username: '',
     phone: '',
@@ -73,14 +76,26 @@ export default function Users() {
   const loadUsers = async () => {
     if (connectionState.isOnline) {
       try {
-        const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+        // Ajouter storeId pour les admins (les super_admin peuvent voir tous les utilisateurs)
+        let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php';
+        if (user?.role === 'admin' && user?.storeId) {
+          url += `?storeId=${user.storeId}`;
+        }
+        const res = await fetch(url);
         if (res.ok) {
           const remoteUsers = await res.json();
+          // Si admin, filtrer côté client aussi pour sécurité
+          const storeUsers = user?.role === 'admin' && user?.storeId
+            ? remoteUsers.filter((u: any) => {
+                const uStoreIds: string[] = u.storeIds || (u.storeId ? [u.storeId] : []);
+                return uStoreIds.includes(user.storeId);
+              })
+            : remoteUsers;
           // Met à jour IndexedDB locale
           const db = await getDB();
           const tx = db.transaction('users', 'readwrite');
           await tx.store.clear();
-          for (const u of remoteUsers) {
+          for (const u of storeUsers) {
             // Preserve existing local PIN if backend doesn't return one
             try {
               const local = await tx.store.get(u.id as string);
@@ -96,7 +111,7 @@ export default function Users() {
           }
           await tx.done;
           // Filtrage et affichage
-          let filteredUsers = remoteUsers.filter(u => u.role !== 'super_admin');
+          let filteredUsers = storeUsers.filter(u => u.role !== 'super_admin');
           if (user?.role === 'admin') {
             // For admin viewers, only show users that belong to at least one of the admin's stores
             filteredUsers = filteredUsers.filter(u => {
@@ -307,6 +322,25 @@ export default function Users() {
     return names; // return array of names; rendering will handle empty case
   };
 
+  const filteredUsers = users.filter(u => {
+    // Filtre de recherche
+    const matchesSearch = !searchQuery || 
+      u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.phone.includes(searchQuery) ||
+      (u.email && u.email.toLowerCase().includes(searchQuery.toLowerCase()));
+    
+    // Filtre par rôle
+    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
+    
+    // Filtre par magasin
+    const matchesStore = storeFilter === 'all' || (() => {
+      const ids = (u.storeIds && u.storeIds.length > 0) ? u.storeIds : (u.storeId ? [u.storeId] : []);
+      return ids.includes(storeFilter);
+    })();
+    
+    return matchesSearch && matchesRole && matchesStore;
+  });
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -470,6 +504,66 @@ export default function Users() {
         </Dialog>
       </div>
 
+      {/* Barre de recherche et filtres */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col gap-4">
+            {/* Barre de recherche */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Rechercher par nom, téléphone ou email..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            
+            {/* Filtres */}
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <Label className="text-sm mb-2 block">Rôle</Label>
+                <Select value={roleFilter} onValueChange={setRoleFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les rôles" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les rôles</SelectItem>
+                    <SelectItem value="admin">Administrateur</SelectItem>
+                    <SelectItem value="manager">Gestionnaire</SelectItem>
+                    <SelectItem value="cashier">Caissier</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="flex-1">
+                <Label className="text-sm mb-2 block">Magasin</Label>
+                <Select value={storeFilter} onValueChange={setStoreFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les magasins" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les magasins</SelectItem>
+                    {stores.map(store => (
+                      <SelectItem key={store.id} value={store.id}>
+                        {store.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Compteur de résultats */}
+              <div className="flex items-end">
+                <Badge variant="outline" className="h-10 px-4 flex items-center">
+                  {filteredUsers.length} utilisateur{filteredUsers.length > 1 ? 's' : ''}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {isLoading ? (
           // show skeleton cards while loading
@@ -501,7 +595,7 @@ export default function Users() {
             </Card>
           ))
         ) : (
-          users.map(user => (
+          filteredUsers.map(user => (
             <Card key={user.id}>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center justify-between text-lg">
@@ -568,6 +662,24 @@ export default function Users() {
         <Card className="p-12 text-center">
           <UserCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground">Aucun utilisateur.</p>
+        </Card>
+      )}
+      
+      {!isLoading && users.length > 0 && filteredUsers.length === 0 && (
+        <Card className="p-12 text-center">
+          <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <p className="text-muted-foreground">Aucun utilisateur ne correspond à votre recherche.</p>
+          <Button 
+            variant="link" 
+            className="mt-2"
+            onClick={() => {
+              setSearchQuery('');
+              setRoleFilter('all');
+              setStoreFilter('all');
+            }}
+          >
+            Réinitialiser les filtres
+          </Button>
         </Card>
       )}
     </div>

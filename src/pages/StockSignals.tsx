@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, memo } from 'react';
+import { useEffect, useState, useMemo, useCallback, memo, useRef } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
@@ -116,6 +116,7 @@ export default function StockSignals() {
   const [completedSignals, setCompletedSignals] = useState<StockSignal[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
+  const [allExpenses, setAllExpenses] = useState<ExpenseAdvanced[]>([]);
   const [loading, setLoading] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [showSignalDialog, setShowSignalDialog] = useState(false);
@@ -127,13 +128,18 @@ export default function StockSignals() {
   // Filtres pour l'historique
   const [searchTerm, setSearchTerm] = useState('');
   // Afficher par défaut l'historique d'aujourd'hui dans l'onglet "Historique"
-  const [periodFilter, setPeriodFilter] = useState<'all' | 'day' | 'week' | 'month'>('day');
+  const [periodFilter, setPeriodFilter] = useState<'all' | 'day' | 'yesterday' | 'week' | 'month'>('day');
   const [typeFilter, setTypeFilter] = useState<'all' | 'surplus' | 'manque'>('all');
   // Filter by expense type for active stocks (direct / indirect)
   const [expenseTypeFilter, setExpenseTypeFilter] = useState<'all' | 'direct' | 'indirect'>('all');
+  // Filter by expense type for history signals (direct / indirect)
+  const [historyExpenseTypeFilter, setHistoryExpenseTypeFilter] = useState<'all' | 'direct' | 'indirect'>('direct');
   // Recherche simple pour Stocks Actifs (full-text sur produit/catégorie/prix/date)
   const [activeSearch, setActiveSearch] = useState('');
   // (expense creation is handled on the dedicated Expenses page)
+
+  // 🔄 Ref pour éviter les rechargements multiples
+  const loadedOnceRef = useRef(false);
 
   // ==== CACHES OPTIMISÉS ====
   // Cache des noms de produits pour éviter les recherches répétées
@@ -156,6 +162,13 @@ export default function StockSignals() {
     expenseCategories.forEach(c => map.set(c.id, c));
     return map;
   }, [expenseCategories]);
+
+  // Cache du type de dépense par expenseId
+  const expenseTypeMap = useMemo(() => {
+    const map = new Map<string, 'direct' | 'indirect' | 'operational'>();
+    allExpenses.forEach(exp => map.set(exp.id, exp.type));
+    return map;
+  }, [allExpenses]);
 
   // Cache des stocks par produit pour éviter les filtres répétés
   const stocksByProduct = useMemo(() => {
@@ -239,9 +252,78 @@ export default function StockSignals() {
   }, []);
   // ==== FIN CACHES ====
 
+  // 🔄 Chargement initial des données (une seule fois au premier montage)
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!user) return;
+
+    const shouldReload = !loadedOnceRef.current;
+    if (!shouldReload) {
+      // ✅ AMÉLIORATION : Même si déjà chargé, recharger depuis IndexedDB (rapide)
+      // pour détecter les modifications faites dans d'autres pages
+      const quickReload = async () => {
+        try {
+          const db = await getDB();
+          await processData(db); // Rechargement rapide depuis IndexedDB seulement
+        } catch (error) {
+          console.error('Erreur rechargement rapide depuis IndexedDB:', error);
+        }
+      };
+      quickReload();
+      return;
+    }
+
+    const loadAllData = async () => {
+      try {
+        await loadData();
+      } catch (error) {
+        console.error('Erreur lors du chargement initial:', error);
+        toast.error('Erreur de chargement des données');
+      }
+    };
+
+    loadAllData();
+    loadedOnceRef.current = true;
+  }, [user]);
+
+  // 🔄 Synchronisation quand le backend devient accessible
+  useEffect(() => {
+    if (!user || !isBackendReachable || !loadedOnceRef.current) return;
+    
+    const syncData = async () => {
+      try {
+        console.log('🔄 [StockSignals] Backend accessible - synchronisation des données');
+        await loadData();
+      } catch (error) {
+        console.warn('Erreur de synchronisation en arrière-plan:', error);
+      }
+    };
+    
+    syncData();
+  }, [isBackendReachable, user]);
+
+  // 👁️ Recharger quand la page devient visible (retour depuis une autre page)
+  useEffect(() => {
+    if (!user) return;
+    
+    const handleVisibilityChange = async () => {
+      // ✅ CORRECTION : Toujours recharger depuis IndexedDB (rapide) même hors ligne
+      // pour que les modifications faites dans Expenses.tsx soient visibles immédiatement
+      if (document.visibilityState === 'visible') {
+        console.log('👁️ [StockSignals] Page visible - rechargement des données');
+        try {
+          await loadData(); // Charge depuis IndexedDB + backend si disponible
+        } catch (error) {
+          console.warn('Erreur lors du rechargement des données:', error);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user]); // ✅ Retiré isBackendReachable de deps
 
   // Use centralized pending count from sync module
   const updatePendingSyncCount = async () => {
@@ -424,12 +506,16 @@ export default function StockSignals() {
 
   const loadProductsFromBackend = async (db: any) => {
     try {
-      const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php');
+      let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php';
+      if (user?.storeId) url += `?storeId=${user.storeId}`;
+      const response = await fetch(url);
       if (response.ok) {
         const backendProducts = await response.json();
+        // Filtrer côté client aussi pour sécurité
+        const storeProducts = backendProducts.filter((p: any) => !user?.storeId || p.storeId === user.storeId);
         const tx = db.transaction('products', 'readwrite');
         await Promise.all([
-          ...backendProducts.map(p => tx.store.put(p)),
+          ...storeProducts.map(p => tx.store.put(p)),
           tx.done
         ]);
       }
@@ -440,12 +526,16 @@ export default function StockSignals() {
 
   const loadExpenseCategoriesFromBackend = async (db: any) => {
     try {
-      const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php');
+      let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php';
+      if (user?.storeId) url += `?storeId=${user.storeId}`;
+      const response = await fetch(url);
       if (response.ok) {
         const backendCategories = await response.json();
+        // Filtrer côté client aussi pour sécurité
+        const storeCategories = backendCategories.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
         const tx = db.transaction('expenseCategories', 'readwrite');
         await Promise.all([
-          ...backendCategories.map(c => tx.store.put(c)),
+          ...storeCategories.map(c => tx.store.put(c)),
           tx.done
         ]);
       }
@@ -456,12 +546,16 @@ export default function StockSignals() {
 
   const loadExpensesAdvancedFromBackend = async (db: any) => {
     try {
-      const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php');
+      let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
+      if (user?.storeId) url += `?storeId=${user.storeId}`;
+      const response = await fetch(url);
       if (response.ok) {
         const backendExpenses = await response.json();
+        // Filtrer côté client aussi pour sécurité
+        const storeExpenses = backendExpenses.filter((e: any) => !user?.storeId || e.storeId === user.storeId);
         const tx = db.transaction('expensesAdvanced', 'readwrite');
         await Promise.all([
-          ...backendExpenses.map(e => tx.store.put(e)),
+          ...storeExpenses.map(e => tx.store.put(e)),
           tx.done
         ]);
       }
@@ -472,7 +566,9 @@ export default function StockSignals() {
 
   const loadStockSignalsFromBackend = async (db: any) => {
     try {
-      const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php');
+      let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+      if (user?.storeId) url += `?storeId=${user.storeId}`;
+      const response = await fetch(url);
       if (response.ok) {
         let backendSignals: any = await response.json();
 
@@ -499,9 +595,12 @@ export default function StockSignals() {
 
         if (!Array.isArray(backendSignals)) return;
 
+        // Filtrer côté client aussi pour sécurité
+        const storeSignals = backendSignals.filter((s: any) => !user?.storeId || s.storeId === user.storeId);
+
         const tx = db.transaction('stockSignals', 'readwrite');
         // Ensure every record has an id (IndexedDB keyPath = 'id')
-        const prepared = backendSignals.map((s: any) => {
+        const prepared = storeSignals.map((s: any) => {
           if (!s) return s;
           // if server used numeric id or different key, try to normalize
           if (!s.id && (s.uid || s._id || s.id === 0)) {
@@ -592,12 +691,21 @@ export default function StockSignals() {
     setExpenseCategories(categoriesData);
     setCompletedSignals(userSignals);
     setActiveStocks(activeExpenses);
+    setAllExpenses(expensesData);
   }, [user?.storeId]);
 
   // Cache pour éviter de recharger les ventes et signaux à chaque calcul
   const salesCache = useMemo(() => ({ data: null as Sale[] | null, timestamp: 0 }), []);
   const signalsCache = useMemo(() => ({ data: null as StockSignal[] | null, timestamp: 0 }), []);
   const CACHE_TTL = 30000; // 30 secondes
+
+  // Fonction pour invalider les caches et forcer un rechargement
+  const invalidateCaches = useCallback(() => {
+    salesCache.data = null;
+    salesCache.timestamp = 0;
+    signalsCache.data = null;
+    signalsCache.timestamp = 0;
+  }, [salesCache, signalsCache]);
 
   const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
     const db = await getDB();
@@ -740,16 +848,45 @@ export default function StockSignals() {
       toast.error("Impossible de signaler un stock fini : le serveur n'est pas joignable (hors ligne ou backend down). Veuillez vérifier votre connexion et réessayer.");
       return;
     }
-    // Show end-date picker dialog before computing margins
-    setSelectedExpense(expense);
-    // Compute a sensible default for the end date: prefer now, but never before the stock start
-    const startTime = expense.type === 'direct' && expense.directProduct ? expense.directProduct.startDate : expense.date;
-    const startIso = new Date(startTime).toISOString().slice(0,16);
-    const nowIso = new Date().toISOString().slice(0,16);
-    // If now is before the start (clock skew or long future-dated start), default to start
-    const defaultIso = nowIso < startIso ? startIso : nowIso;
-    setEndDateInput(defaultIso);
-    setShowEndDateDialog(true);
+    
+    // 🔄 IMPORTANT : Recharger TOUTES les données fraîches avant de calculer
+    // Cela garantit que les ventes, dépenses et produits sont à jour
+    setLoading(true);
+    toast.info('Chargement des données les plus récentes...', { duration: 2000 });
+    
+    try {
+      // Invalider les caches pour forcer le rechargement des ventes et signaux
+      invalidateCaches();
+      
+      // Recharger toutes les données depuis le backend
+      await loadData();
+      
+      // ✅ CORRECTION : Récupérer l'expense MISE À JOUR depuis IndexedDB
+      // après le rechargement pour avoir le bon montant
+      const db = await getDB();
+      const updatedExpense = await db.get('expensesAdvanced', expense.id);
+      
+      if (!updatedExpense) {
+        toast.error('Impossible de trouver la dépense mise à jour. Veuillez réessayer.');
+        return;
+      }
+      
+      // Show end-date picker dialog before computing margins
+      setSelectedExpense(updatedExpense); // ✅ Utilise l'expense fraîchement rechargé
+      // Compute a sensible default for the end date: prefer now, but never before the stock start
+      const startTime = updatedExpense.type === 'direct' && updatedExpense.directProduct ? updatedExpense.directProduct.startDate : updatedExpense.date;
+      const startIso = new Date(startTime).toISOString().slice(0,16);
+      const nowIso = new Date().toISOString().slice(0,16);
+      // If now is before the start (clock skew or long future-dated start), default to start
+      const defaultIso = nowIso < startIso ? startIso : nowIso;
+      setEndDateInput(defaultIso);
+      setShowEndDateDialog(true);
+    } catch (error) {
+      console.error('Erreur lors du rechargement des données:', error);
+      toast.error('Erreur lors du chargement des données. Veuillez réessayer.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const confirmStockEnd = async () => {
@@ -1157,20 +1294,38 @@ export default function StockSignals() {
   // Fonction pour filtrer les signaux - optimisée avec useMemo
   const filteredSignals = useMemo(() => {
     const now = nowTimestamp;
+    const startOfToday = new Date(now).setHours(0, 0, 0, 0);
+    const endOfToday = new Date(now).setHours(23, 59, 59, 999);
     const oneDayAgo = now - DAY_MS;
     const oneWeekAgo = now - 7 * DAY_MS;
     const oneMonthAgo = now - 30 * DAY_MS;
     const searchLower = searchTerm.trim().toLowerCase();
 
     return completedSignals.filter(s => {
-      // Filtre par période
-      if (periodFilter === 'day' && s.createdAt < oneDayAgo) return false;
-      if (periodFilter === 'week' && s.createdAt < oneWeekAgo) return false;
-      if (periodFilter === 'month' && s.createdAt < oneMonthAgo) return false;
+      // Filtre par période (utilise endDate pour déterminer si le signalement concerne la période)
+      if (periodFilter === 'day') {
+        // Pour "Aujourd'hui", on affiche les signalements dont la date de fin est aujourd'hui
+        const endDate = s.endDate || s.createdAt;
+        if (endDate < startOfToday || endDate > endOfToday) return false;
+      }
+      if (periodFilter === 'yesterday') {
+        const startOfYesterday = startOfToday - DAY_MS;
+        const endOfYesterday = startOfToday - 1;
+        const endDate = s.endDate || s.createdAt;
+        if (endDate < startOfYesterday || endDate > endOfYesterday) return false;
+      }
+      if (periodFilter === 'week' && s.endDate < oneWeekAgo) return false;
+      if (periodFilter === 'month' && s.endDate < oneMonthAgo) return false;
 
       // Filtre par type (surplus/manque)
       if (typeFilter === 'surplus' && s.margin < 0) return false;
       if (typeFilter === 'manque' && s.margin >= 0) return false;
+
+      // Filtre par type de dépense (direct/indirect)
+      if (historyExpenseTypeFilter !== 'all') {
+        const expenseType = expenseTypeMap.get(s.expenseId);
+        if (expenseType !== historyExpenseTypeFilter) return false;
+      }
 
       // Filtre par recherche (nom de produit, date et heure)
       if (searchLower) {
@@ -1194,7 +1349,7 @@ export default function StockSignals() {
 
       return true;
     });
-  }, [completedSignals, periodFilter, typeFilter, searchTerm, nowTimestamp, categoryMap, productNameMap]);
+  }, [completedSignals, periodFilter, typeFilter, historyExpenseTypeFilter, searchTerm, nowTimestamp, categoryMap, productNameMap, expenseTypeMap]);
 
   // Simple full-text search for active stocks - optimisé avec useMemo
   const filteredActiveStocks = useMemo(() => {
@@ -1297,14 +1452,19 @@ export default function StockSignals() {
             <>
               <Card>
                 <CardContent className="p-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
-                    <div>
-                      <Label>Rechercher dans les stocks actifs</Label>
-                      <Input placeholder="Produit, catégorie, prix ou date" value={activeSearch} onChange={e => setActiveSearch(e.target.value)} />
+                  <div className="flex flex-col sm:flex-row items-center gap-2 justify-between w-full">
+                    <div className="w-full sm:mr-4">
+                      <Input
+                        placeholder="Rechercher..."
+                        value={activeSearch}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setActiveSearch(e.target.value)}
+                        className="w-full"
+                      />
                     </div>
-                    <div className="flex justify-end items-center gap-2">
+
+                    <div className="flex items-center gap-2">
                       <Select value={expenseTypeFilter} onValueChange={(v: any) => setExpenseTypeFilter(v)}>
-                        <SelectTrigger>
+                        <SelectTrigger className="w-48">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1313,7 +1473,7 @@ export default function StockSignals() {
                           <SelectItem value="indirect">Indirecte (plusieurs produits)</SelectItem>
                         </SelectContent>
                       </Select>
-                      <Button variant="outline" onClick={() => setActiveSearch('')}>Réinitialiser</Button>
+                      <Button variant="outline" onClick={() => { setActiveSearch(''); setExpenseTypeFilter('all'); }}>Réinitialiser</Button>
                     </div>
                   </div>
                 </CardContent>
@@ -1603,6 +1763,7 @@ export default function StockSignals() {
                         <SelectContent>
                           <SelectItem value="all">Tout l'historique</SelectItem>
                           <SelectItem value="day">Aujourd'hui</SelectItem>
+                          <SelectItem value="yesterday">Hier</SelectItem>
                           <SelectItem value="week">Cette semaine</SelectItem>
                           <SelectItem value="month">Ce mois</SelectItem>
                         </SelectContent>
@@ -1622,14 +1783,28 @@ export default function StockSignals() {
                       </Select>
                     </div>
                     <div>
+                      <Label>Type de dépense</Label>
+                      <Select value={historyExpenseTypeFilter} onValueChange={(value: any) => setHistoryExpenseTypeFilter(value)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous</SelectItem>
+                          <SelectItem value="direct">Dépense Directe</SelectItem>
+                          <SelectItem value="indirect">Dépense Indirecte</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
                       <Button 
                         variant="outline" 
                         className="w-full"
                         onClick={() => {
-                        // Réinitialiser la recherche et remettre la période par défaut sur "Aujourd'hui"
+                        // Réinitialiser la recherche et remettre les filtres par défaut
                         setSearchTerm('');
                         setPeriodFilter('day');
                         setTypeFilter('all');
+                        setHistoryExpenseTypeFilter('direct');
                       }}
                       >
                         Réinitialiser

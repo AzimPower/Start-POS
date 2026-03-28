@@ -16,12 +16,21 @@ $user = getenv('DB_USER') ?: 'u538245909_pos';
 $pass = getenv('DB_PASS') ?: '@Le08novembre';
 $charset = getenv('DB_CHARSET') ?: 'utf8mb4';
 
-// Allow toggling persistent connections via env (default: false to avoid surprises on some hosts)
+// IMPORTANT: Connexions persistantes DÉSACTIVÉES pour hébergement mutualisé
+// Sur shared hosting (Hostinger), les connexions persistantes causent des fuites:
+// - Chaque worker PHP-FPM crée sa propre connexion persistante
+// - Les connexions ne sont pas correctement recyclées entre les requêtes
+// - Résultat: accumulation rapide de connexions (50+ connexions pour 4 pages !)
+// 
+// Solution: Connexions NON-persistantes se ferment automatiquement à la fin de chaque requête
+// Performance: Overhead négligeable sur connexions locales ou rapides
 $persistent = getenv('DB_PERSISTENT');
 if ($persistent === false || $persistent === null) {
+    // CHANGEMENT CRITIQUE: false par défaut pour shared hosting
+    // Mettre DB_PERSISTENT=1 dans .env uniquement pour serveurs dédiés/VPS
     $persistent = false;
 } else {
-    // Accept '1', 'true', 'on'
+    // Accept '1', 'true', 'on' ou '0', 'false', 'off'
     $persistent = in_array(strtolower($persistent), ['1', 'true', 'on'], true);
 }
 
@@ -31,10 +40,17 @@ $options = [
     PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     PDO::ATTR_EMULATE_PREPARES   => false,
-    // Use persistent only when explicitly enabled
+    // Use persistent connections for better performance under load
     PDO::ATTR_PERSISTENT         => $persistent,
     // Ensure proper init command for charset/collation
     PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES $charset COLLATE {$charset}_unicode_ci",
+    // OPTIMISATIONS PRODUCTION pour 100+ utilisateurs simultanés
+    // Timeout de connexion réduit pour éviter les blocages
+    PDO::ATTR_TIMEOUT            => 5,
+    // Utiliser des curseurs bufferisés pour réduire la mémoire
+    PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => true,
+    // Compression réseau si supportée (réduit la bande passante)
+    PDO::MYSQL_ATTR_COMPRESS     => true,
 ];
 
 // Simple retry mechanism (1 retry) to handle transient network glitches

@@ -159,7 +159,18 @@ export default function Expenses() {
   // Nouvelle logique : à chaque reconnexion internet, on recharge les produits et catégories du backend pour garantir la dispo offline
   useEffect(() => {
     if (isBackendReachable) {
-      loadData();
+      const reloadData = async () => {
+        await loadData();
+        // ✅ Après sync backend, recharger l'affichage des dépenses
+        // (loadData fait un merge intelligent, donc les modifs locales sont préservées)
+        try {
+          const db = await getDB();
+          await loadExpensesForRange(db, filterOption, customStart, customEnd);
+        } catch (e) {
+          console.error('Erreur rechargement après sync:', e);
+        }
+      };
+      reloadData();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBackendReachable]);
@@ -212,13 +223,41 @@ export default function Expenses() {
             const backendExpenses = backendResult.data || backendResult || []; // Gérer différents formats de réponse
             console.log('Loaded from backend:', backendExpenses.length, 'expenses');
             
-            // Stocker TOUTES les dépenses en local
+            // ✅ CORRECTION : Merge intelligent au lieu de .clear()
+            // On garde les modifications locales récentes (updatedAt plus récent)
+            // ET on ne remet pas les dépenses supprimées localement en attente de sync
+            
+            // Récupérer les suppressions en attente de sync
+            const syncQueue = await db.getAll('syncQueue');
+            const pendingDeletes = new Set(
+              syncQueue
+                .filter((op: any) => op.table === 'expensesAdvanced' && op.operation === 'DELETE')
+                .map((op: any) => op.data?.id)
+                .filter(Boolean)
+            );
+            
             const tx = db.transaction('expensesAdvanced', 'readwrite');
-            await tx.store.clear();
-            for (const e of backendExpenses) await tx.store.put(e);
+            
+            for (const backendExpense of backendExpenses) {
+              // ❌ Ne pas remettre les dépenses supprimées localement en attente de sync
+              if (pendingDeletes.has(backendExpense.id)) {
+                console.log('🚫 Ignorer dépense supprimée localement:', backendExpense.id);
+                continue;
+              }
+              
+              const localExpense = await tx.store.get(backendExpense.id);
+              
+              // Si pas de version locale OU version backend plus récente, on met à jour
+              if (!localExpense || (backendExpense.updatedAt >= localExpense.updatedAt)) {
+                await tx.store.put(backendExpense);
+              } else {
+                // Version locale plus récente : on garde la locale (modification non encore sync)
+                console.log('⏭️ Garder version locale plus récente:', backendExpense.id);
+              }
+            }
             await tx.done;
             
-            console.log('Stored', backendExpenses.length, 'expenses in IndexedDB');
+            console.log('✅ Merged', backendExpenses.length, 'expenses from backend');
             // Ne pas mettre à jour les states ici, c'est géré par loadExpensesForRange
           }
         } catch (error) {
@@ -323,6 +362,21 @@ export default function Expenses() {
     
     // Ne pas charger les dépenses ici, c'est géré par loadExpensesForRange
     await loadExpensesPage(db, 0, pageSize, true);
+  };
+
+  // Fonction pour recharger uniquement les catégories depuis IndexedDB
+  const reloadCategories = async () => {
+    try {
+      const db = await getDB();
+      const categoriesData = await db.getAll('expenseCategories');
+      let filteredCategories = categoriesData;
+      if (user?.storeId) {
+        filteredCategories = categoriesData.filter((c: any) => c.storeId === user.storeId && c.active);
+      }
+      setExpenseCategories(filteredCategories);
+    } catch (error) {
+      console.error('Erreur lors du rechargement des catégories:', error);
+    }
   };
 
   // Load next page of expenses (infinite scroll)
@@ -456,16 +510,32 @@ export default function Expenses() {
     try {
       setLoading(true);
       const db = await getDB();
+      
+      // 1. Supprimer localement
       await db.delete('expensesAdvanced', id);
-      await performSyncOp({
+      
+      // 2. Ajouter explicitement à la syncQueue pour marquer comme supprimée
+      await addToSyncQueue(db, {
+        id: generateId(),
+        table: 'expensesAdvanced',
+        operation: 'DELETE',
+        data: { id },
+        url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php?id=${id}`,
+        storeId: user?.storeId || '',
+        createdAt: Date.now()
+      });
+      
+      // 3. Synchronisation backend en arrière-plan (sans attendre)
+      performSyncOp({
         url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php?id=${id}`,
         method: 'DELETE',
         data: { id }
-      });
-      toast.success('Dépense supprimée localement. La synchronisation se fera automatiquement.');
+      }).catch(e => console.error('Erreur sync suppression:', e));
       
-      // Actualiser les données et recharger la période actuelle automatiquement
-      await loadData();
+      toast.success('Dépense supprimée avec succès!');
+      
+      // ✅ CORRECTION : Ne PAS appeler loadData() qui rechargerait depuis le backend
+      // Charger seulement depuis IndexedDB local pour éviter que la dépense revienne
       await loadExpensesForRange(db, filterOption, customStart, customEnd);
     } catch (error) {
       console.error('Erreur suppression dépense:', error);
@@ -692,43 +762,12 @@ export default function Expenses() {
       // Message de succès immédiat
       toast.success(isEdit ? 'Dépense modifiée avec succès!' : 'Dépense enregistrée avec succès!');
 
-      // Actualisation immédiate et visible des données
+      // ✅ CORRECTION : Ne pas appeler loadData() qui efface IndexedDB et recharge du backend
+      // Charger seulement depuis IndexedDB local pour afficher immédiatement la modification
       try {
-        await loadData();
         await loadExpensesForRange(db, filterOption, customStart, customEnd);
       } catch (e) {
         console.error('Erreur actualisation données:', e);
-      }
-
-      // Mise à jour optimiste de l'UI : afficher la dépense immédiatement
-      try {
-        const amt = Number(finalExpense.amount) || 0;
-        // Si édition, remplacer l'élément existant
-        if (isEdit) {
-          setFilteredExpenses(prev => prev.map(e => e.id === finalExpense.id ? finalExpense : e));
-          setExpenses(prev => prev.map(e => e.id === finalExpense.id ? finalExpense : e));
-          // ajuster le total de la plage
-          const oldAmt = Number(editingExpense?.amount || 0);
-          setRangeTotal(prev => prev - oldAmt + amt);
-        } else {
-          // Ajout : préfixer aux listes paginées et globales
-          setFilteredExpenses(prev => [finalExpense, ...prev]);
-          setExpenses(prev => {
-            const updated = [finalExpense, ...prev];
-            // Conserver la taille de la première page
-            if (updated.length > pageSize) return updated.slice(0, pageSize);
-            return updated;
-          });
-          setLoadedCount(prev => prev + 1);
-          setRangeTotal(prev => prev + amt);
-        }
-        // recalculer hasMore
-        setHasMore(prev => {
-          const total = (isEdit ? filteredExpenses.length : filteredExpenses.length + 1);
-          return total > pageSize;
-        });
-      } catch (err) {
-        console.warn('Optimistic UI update failed', err);
       }
 
       // Reset du formulaire et fermeture du dialog après actualisation
@@ -883,9 +922,10 @@ export default function Expenses() {
   }, [expenseCategories, expenseType]);
 
   // Fonction pour filtrer les dépenses selon les critères (mémorisée)
+  // NOTE: on base le filtrage sur `filteredExpenses` (TOUS les résultats de la période)
+  // puis on pagine pour l'affichage via `displayedExpenses`.
   const getFilteredExpenses = useMemo(() => {
-    // Utiliser expenses (liste paginée) pour l'affichage au lieu de filteredExpenses (tous les résultats)
-    let filtered = expenses;
+    let filtered = filteredExpenses;
 
     // Filtrage par recherche textuelle
     if (debouncedSearchQuery.trim()) {
@@ -909,7 +949,19 @@ export default function Expenses() {
     }
 
     return filtered;
-  }, [expenses, debouncedSearchQuery, typeFilter, products, expenseCategories]);
+  }, [filteredExpenses, debouncedSearchQuery, typeFilter, products, expenseCategories]);
+
+  // Liste paginée réellement affichée (slice des résultats filtrés)
+  const displayedExpenses = useMemo(() => {
+    return getFilteredExpenses.slice(0, loadedCount);
+  }, [getFilteredExpenses, loadedCount]);
+
+  // Lorsque le jeu filtré change (recherche / type / période), réinitialiser la pagination
+  useEffect(() => {
+    const newLoaded = Math.min(pageSize, getFilteredExpenses.length);
+    setLoadedCount(newLoaded);
+    setHasMore(getFilteredExpenses.length > pageSize);
+  }, [getFilteredExpenses, pageSize]);
 
   // Fonction pour calculer les données du graphique (mémorisée)
   const getChartData = useMemo(() => {
@@ -1639,13 +1691,13 @@ export default function Expenses() {
           ) : (
             <div>
               <div className="mb-4 text-sm text-muted-foreground">
-                Affichage: {getFilteredExpenses.length} / {filteredExpenses.length} • Encore ? {hasMore ? 'Oui' : 'Non'}
+                Affichage: {displayedExpenses.length} / {getFilteredExpenses.length} • Encore ? {hasMore ? 'Oui' : 'Non'}
               </div>
               <div 
                 ref={listScrollRef}
                 className="space-y-3 max-h-[600px] overflow-y-auto"
               >
-              {getFilteredExpenses.map(expense => (
+              {displayedExpenses.map(expense => (
                 <Card key={expense.id} className="border-l-4 border-l-primary">
                   <CardContent className="p-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1718,7 +1770,7 @@ export default function Expenses() {
       <TabsContent value="categories" className="space-y-6">
         <CategoryManagement 
           expenseCategories={expenseCategories}
-          onCategoriesChange={loadData}
+          onCategoriesChange={reloadCategories}
           storeId={user?.storeId || ''}
           products={products}
         />

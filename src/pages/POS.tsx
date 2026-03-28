@@ -331,10 +331,7 @@ export default function POS() {
           const shiftsCount = await db.count('shifts');
           if (productsCount === 0 || customersCount === 0 || salesCount === 0 || shiftsCount === 0) {
               const { refreshAllFromBackend } = await import('@/lib/sync');
-              const maybeRefresher = await refreshAllFromBackend();
-              if (typeof maybeRefresher === 'function') {
-                await maybeRefresher(user?.storeId);
-              }
+              await refreshAllFromBackend(user?.storeId);
           }
         } catch (e) {
           console.warn('Erreur lors du remplissage initial depuis le backend:', e);
@@ -608,23 +605,19 @@ export default function POS() {
             overflow: 'hidden'
           }}
         >
-          {product.imageUrl ? (
-            <img
-              src={product.imageUrl}
-              alt={product.name}
-              style={{ 
-                width: '100%', 
-                height: '100%', 
-                objectFit: 'cover'
-              }}
-              loading="lazy"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = '/placeholder.svg';
-              }}
-            />
-          ) : (
-            <div style={{ color: '#9ca3af', fontSize: '10px' }}>Image</div>
-          )}
+          <img
+            src={product.imageUrl ? product.imageUrl : '/placeholder.svg'}
+            alt={product.name}
+            style={{ 
+              width: '100%', 
+              height: '100%', 
+              objectFit: 'cover'
+            }}
+            loading="lazy"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = '/placeholder.svg';
+            }}
+          />
         </div>
         <h3 className="font-semibold text-sm mb-1 text-center line-clamp-2" style={{ minHeight: 32 }}>
           {product.name}
@@ -758,29 +751,31 @@ export default function POS() {
         draftComment: opts?.comment || '',
       };
 
-      // 2. Mise à jour du stock local AVANT affichage du reçu
+      // 2. Mise à jour du stock local AVANT affichage du reçu (seulement si ce n'est pas un brouillon)
       const productsToUpdate = [];
-      for (const item of cart) {
-        let product = await db.get('products', item.product.id);
-        if (product && product.stock && user!.storeId in product.stock) {
-          product.stock[user!.storeId] = (product.stock[user!.storeId] || 0) - item.quantity;
-          await db.put('products', product);
-          productsToUpdate.push(product);
-        }
-      }
-      setProducts(prevProducts => 
-        prevProducts.map(p => {
-          const updated = productsToUpdate.find(upd => upd.id === p.id);
-          return updated ? updated : p;
-        })
-      );
-      setProductSalesCount(prevCounts => {
-        const newCounts = { ...prevCounts };
+      if (!opts?.draft) {
         for (const item of cart) {
-          newCounts[item.product.id] = (newCounts[item.product.id] || 0) + item.quantity;
+          let product = await db.get('products', item.product.id);
+          if (product && product.stock && user!.storeId in product.stock) {
+            product.stock[user!.storeId] = (product.stock[user!.storeId] || 0) - item.quantity;
+            await db.put('products', product);
+            productsToUpdate.push(product);
+          }
         }
-        return newCounts;
-      });
+        setProducts(prevProducts => 
+          prevProducts.map(p => {
+            const updated = productsToUpdate.find(upd => upd.id === p.id);
+            return updated ? updated : p;
+          })
+        );
+        setProductSalesCount(prevCounts => {
+          const newCounts = { ...prevCounts };
+          for (const item of cart) {
+            newCounts[item.product.id] = (newCounts[item.product.id] || 0) + item.quantity;
+          }
+          return newCounts;
+        });
+      }
       await db.put('sales', sale);
 
       // 3. Affichage immédiat du reçu et reset UI
@@ -929,20 +924,22 @@ export default function POS() {
             if (!salesResponse.ok) {
               throw new Error(`Erreur backend vente: ${salesResponse.status}`);
             }
-            // Synchroniser les mises à jour de stock
-            for (const product of productsToUpdate) {
-              const productDataForBackend = {
-                ...product,
-                stock: product.stock[user!.storeId],
-                trackStock: true
-              };
-              await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(productDataForBackend)
-              });
+            // Synchroniser les mises à jour de stock (pas pour les brouillons)
+            if (!opts?.draft) {
+              for (const product of productsToUpdate) {
+                const productDataForBackend = {
+                  ...product,
+                  stock: product.stock[user!.storeId],
+                  trackStock: true
+                };
+                await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify(productDataForBackend)
+                });
+              }
             }
           } catch (error) {
             // Si erreur, queue pour sync plus tard
@@ -951,6 +948,29 @@ export default function POS() {
               method: 'POST',
               data: sale,
             });
+            if (!opts?.draft) {
+              for (const product of productsToUpdate) {
+                const productDataForBackend = {
+                  ...product,
+                  stock: product.stock[user!.storeId],
+                  trackStock: true
+                };
+                await performSyncOp({
+                  url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                  method: 'PUT',
+                  data: productDataForBackend,
+                });
+              }
+            }
+          }
+        } else {
+          // Hors ligne: queue sale and product updates via performSyncOp
+          await performSyncOp({
+            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
+            method: 'POST',
+            data: sale,
+          });
+          if (!opts?.draft) {
             for (const product of productsToUpdate) {
               const productDataForBackend = {
                 ...product,
@@ -964,28 +984,9 @@ export default function POS() {
               });
             }
           }
-        } else {
-          // Hors ligne: queue sale and product updates via performSyncOp
-          await performSyncOp({
-            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-            method: 'POST',
-            data: sale,
-          });
-          for (const product of productsToUpdate) {
-            const productDataForBackend = {
-              ...product,
-              stock: product.stock[user!.storeId],
-              trackStock: true
-            };
-            await performSyncOp({
-              url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-              method: 'PUT',
-              data: productDataForBackend,
-            });
-          }
         }
       })();
-      toast.success(isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)');
+      toast.success(opts?.draft ? 'Brouillon enregistré' : (isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)'));
     } catch (error) {
       toast.error('Erreur lors de l\'enregistrement de la vente');
       console.error('Erreur:', error);
@@ -1609,12 +1610,11 @@ export default function POS() {
 
       {/* Panel latéral ventes en attente */}
       <Dialog open={showDraftPanel} onOpenChange={setShowDraftPanel}>
-        <DialogContent className="max-w-lg w-full">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg mx-auto">
           <DialogHeader>
             <DialogTitle>Ventes en attente</DialogTitle>
           </DialogHeader>
-          {/* Center and constrain inner content so child cards don't overflow */}
-          <div className="w-full max-w-lg mx-auto px-2 sm:px-0">
+          <div className="w-full">
             <div className="space-y-2">
             {draftSales.length === 0 ? (
               <p className="text-center text-muted-foreground">En attente</p>
@@ -1631,7 +1631,7 @@ export default function POS() {
                         <span className="font-semibold">Commentaire :</span> {draft.draftComment}
                       </div>
                     )}
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center justify-between w-full">
                       <Button size="sm" variant="default" onClick={async () => {
                         // Remplir le panier avec la vente en attente
                         const newCart: CartItem[] = [];
@@ -1656,6 +1656,27 @@ export default function POS() {
                         toast.success('Vente en attente poursuivie');
                       }}>
                         Finaliser
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={async () => {
+                        const db = await getDB();
+                        await db.delete('sales', draft.id);
+                        loadDraftSales();
+                        // Supprimer aussi du backend pour éviter qu'il ne revienne à la prochaine sync
+                        try {
+                          await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php?id=${draft.id}`, {
+                            method: 'DELETE',
+                          });
+                        } catch (e) {
+                          // En cas d'échec, mettre en file d'attente
+                          await performSyncOp({
+                            url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php?id=${draft.id}`,
+                            method: 'DELETE',
+                            data: { id: draft.id },
+                          });
+                        }
+                        toast.success('Brouillon supprimé');
+                      }}>
+                        <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
                   </CardContent>

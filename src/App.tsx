@@ -9,6 +9,9 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Pin from "./pages/Pin";
+import { useState, useEffect } from 'react';
+import { getDB } from "@/lib/db";
+import SubscriptionExpired from "./components/SubscriptionExpired";
 import Dashboard from "./pages/Dashboard";
 import DashboardOnlyAdmin from "./DashboardOnlyAdmin";
 import RoleRedirect from "./RoleRedirect";
@@ -23,8 +26,7 @@ import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import Categories from "./pages/Categories";
 import Expenses from "./pages/Expenses";
-import StockSignals from "./pages/StockSignals";
-import useAndroidBackButton from './hooks/useAndroidBackButton';
+import StockSignals from "./pages/StockSignals";import StockAdjustmentHistory from './pages/StockAdjustmentHistory';import useAndroidBackButton from './hooks/useAndroidBackButton';
 
 const queryClient = new QueryClient();
 
@@ -104,6 +106,98 @@ function PinRoute() {
   return <Pin />;
 }
 
+// Vérificateur du statut de l'abonnement du magasin
+// Bloque l'accès si le magasin est désactivé (sauf pour le super admin)
+function StoreStatusChecker({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  const [storeStatus, setStoreStatus] = useState<{ active: boolean; name: string; loading: boolean }>({
+    active: true,
+    name: '',
+    loading: true
+  });
+  const [checkKey, setCheckKey] = useState(0);
+
+  useEffect(() => {
+    const checkStoreStatus = async () => {
+      // Skip si pas de user ou si c'est le super admin (accès illimité)
+      if (!user || user.role === 'super_admin' || isLoading) {
+        setStoreStatus({ active: true, name: '', loading: false });
+        return;
+      }
+
+      try {
+        const db = await getDB();
+        // Récupérer le magasin de l'utilisateur
+        const store = await db.get('stores', user.storeId);
+        
+        if (store) {
+          setStoreStatus({
+            active: store.active !== false, // Par défaut true si undefined
+            name: store.name || 'Votre magasin',
+            loading: false
+          });
+        } else {
+          // Si le store n'existe pas localement, essayer de le récupérer du backend
+          try {
+            const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
+            if (response.ok) {
+              const stores = await response.json();
+              const userStore = stores.find((s: any) => s.id === user.storeId);
+              
+              if (userStore) {
+                // Mettre à jour le store en local
+                await db.put('stores', userStore);
+                setStoreStatus({
+                  active: userStore.active !== false,
+                  name: userStore.name || 'Votre magasin',
+                  loading: false
+                });
+              } else {
+                // Store non trouvé, considérer comme actif par défaut
+                setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
+              }
+            } else {
+              // Erreur backend, on laisse passer par défaut
+              setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
+            }
+          } catch (error) {
+            console.error('Erreur vérification statut magasin:', error);
+            // En cas d'erreur réseau, on laisse passer
+            setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
+          }
+        }
+      } catch (error) {
+        console.error('Erreur accès base de données:', error);
+        setStoreStatus({ active: true, name: '', loading: false });
+      }
+    };
+
+    checkStoreStatus();
+  }, [user, isLoading, checkKey]);
+
+  // Affichage du loader pendant la vérification
+  if (storeStatus.loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  // Si le magasin est désactivé, afficher l'écran de blocage
+  if (!storeStatus.active && user && user.role !== 'super_admin') {
+    return (
+      <SubscriptionExpired 
+        storeName={storeStatus.name}
+        onCheckAgain={() => setCheckKey(prev => prev + 1)}
+      />
+    );
+  }
+
+  // Sinon, afficher l'application normalement
+  return <>{children}</>;
+}
+
 // Render a PIN overlay when a stored session is pending unlock. This component
 // must be rendered inside the AuthProvider so `useAuth()` is available.
 function PinOverlay() {
@@ -133,7 +227,8 @@ function InnerApp() {
       <BackButtonInitializer />
       <AuthProvider>
         <PinOverlay />
-        <Routes>
+        <StoreStatusChecker>
+          <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/pin" element={<PinRoute />} />
             <Route path="/" element={<RoleRedirect />} />
@@ -207,6 +302,7 @@ function InnerApp() {
                 </ProtectedRoute>
               }
             />
+            
             <Route
               path="/users"
               element={
@@ -241,6 +337,16 @@ function InnerApp() {
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/stock-adjustments"
+              element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <StockAdjustmentHistory />
+                  </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
             <Route path="*" element={<NotFound />} />
       
             <Route
@@ -253,6 +359,7 @@ function InnerApp() {
             />
             {/* Printer debug page removed for production builds */}
           </Routes>
+        </StoreStatusChecker>
         </AuthProvider>
       </BrowserRouter>
   );
