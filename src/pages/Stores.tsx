@@ -118,12 +118,30 @@ export default function Stores() {
             ...s
           }));
 
+          // Also remove from local DB any stores that no longer exist on backend
+          // (except those pending a local create that haven't synced yet)
+          const localStores = await db.getAll('stores');
+          const backendIds = new Set(backendStores.map((s: any) => s.id));
+          let pendingCreateIds = new Set<string>();
+          try {
+            const pending = await db.getAll('syncQueue');
+            pendingCreateIds = new Set(
+              pending
+                .filter((op: any) => String(op?.method || '').toUpperCase() === 'POST' && String(op?.url || '').includes('/stores.php'))
+                .map((op: any) => op?.data?.id)
+                .filter(Boolean)
+            );
+          } catch (_) { /* ignore */ }
+
           const tx = db.transaction('stores', 'readwrite');
           const puts = backendStores.map((s: any) => tx.store.put(s));
-          // Wait for all puts and tx completion
-          await Promise.all([...puts, tx.done]);
+          const deletes = localStores
+            .filter((s: any) => !backendIds.has(s.id) && !pendingCreateIds.has(s.id))
+            .map((s: any) => tx.store.delete(s.id));
+          // Wait for all puts, deletes and tx completion
+          await Promise.all([...puts, ...deletes, tx.done]);
 
-          console.log(`Stores synchronisés depuis backend : ${backendStores.length} éléments`);
+          console.log(`Stores synchronisés depuis backend : ${backendStores.length} éléments, ${deletes.length} supprimés localement`);
         } else {
           console.warn('stores fetch failed', resp.status);
         }
@@ -175,7 +193,7 @@ export default function Stores() {
     
     // Si c'est un admin, il ne voit que les magasins qui lui sont liés
     if (user?.role === 'admin') {
-      const userStoreIds = (user as any).storeIds && Array.isArray((user as any).storeIds)
+      const userStoreIds = (user as any).storeIds && Array.isArray((user as any).storeIds) && (user as any).storeIds.length > 0
         ? (user as any).storeIds
         : (user?.storeId ? [user.storeId] : []);
       storesData = storesData.filter(store => userStoreIds.includes(store.id));
@@ -605,6 +623,9 @@ export default function Stores() {
               <span className="inline-block px-2 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
                 {stores.find(s => s.id === user.storeId)?.name || 'Aucun'}
               </span>
+              <Badge variant="outline" className="px-2 py-0.5 text-xs">
+                {filteredStores.length} magasin{filteredStores.length > 1 ? 's' : ''}
+              </Badge>
             </div>
           )}
         </div>
@@ -795,12 +816,7 @@ export default function Stores() {
                 </Select>
               </div>
               
-              {/* Compteur de résultats */}
-              <div className="flex items-end">
-                <Badge variant="outline" className="h-10 px-4 flex items-center">
-                  {filteredStores.length} magasin{filteredStores.length > 1 ? 's' : ''}
-                </Badge>
-              </div>
+
             </div>
           </div>
         </CardContent>
@@ -877,29 +893,43 @@ export default function Stores() {
                       </p>
                     </div>
                   )}
-                  {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() && (
-                    <div className="col-span-2">
+                  <div className="col-span-2 flex items-center justify-between gap-2">
+                    {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() ? (
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700">
                         Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
                       </span>
+                    ) : <span />}
+                    <div className="flex items-center gap-1 ml-auto">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleEdit(store)}
+                        title="Modifier"
+                        aria-label="Modifier"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                      {user?.role === 'admin' && (
+                        <Button
+                          variant="default"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => setSwitchingStore({ id: store.id, name: store.name || store.id })}
+                          title="Basculer"
+                          aria-label="Basculer"
+                        >
+                          <ArrowLeftRight className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               </CardContent>
               <div className="p-4 pt-2 lg:pt-4 lg:flex lg:items-center lg:justify-between">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full lg:flex-row lg:items-center lg:justify-between">
-                  {/* Left group: Modifier, Renouveler */}
+                  {/* Left group: Renouveler */}
                   <div className="flex flex-row flex-wrap gap-2 items-center w-full sm:w-1/2 lg:w-1/2">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-9 w-9"
-                      onClick={() => handleEdit(store)}
-                      title="Modifier"
-                      aria-label="Modifier"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
                     {user?.role === 'super_admin' && (
                       <Button
                         variant="default"
@@ -919,20 +949,6 @@ export default function Stores() {
                     {/* If admin (not super_admin) allow to switch active store */}
                     {user?.role === 'admin' && (
                       <>
-                        <Button
-                          variant="default"
-                          size="icon"
-                          onClick={() => {
-                            // Open confirmation modal instead of switching immediately
-                            setSwitchingStore({ id: store.id, name: store.name || store.id });
-                          }}
-                          className="h-9 w-9"
-                          title="Basculer"
-                          aria-label="Basculer"
-                        >
-                          <ArrowLeftRight className="w-4 h-4" />
-                        </Button>
-
                         <Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching) setSwitchingStore(null); }}>
                           <DialogContent>
                             <DialogHeader>

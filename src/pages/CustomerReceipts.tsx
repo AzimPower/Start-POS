@@ -131,10 +131,16 @@ export default function CustomerReceipts() {
         const storesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
         if (storesResponse.ok) {
           const backendStores = await storesResponse.json();
-          // Mettre à jour la base locale
+          // Mettre à jour la base locale et supprimer les stores effacés côté backend
           const tx = db.transaction('stores', 'readwrite');
+          const backendStoreIds = new Set(backendStores.map((s: any) => s.id));
+          const localStores = await tx.store.getAll();
+          const storeDeletes = localStores
+            .filter((s: any) => !backendStoreIds.has(s.id))
+            .map((s: any) => tx.store.delete(s.id));
           await Promise.all([
             ...backendStores.map(s => tx.store.put(s)),
+            ...storeDeletes,
             tx.done
           ]);
           storesData = backendStores;
@@ -161,10 +167,19 @@ export default function CustomerReceipts() {
           const backendCustomers = await customersResponse.json();
           // Filtrer côté client aussi pour sécurité
           const storeCustomers = backendCustomers.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
-          // Mettre à jour la base locale
+          // Mettre à jour la base locale et supprimer les clients effacés côté backend
           const tx = db.transaction('customers', 'readwrite');
+          const backendCustomerIds = new Set(storeCustomers.map((c: any) => c.id));
+          const localCustomers = await tx.store.getAll();
+          const storeLocalCustomers = user?.storeId
+            ? localCustomers.filter((c: any) => c.storeId === user.storeId)
+            : localCustomers;
+          const custDeletes = storeLocalCustomers
+            .filter((c: any) => !backendCustomerIds.has(c.id))
+            .map((c: any) => tx.store.delete(c.id));
           await Promise.all([
             ...storeCustomers.map(c => tx.store.put(c)),
+            ...custDeletes,
             tx.done
           ]);
           allCustomers = storeCustomers;

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { getDB } from '@/lib/db';
+import { getEmailSettings } from '@/lib/emailSettingsCache';
 import * as secureStorage from '@/lib/secureStorage';
 import { refreshAllFromBackend } from '@/lib/sync';
 import { backendAvailable } from '@/lib/backend';
@@ -277,9 +278,9 @@ const sendLoginNotificationEmail = async (userData: User) => {
   try {
     const db = await getDB();
     
-    // Vérifier les paramètres d'email pour les connexions
-    const emailSettings = await db.get('emailSettings', userData.storeId);
-    const shouldSendEmail = emailSettings?.logins !== false; // Par défaut true si pas de config
+    // Vérifier les paramètres d'email pour les connexions (lit depuis le backend = source de vérité)
+    const emailSettings = await getEmailSettings(userData.storeId || '');
+    const shouldSendEmail = emailSettings.logins;
     
     if (!shouldSendEmail) {
       console.log('📧 Email désactivé pour les connexions utilisateur');

@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef, useMemo, useCallback, startTransition } from 'react';
+﻿import React, { useEffect, useState, useRef, useMemo, useCallback, startTransition } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
+import { getEmailSettings } from '@/lib/emailSettingsCache';
 import { emailService } from '@/lib/emailService';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import * as NativePrinter from '@/lib/nativePrinter';
@@ -57,12 +58,17 @@ const formatDurationFn = (start: number, end: number | null) => {
   return `${hours}h ${minutes}min`;
 };
 
-// Tri d'affichage: fermés par date de fermeture, ouverts par date d'ouverture
+const formatMoneyCompactFn = (value: number) => {
+  return new Intl.NumberFormat('fr-FR')
+    .format(Math.round(Number(value) || 0))
+    .replace(/\u00A0|\u202F/g, ' ');
+};
+
+// Tri d'affichage: ouverts toujours en haut, fermés triés par closedAt décroissant (fallback openedAt)
 const getShiftSortTs = (shift: Partial<Shift> | any) => {
-  const opened = Number(shift?.openedAt) || 0;
-  const closed = Number(shift?.closedAt) || 0;
-  if (shift?.status === 'closed') return closed || opened;
-  return opened;
+  if (shift?.status === 'open') return Number.MAX_SAFE_INTEGER;
+  // Les zombie shifts ont openedAt=2025 mais closedAt=2026 → on trie par closedAt pour les placer correctement
+  return Number(shift?.closedAt) || Number(shift?.openedAt) || 0;
 };
 
 // ShiftCard défini HORS du composant pour éviter la recréation à chaque render
@@ -76,7 +82,7 @@ const ShiftCard = React.memo(({ shift, encaissé, computed, cashierName, isAdmin
 }) => {
   const isClosed = shift.status === 'closed';
   const isOpen = shift.status === 'open';
-  const statusColor = isOpen ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700';
+  const statusColor = isOpen ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200';
   const statusIcon = isOpen ? (
     <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
   ) : (
@@ -95,60 +101,68 @@ const ShiftCard = React.memo(({ shift, encaissé, computed, cashierName, isAdmin
   }
   return (
     <div className={
-      `relative p-4 rounded-xl shadow flex flex-col gap-2 ` +
+      `relative p-3.5 sm:p-4 rounded-2xl shadow-sm flex flex-col gap-3 border ` +
       (isOpen
-        ? 'border-2 border-blue-400 bg-blue-50/80'
-        : 'border border-gray-100 bg-gradient-to-br from-white to-gray-50')
+        ? 'border-blue-300 bg-gradient-to-br from-blue-50 to-white'
+        : 'border-gray-200 bg-gradient-to-br from-white to-slate-50')
     }>
-      <div className="flex items-center gap-3 mb-1">
+      <div className="flex items-start gap-3">
         <div className="shrink-0">{statusIcon}</div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-base text-gray-800 truncate">
+          <div className="font-semibold text-[15px] sm:text-base text-gray-800 truncate">
             {isOpen ? 'Shift en cours' : 'Shift terminé'}
           </div>
-          <div className="text-xs text-gray-500">Ouvert le {formatDateFn(shift.openedAt)}</div>
+          <div className="text-xs text-gray-500 mt-0.5">Ouvert le {formatDateFn(shift.openedAt)}</div>
         </div>
-        <span className={"ml-2 px-2 py-0.5 rounded-full text-xs font-bold " + statusColor}>
-          {isOpen ? 'Ouvert' : 'Fermé'}
-        </span>
+        <div className="ml-2 flex items-center gap-1.5">
+          <span className={"px-2.5 py-1 rounded-full text-[11px] font-bold border " + statusColor}>
+            {isOpen ? 'Ouvert' : 'Fermé'}
+          </span>
+          {!(isOpen && !isAdmin) && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+              onClick={() => onShowDetails(shift)}
+              title="Voir les détails"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm mt-1">
-        <span className="flex items-center gap-1 text-gray-600">
+      <div className="grid grid-cols-1 gap-2 text-sm">
+        <div className="flex items-center gap-2 rounded-lg bg-white/80 border border-gray-100 px-2.5 py-2 text-gray-700">
           <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><path d="M12 8v4l3 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-          {isClosed && shift.closedAt ? formatDateFn(shift.closedAt) : (isOpen ? 'En cours' : '-')}
-        </span>
-        <span className="flex items-center gap-1 text-gray-600">
+          <span className="truncate">{isClosed && shift.closedAt ? formatDateFn(shift.closedAt) : (isOpen ? 'En cours' : '-')}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
           <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
           {formatDurationFn(shift.openedAt, shift.closedAt)}
-        </span>
-        {diffBadge}
+          </span>
+          {diffBadge}
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm mt-1">
-        <span className="flex items-center gap-1 text-gray-600">
+      <div className="grid grid-cols-1 gap-2 text-sm">
+        <span className="inline-flex items-center gap-1 text-gray-600">
           <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><path d="M16 12a4 4 0 11-8 0 4 4 0 018 0z" stroke="currentColor" strokeWidth="2"/></svg>
           {cashierName}
         </span>
-        <span className="flex items-center gap-1 text-gray-600">
+        <div className="rounded-lg bg-gray-900/[0.03] px-2.5 py-2 border border-gray-200/70">
+          <span className="text-[11px] uppercase tracking-wide text-gray-500">Montant encaissé</span>
+          <div className="mt-0.5 text-base font-semibold text-gray-800">
+            {(isOpen && !isAdmin) ? '***' : formatMoneyCompactFn(encaissé)} FCFA
+          </div>
+        </div>
+        <span className="hidden items-center gap-1 text-gray-600">
           <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M8 12h8" stroke="currentColor" strokeWidth="2"/></svg>
-          {(isOpen && !isAdmin) ? '***' : Math.round(encaissé)} FCFA encaissé
+          {(isOpen && !isAdmin) ? '***' : formatMoneyCompactFn(encaissé)} FCFA encaissé
         </span>
       </div>
-      <div className="flex gap-2 mt-2">
-        {(isOpen && !isAdmin) ? (
-          <div className="flex-1 py-1.5 rounded-lg bg-gray-100 text-gray-500 font-medium text-center text-sm">
-            Accès restreint
-          </div>
-        ) : (
-          <Button
-            className="flex-1 py-1.5 rounded-lg bg-primary text-white font-medium shadow hover:bg-primary/90 transition text-sm"
-            onClick={() => onShowDetails(shift)}
-            title="Voir les détails"
-          >
-            <Eye className="w-4 h-4 inline-block mr-1 -mt-0.5 align-middle" />
-            Détails
-          </Button>
-        )}
-      </div>
+      {(isOpen && !isAdmin) && (
+        <div className="text-xs text-gray-500 font-medium">Accès restreint</div>
+      )}
     </div>
   );
 });
@@ -358,6 +372,10 @@ export default function Shifts() {
       console.error('Erreur lors du nettoyage des shifts multiples:', error);
     }
   };
+
+  // Supprimé: le nettoyage automatique au démarrage était trop agressif
+  // (supprimait les shifts dont les ventes n'avaient pas de shiftId renseigné)
+  // La suppression ne se fait qu'à la fermeture active d'un shift sans vente.
 
   // Fonction de correction automatique des shifts fermés après synchronisation
   const correctClosedShifts = async (db: any) => {
@@ -660,7 +678,7 @@ export default function Shifts() {
             const backendShifts = await response.json();
             
             if (Array.isArray(backendShifts) && backendShifts.length > 0) {
-              // Mettre à jour la base locale
+              // Mettre à jour la base locale (merge: put tous les shifts backend)
               const tx = db.transaction('shifts', 'readwrite');
               await Promise.all([
                 ...backendShifts.map(s => tx.store.put(s)),
@@ -669,21 +687,28 @@ export default function Shifts() {
               // Invalider le cache des calculs
               shiftsCache.current.clear();
 
-              // Afficher directement (pas de re-lecture DB)
-              const normalized = backendShifts.map((s: any) => ({ ...s, storeId: s.storeId || '' }));
-              let visible = normalized;
-              if (user?.role === 'admin' && user?.storeId) {
-                visible = normalized.filter((s: any) => s.storeId === user.storeId);
-              } else {
-                visible = normalized.filter((s: any) => s.userId === user?.id);
+              // Supprimer les shifts ouverts locaux fantômes (ouverts en local mais absents du backend)
+              // SÉCURITÉ: ne pas supprimer un shift récent (<5 min) ou qui a une op en attente de sync
+              const backendIds = new Set(backendShifts.map((s: any) => String(s.id)));
+              const allLocal = await db.getAll('shifts');
+              const pendingOps = await db.getAll('syncQueue');
+              const pendingShiftIds = new Set(
+                pendingOps.filter((op: any) => op.table === 'shifts' || op.url?.includes('shifts')).map((op: any) => String(op.data?.id))
+              );
+              const FIVE_MINUTES = 5 * 60 * 1000;
+              const ghostOpen = allLocal.filter((s: any) =>
+                s.status === 'open' && !backendIds.has(String(s.id)) &&
+                (!user?.storeId || s.storeId === user.storeId) &&
+                !pendingShiftIds.has(String(s.id)) &&
+                (Date.now() - (s.openedAt || 0)) > FIVE_MINUTES
+              );
+              if (ghostOpen.length > 0) {
+                const tx2 = db.transaction('shifts', 'readwrite');
+                await Promise.all([...ghostOpen.map((s: any) => tx2.store.delete(s.id)), tx2.done]);
               }
-              visible.sort((a: any, b: any) => getShiftSortTs(b) - getShiftSortTs(a));
-              // Garder la liste stable: charger tous les shifts visibles au refresh backend
-              setShifts(visible);
-              setLoadedCount(visible.length);
-              setHasMore(false);
-              const active = visible.find((s: any) => s.status === 'open' && s.userId === user?.id);
-              setActiveShift(active || null);
+
+              // Relire depuis le local en respectant la pagination
+              await loadShiftsPage(db, 0, pageSize, true);
             }
 
             // correctClosedShifts désactivé : shift.difference est toujours lu depuis la fermeture
@@ -722,7 +747,8 @@ export default function Shifts() {
       } else {
         visible = normalized.filter((s: any) => s.userId === user?.id);
       }
-      const page = reset ? visible : visible.slice(offset, offset + limit);
+      const page = reset ? visible.slice(0, limit) : visible.slice(offset, offset + limit);
+      const totalVisible = visible.length;
 
       if (reset) {
         setShifts(page);
@@ -737,7 +763,7 @@ export default function Shifts() {
           return out;
         });
       }
-      setHasMore(reset ? false : page.length === limit);
+      setHasMore(reset ? totalVisible > page.length : (offset + page.length) < totalVisible);
       const active = (reset ? page : [...shifts, ...page]).find(s => s.status === 'open' && s.userId === user?.id);
       setActiveShift(active || null);
       return page;
@@ -746,7 +772,8 @@ export default function Shifts() {
       const all = await db.getAll('shifts');
       all.sort((a: any, b: any) => getShiftSortTs(b) - getShiftSortTs(a));
       const filtered = user?.role === 'admin' ? all : all.filter((s: any) => s.userId === user?.id);
-      const page = reset ? filtered : filtered.slice(offset, offset + limit);
+      const page = reset ? filtered.slice(0, limit) : filtered.slice(offset, offset + limit);
+      const totalFiltered = filtered.length;
       if (reset) {
         setShifts(page);
         setLoadedCount(page.length);
@@ -760,7 +787,7 @@ export default function Shifts() {
           return out;
         });
       }
-      setHasMore(reset ? false : (page.length === limit && (user?.role === 'admin' || filtered.length > offset + limit)));
+      setHasMore(reset ? totalFiltered > page.length : (offset + page.length) < totalFiltered);
       return page;
     }
   };
@@ -1111,13 +1138,15 @@ export default function Shifts() {
             );
             
             if (backendOpenShift) {
-              toast.error('Un shift est déjà ouvert sur un autre appareil. Veuillez d\'abord le fermer.');
-              setLoading(false);
-              
-              // Synchroniser ce shift dans la DB locale
+              // Un shift est déjà ouvert pour cet utilisateur (même appareil ou autre appareil)
+              // → on l'adopte directement sans bloquer
               await db.put('shifts', backendOpenShift);
               setActiveShift(backendOpenShift);
-              
+              setLoading(false);
+              toast.success('Shift actif récupéré.');
+              setShowOpenDialog(false);
+              setOpeningAmount('');
+              try { navigate('/pos'); } catch (e) {}
               return;
             }
           }
@@ -1158,16 +1187,38 @@ export default function Shifts() {
             const errorData = await response.json();
             console.error('🚫 Shift déjà ouvert:', errorData);
             
-            // Supprimer le shift créé localement
+            // Supprimer le nouveau shift créé localement (doublon)
             await db.delete('shifts', newShift.id);
             
-            // Afficher un message clair à l'utilisateur
-            toast.error('Un shift est déjà ouvert sur un autre appareil. Veuillez d\'abord le fermer.');
+            // Récupérer le shift existant depuis le backend et l'utiliser directement
+            try {
+              const existingUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?storeId=${user!.storeId}`;
+              const existingResp = await fetch(existingUrl);
+              if (existingResp.ok) {
+                const allShifts = await existingResp.json();
+                const existingOpenShift = allShifts.find((s: any) =>
+                  s.userId === user!.id && s.status === 'open' && s.storeId === user!.storeId
+                );
+                if (existingOpenShift) {
+                  await db.put('shifts', existingOpenShift);
+                  setActiveShift(existingOpenShift);
+                  setShowOpenDialog(false);
+                  setOpeningAmount('');
+                  setLoading(false);
+                  toast.success('Shift actif récupéré.');
+                  try { navigate('/pos'); } catch (e) {}
+                  return;
+                }
+              }
+            } catch (fetchErr) {
+              console.warn('Impossible de récupérer le shift existant:', fetchErr);
+            }
+            
+            // Fallback: afficher message et recharger
+            toast.error('Un shift est déjà ouvert. Rechargement...');
             setShowOpenDialog(false);
             setOpeningAmount('');
             setLoading(false);
-            
-            // Recharger les shifts pour afficher le shift actif
             await loadShifts();
             return;
           }
@@ -1278,15 +1329,72 @@ export default function Shifts() {
       console.log('Données du shift à envoyer:', updatedShift);
       console.log('cashAmount:', cash, 'mobileMoneyAmount:', mobile, 'otherAmount:', other);
       
+      // Fallback: ventes sans shiftId dans l'intervalle du shift
+      if (sales.length === 0) {
+        const allSalesDb = await db.getAll('sales');
+        const shiftEnd = Date.now();
+        const extraSales = allSalesDb.filter((s: any) => {
+          if (s.shiftId) return false; // déjà couvert par l'index
+          const t = s.createdAt || s.timestamp || 0;
+          return t >= activeShift.openedAt && t <= shiftEnd;
+        });
+        if (extraSales.length > 0) {
+          // Il y a des ventes sans shiftId → ne pas supprimer
+          // On continue la fermeture normale
+        }
+      }
+
+      // Si aucune vente dans ce shift (ni par shiftId ni par plage horaire), supprimer
+      const allSalesForCheck = sales.length === 0 ? await (async () => {
+        const allSalesDb = await db.getAll('sales');
+        return allSalesDb.filter((s: any) => {
+          if (s.shiftId) return false;
+          const t = s.createdAt || s.timestamp || 0;
+          return t >= activeShift.openedAt && t <= Date.now();
+        });
+      })() : [];
+      if (sales.length === 0 && allSalesForCheck.length === 0) {
+        await db.delete('shifts', activeShift.id);
+        if (isOnline) {
+          fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`, {
+            method: 'DELETE'
+          }).catch(() => {});
+        }
+        setActiveShift(null);
+        setShowCloseDialog(false);
+        setCashAmount('');
+        setMobileMoneyAmount('');
+        setOtherAmount('');
+        shiftsCache.current.clear();
+        await loadShifts();
+        toast.success('Shift sans vente supprimé automatiquement');
+        return;
+      }
+
       // Sauvegarder localement d'abord
       await db.put('shifts', updatedShift);
+
+      // ✅ Mettre à jour l'état UI immédiatement — ne pas attendre email/sync
+      setActiveShift(null);
+      setShowCloseDialog(false);
+      setCashAmount('');
+      setMobileMoneyAmount('');
+      setOtherAmount('');
+      loadShifts();
+      toast.success('Shift fermé avec succès');
+
+      // Notifier les autres onglets (POS, etc.) que le shift est fermé
+      try {
+        localStorage.setItem('shift_closed_event', JSON.stringify({ shiftId: updatedShift.id, closedAt: updatedShift.closedAt }));
+      } catch {}
+
       // Envoi automatique d'un email à l'admin avec résumé complet du shift
       try {
         const dbInstance = await getDB();
         
-        // Vérifier les paramètres d'email pour les shifts
-        const emailSettings = await dbInstance.get('emailSettings', updatedShift.storeId);
-        const shouldSendEmail = emailSettings?.shifts !== false; // Par défaut true si pas de config
+        // Vérifier les paramètres d'email pour les shifts (lit depuis le backend = source de vérité)
+        const emailSettings = await getEmailSettings(updatedShift.storeId);
+        const shouldSendEmail = emailSettings.shifts;
         
         if (!shouldSendEmail) {
           console.log('📧 Email désactivé pour les fermetures de shifts');
@@ -1445,8 +1553,7 @@ export default function Shifts() {
           if (!response.ok) {
             throw new Error(`Erreur backend: ${response.status}`);
           }
-
-          toast.success('Shift fermé et synchronisé avec succès');
+          console.log('✅ [SHIFT] Synchronisé avec le backend');
         } catch (error) {
           console.error('Erreur de synchronisation:', error);
           // Mettre en file via performSyncOp (gère mise en file si offline)
@@ -1455,7 +1562,7 @@ export default function Shifts() {
             method: 'PUT',
             data: updatedShift
           });
-          toast.success('Shift fermé localement. La synchronisation se fera automatiquement.');
+          console.log('📦 [SHIFT] Mis en file de sync');
         }
       } else {
         // Hors ligne : mettre en file via performSyncOp
@@ -1464,14 +1571,8 @@ export default function Shifts() {
           method: 'PUT',
           data: updatedShift
         });
-        toast.success('Shift fermé localement. La synchronisation se fera automatiquement.');
+        console.log('📦 [SHIFT] Hors ligne, mis en file de sync');
       }
-      
-      setShowCloseDialog(false);
-      setCashAmount('');
-      setMobileMoneyAmount('');
-      setOtherAmount('');
-      loadShifts();
     } catch (error) {
       toast.error('Erreur lors de la fermeture du shift');
       console.error('Erreur:', error);
@@ -1628,6 +1729,11 @@ export default function Shifts() {
         <CardHeader>
           <div className="flex items-center gap-3">
             <CardTitle>Historique des services</CardTitle>
+            {dataLoaded && !loading && filteredShifts.length > 0 && (
+              <span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {filteredShifts.length}
+              </span>
+            )}
             {loading && (
               <div className="flex items-center text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin mr-1" />

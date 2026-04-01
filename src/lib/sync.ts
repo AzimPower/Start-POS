@@ -12,15 +12,21 @@ export const connectionState = {
 	lastCheck: Date.now(),
 };
 
+// Cache de la connexion IndexedDB pour éviter de la rouvrir à chaque appel
+let _syncDBPromise: Promise<any> | null = null;
+
 // Ouvrir la base IndexedDB pour les opérations en attente
 async function getSyncDB() {
-	return openDB(SYNC_DB_NAME, 1, {
-		upgrade(db) {
-			if (!db.objectStoreNames.contains(SYNC_STORE)) {
-				db.createObjectStore(SYNC_STORE, { keyPath: 'id', autoIncrement: true });
-			}
-		},
-	});
+	if (!_syncDBPromise) {
+		_syncDBPromise = openDB(SYNC_DB_NAME, 1, {
+			upgrade(db) {
+				if (!db.objectStoreNames.contains(SYNC_STORE)) {
+					db.createObjectStore(SYNC_STORE, { keyPath: 'id', autoIncrement: true });
+				}
+			},
+		});
+	}
+	return _syncDBPromise;
 }
 
 // Ajouter une opération à la file d’attente
@@ -55,7 +61,7 @@ export async function getPendingSyncOps() {
 // Compter les opérations en attente
 export async function getPendingSyncCount() {
 	const db = await getSyncDB();
-	return (await db.getAllKeys(SYNC_STORE)).length;
+	return db.count(SYNC_STORE);
 }
 
 // Supprimer une opération synchronisée
@@ -66,6 +72,10 @@ export async function removeSyncOp(id) {
 
 // Synchroniser toutes les opérations en attente avec le serveur
 export async function syncWithServer() {
+	// Guard contre les appels concurrents
+	if (connectionState.isSyncing) {
+		return { success: false, reason: 'already_syncing' };
+	}
 	// Vérifier la connexion internet et le backend (ping)
 	if (!navigator.onLine) {
 		return { success: false, reason: 'offline' };
@@ -109,46 +119,93 @@ export async function syncWithServer() {
     await pendingEmailService.cleanupOldEmails();
   } catch (emailError) {
     console.error('❌ [SYNC] Erreur traitement emails:', emailError);
-  }	// Récupérer les opérations en attente
-	const ops = await getPendingSyncOps();
-	if (!ops.length) {
-		// Rien à synchroniser, ne pas appeler le backend
-		return { success: true, itemsCount: 0, skipped: true };
-	}
+  }
+
 	connectionState.isSyncing = true;
 	let successCount = 0;
-	for (const op of ops) {
-		try {
-			// Appel API backend (adapter selon le type d’opération)
-			const res = await fetch(op.url, {
-				method: op.method || 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(op.data),
-			});
-			if (res.ok) {
-				await removeSyncOp(op.id);
-				successCount++;
-				writeSyncLog({ level: 'info', message: 'Op synchronisée', entity: op.table, details: { id: op.data?.id, url: op.url } });
+	let networkErrorOccurred = false;
+
+	try {
+		// 1. Traiter les opérations de pending_ops (pos_sync_db)
+		const ops = await getPendingSyncOps();
+		for (const op of ops) {
+			if (networkErrorOccurred) break;
+			try {
+				const res = await fetch(op.url, {
+					method: op.method || 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(op.data),
+				});
+				if (res.ok) {
+					await removeSyncOp(op.id);
+					successCount++;
+					writeSyncLog({ level: 'info', message: 'Op synchronisée (pending_ops)', entity: op.table, details: { id: op.data?.id, url: op.url } });
+				} else {
+					writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (pending_ops)`, entity: op.table, details: { url: op.url, status: res.status } });
+				}
+			} catch (e) {
+				networkErrorOccurred = true;
+				writeSyncLog({ level: 'warn', message: 'Erreur réseau (pending_ops)', entity: op.table, details: { error: String(e) } });
 			}
-		} catch (e) {
-			// On arrête si erreur réseau
-			break;
 		}
+
+		// 2. Traiter les opérations de syncQueue (pos_db) — seulement si pas d'erreur réseau
+		if (!networkErrorOccurred) {
+			try {
+				const { getDB } = await import('./db');
+				const mainDb = await getDB();
+				const queueOps = await mainDb.getAll('syncQueue');
+				for (const op of queueOps) {
+					if (networkErrorOccurred) break;
+					try {
+						const rawMethod = String(op.method || op.operation || 'POST').toUpperCase();
+						const mappedMethod =
+							rawMethod === 'CREATE' ? 'POST' :
+							rawMethod === 'UPDATE' ? 'PUT' :
+							rawMethod === 'DELETE' ? 'DELETE' :
+							rawMethod;
+						const res = await fetch(op.url, {
+							method: mappedMethod,
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify(op.data),
+						});
+						if (res.ok) {
+							await mainDb.delete('syncQueue', op.id);
+							successCount++;
+							writeSyncLog({ level: 'info', message: 'Op synchronisée (syncQueue)', entity: op.table, details: { id: op.data?.id, url: op.url } });
+						} else {
+							writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (syncQueue)`, entity: op.table, details: { url: op.url, status: res.status } });
+						}
+					} catch (e) {
+						networkErrorOccurred = true;
+						writeSyncLog({ level: 'warn', message: 'Erreur réseau (syncQueue)', entity: op.table, details: { error: String(e) } });
+					}
+				}
+			} catch (e) {
+				console.error('Erreur lecture syncQueue:', e);
+			}
+		}
+	} finally {
+		connectionState.isSyncing = false;
 	}
-	connectionState.isSyncing = false;
+
 	return { success: true, itemsCount: successCount };
 }
  
  // Helper générique pour récupérer et merger une entité depuis le backend
 export async function fetchAndMerge(endpoint: string, storeName: string, tableName?: string, normalizeFn?: (item: any)=>any, params?: Record<string, string>) {
  	 try {
- 		 // Append query params only when provided (avoid storeId=undefined)
- 		 let url = endpoint;
+ 		 // Always bypass service-worker/runtime caches for sync reads.
+ 		 const urlObj = new URL(endpoint, window.location.origin);
  		 if (params && Object.keys(params).length > 0) {
- 			 const qs = new URLSearchParams(params).toString();
- 			 url = endpoint + (endpoint.includes('?') ? '&' : '?') + qs;
+ 			 for (const [k, v] of Object.entries(params)) {
+ 				 if (v != null) urlObj.searchParams.set(k, String(v));
+ 			 }
  		 }
- 		 const res = await fetch(url);
+ 		 urlObj.searchParams.set('_bypass_sw', '1');
+ 		 urlObj.searchParams.set('_ts', String(Date.now()));
+ 		 const url = urlObj.toString();
+		 const res = await fetch(url, { cache: 'no-store' });
 		 if (!res.ok) return;
 		 let backendItems: any = await res.json();
 		 // If backend returned an object with a wrapper (e.g. { data: [...] })
@@ -178,24 +235,38 @@ export async function fetchAndMerge(endpoint: string, storeName: string, tableNa
 		 const { getDB } = await import('./db');
 		 const db = await getDB();
 		 const pending = await db.getAll('syncQueue');
-		 const pendingIds = new Set(pending.filter((op: any) => op.table === (tableName || storeName)).map((op: any) => op.data?.id));
+		 const currentTable = tableName || storeName;
+		 const pendingForTable = pending.filter((op: any) => op.table === currentTable);
+		 const pendingIds = new Set(
+			 pendingForTable
+				 .map((op: any) => op?.data?.id)
+				 .filter((id: any) => id != null)
+				 .map((id: any) => String(id))
+		 );
 		 const normalized = (backendItems || []).map((it: any) => normalizeFn ? normalizeFn(it) : ({ ...it }));
-		 const backendMap = new Map<string, any>(normalized.map((it: any) => [it.id, it]));
-		 const localItems = await db.getAll(storeName as any);
+		 const allLocalItems = await db.getAll(storeName as any);
+		 const isScopedByStore = Boolean(params?.storeId && storeName !== 'stores');
+		 const localItems = isScopedByStore
+			 ? allLocalItems.filter((it: any) => String(it?.storeId) === String(params?.storeId))
+			 : allLocalItems;
+		 const localItemsOutsideScope = isScopedByStore
+			 ? allLocalItems.filter((it: any) => String(it?.storeId) !== String(params?.storeId))
+			 : [];
  
 		 // Build merged map: start with backend items
-		 const mergedMap = new Map<string, any>(normalized.map((it: any) => [it.id, it]));
+		 const mergedMap = new Map<string, any>(normalized.map((it: any) => [String(it.id), it]));
  
 		 // Merge local items: if item exists on backend, choose latest by updatedAt, otherwise keep local
 		 for (const local of localItems) {
-			 const id = local.id;
+			 const id = String(local.id);
 			 const backend = mergedMap.get(id);
 			 const localUpdated = typeof local.updatedAt === 'number' ? local.updatedAt : 0;
 			 const backendUpdated = backend && typeof backend.updatedAt === 'number' ? backend.updatedAt : 0;
  
 			 if (!backend) {
-				 // Not present on backend: if local has pending ops or was created locally, preserve it
-				 if (pendingIds.has(id) || !backendMap.has(id)) {
+				 // Not present on backend: preserve only if we have local pending operations for this id.
+				 // Otherwise, backend deletion wins and the local item is removed during merge.
+				 if (pendingIds.has(id)) {
 					 mergedMap.set(id, local);
 				 }
 			 } else {
@@ -243,12 +314,24 @@ export async function fetchAndMerge(endpoint: string, storeName: string, tableNa
  
 		 // Persist merged list
 		 const merged = Array.from(mergedMap.values());
+		 const finalItems = isScopedByStore ? [...localItemsOutsideScope, ...merged] : merged;
+
 		 const tx = db.transaction(storeName as any, 'readwrite');
 		 await tx.store.clear();
-		 for (const it of merged) await tx.store.put(it as any);
+		 for (const it of finalItems) await tx.store.put(it as any);
 		 await tx.done;
 		 console.log(`${storeName} locaux synchronisés avec ${endpoint}`);
-		 writeSyncLog({ level: 'info', message: `Merged ${storeName} from backend`, entity: storeName, details: { endpoint, count: merged.length } });
+		 writeSyncLog({
+			 level: 'info',
+			 message: `Merged ${storeName} from backend`,
+			 entity: storeName,
+			 details: {
+				 endpoint,
+				 scoped: isScopedByStore,
+				 mergedCount: merged.length,
+				 finalCount: finalItems.length,
+			 },
+		 });
 	 } catch (e) {
 		 console.log(`Erreur lors de la synchronisation de ${storeName}:`, e);
 		 writeSyncLog({ level: 'error', message: `Erreur merge ${storeName}`, entity: storeName, details: { error: String(e) } });
@@ -291,7 +374,7 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
 		const shiftsToUpdate = new Map<string, any>();
 
 		for (const sale of sales) {
-			const saleTime = sale.createdAt || sale.timestamp || 0;
+			const saleTime = sale.createdAt || 0;
 			const saleShiftId = sale.shiftId ? String(sale.shiftId) : '';
 			const shift = saleShiftId ? shiftById.get(saleShiftId) : null;
 
@@ -332,26 +415,50 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
 		}
 		await tx.done;
 
-		// Propager les corrections vers le backend si possible
+		// Propager les corrections vers le backend — tente direct, met en queue si échec
 		if (navigator.onLine) {
 			try {
-				const salesUpdates = salesToUpdate.map((s: any) =>
+				const salesFetches = salesToUpdate.map((s: any) =>
 					fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
 						method: 'PUT',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify(s),
 					})
 				);
-				const shiftUpdates = Array.from(shiftsToUpdate.values()).map((sh: any) =>
+				const shiftFetches = Array.from(shiftsToUpdate.values()).map((sh: any) =>
 					fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', {
 						method: 'PUT',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify(sh),
 					})
 				);
-				await Promise.all([...salesUpdates, ...shiftUpdates]);
+				await Promise.all([...salesFetches, ...shiftFetches]);
 			} catch (e) {
-				console.log('Erreur sync backend après reconciliation:', e);
+				console.log('Erreur sync directe après reconciliation, mise en queue pour retry:', e);
+				// Si échec réseau: mettre en syncQueue pour être retenté lors de la prochaine sync
+				try {
+					const { getDB } = await import('./db');
+					const mainDb = await getDB();
+					const now = Date.now();
+					for (const s of salesToUpdate) {
+						try {
+							await mainDb.add('syncQueue', {
+								id: crypto.randomUUID(), table: 'sales', operation: 'update' as const,
+								data: s, url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', createdAt: now, attempts: 0,
+							});
+						} catch (_) {}
+					}
+					for (const sh of shiftsToUpdate.values()) {
+						try {
+							await mainDb.add('syncQueue', {
+								id: crypto.randomUUID(), table: 'shifts', operation: 'update' as const,
+								data: sh, url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', createdAt: now, attempts: 0,
+							});
+						} catch (_) {}
+					}
+				} catch (queueErr) {
+					console.log('Erreur mise en queue des corrections reconciliation:', queueErr);
+				}
 			}
 		}
 	} catch (e) {
@@ -373,18 +480,31 @@ export async function refreshAllFromBackend(storeId?: string) {
 		 return;
 	 }
 	 const params = storeId ? { storeId } : undefined;
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', 'customers', 'customers', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', 'categories', 'categories', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php', 'expenseCategories', 'expenseCategories', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', 'stores', 'stores', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', 'users', 'users', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', 'shifts', 'shifts', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', 'sales', 'sales', undefined, params);
+	 const BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api';
+
+	 // Batch 1 : données de référence (toutes indépendantes, téléchargées en parallèle)
+	 await Promise.all([
+		 fetchAndMerge(`${BASE}/products.php`, 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params),
+		 fetchAndMerge(`${BASE}/customers.php`, 'customers', 'customers', undefined, params),
+		 fetchAndMerge(`${BASE}/categories.php`, 'categories', 'categories', undefined, params),
+		 fetchAndMerge(`${BASE}/expense_categories.php`, 'expenseCategories', 'expenseCategories', undefined, params),
+		 fetchAndMerge(`${BASE}/stores.php`, 'stores', 'stores', undefined, params),
+		 fetchAndMerge(`${BASE}/users.php`, 'users', 'users', undefined, params),
+	 ]);
+
+	 // Batch 2 : shifts et sales (en parallèle, doivent être terminés avant la réconciliation)
+	 await Promise.all([
+		 fetchAndMerge(`${BASE}/shifts.php`, 'shifts', 'shifts', undefined, params),
+		 fetchAndMerge(`${BASE}/sales.php`, 'sales', 'sales', undefined, params),
+	 ]);
 	 await reconcileSalesToLastClosedShift(storeId);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses.php', 'expenses', 'expenses', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', 'expensesAdvanced', 'expensesAdvanced', undefined, params);
-	 await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', 'stockSignals', 'stockSignals', undefined, params);
+
+	 // Batch 3 : autres données (en parallèle)
+	 await Promise.all([
+		 fetchAndMerge(`${BASE}/expenses.php`, 'expenses', 'expenses', undefined, params),
+		 fetchAndMerge(`${BASE}/expenses_advanced.php`, 'expensesAdvanced', 'expensesAdvanced', undefined, params),
+		 fetchAndMerge(`${BASE}/stock_signals.php`, 'stockSignals', 'stockSignals', undefined, params),
+	 ]);
  }
 
 // Forcer la synchronisation manuelle

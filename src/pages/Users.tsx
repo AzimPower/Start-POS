@@ -200,6 +200,8 @@ export default function Users() {
           });
         }
         toast.success('Utilisateur modifié');
+        // Mettre à jour le state local immédiatement sans refetch
+        setUsers(prev => prev.map(u => u.id === userData.id ? userData as UserData : u));
       } else {
         // Création
         const existingUser = await db.getFromIndex('users', 'by-username', formData.username);
@@ -250,13 +252,14 @@ export default function Users() {
           });
         }
         toast.success('Utilisateur créé');
+        // Ajouter au state local immédiatement sans refetch
+        setUsers(prev => [newUser as unknown as UserData, ...prev]);
       }
       setShowDialog(false);
       setEditingUser(null);
       setShowPassword(false);
       setShowPin(false);
       setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeId: '', pin: '' });
-      loadUsers();
     } catch (error) {
       console.error('User save error:', error);
       const msg = (error as any)?.message || 'Erreur lors de l\'enregistrement';
@@ -298,7 +301,8 @@ export default function Users() {
         });
       }
       toast.success('Utilisateur supprimé');
-      loadUsers();
+      // Supprimer du state local immédiatement sans refetch
+      setUsers(prev => prev.filter(u => u.id !== id));
     } catch (error) {
       toast.error('Erreur lors de la suppression');
     }
@@ -345,16 +349,23 @@ export default function Users() {
     <div className="p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Utilisateurs</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-bold">Utilisateurs</h1>
+            <Badge variant="outline" className="px-2 py-0.5 text-xs">
+              {filteredUsers.length} utilisateur{filteredUsers.length > 1 ? 's' : ''}
+            </Badge>
+          </div>
           <p className="text-muted-foreground mt-1 text-sm sm:text-base">Gérez les administrateurs et caissiers</p>
         </div>
         <Dialog open={showDialog} onOpenChange={setShowDialog}>
+          {user?.role === 'super_admin' && (
           <DialogTrigger asChild>
             <Button className="w-full sm:w-auto" onClick={openNewDialog}>
               <Plus className="w-4 h-4 mr-2" />
               Nouvel utilisateur
             </Button>
           </DialogTrigger>
+          )}
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
@@ -553,12 +564,7 @@ export default function Users() {
                 </Select>
               </div>
               
-              {/* Compteur de résultats */}
-              <div className="flex items-end">
-                <Badge variant="outline" className="h-10 px-4 flex items-center">
-                  {filteredUsers.length} utilisateur{filteredUsers.length > 1 ? 's' : ''}
-                </Badge>
-              </div>
+
             </div>
           </div>
         </CardContent>

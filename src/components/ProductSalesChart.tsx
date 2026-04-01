@@ -7,7 +7,7 @@ interface ProductSalesChartProps {
 }
 
 // Couleurs pour le graphique circulaire
-const COLORS = ['#f97316', '#22c55e', '#3b82f6', '#ef4444', '#8b5cf6', '#f59e0b', '#10b981', '#6366f1', '#f43f5e', '#84cc16'];
+const COLORS = ['#10b981', '#22c55e', '#3b82f6', '#ef4444', '#8b5cf6', '#f59e0b', '#34d399', '#6366f1', '#f43f5e', '#84cc16'];
 
 export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSalesChartProps) {
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
@@ -49,7 +49,28 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
     }
     return [value, name];
   };
-
+  // Custom tooltip pour barchart
+  const CustomBarTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload || !payload.length) return null;
+    return (
+      <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-4 py-3 text-sm min-w-[160px]">
+        <p className="font-semibold text-gray-800 mb-2 text-xs truncate">{label}</p>
+        {payload.map((p: any, i: number) => (
+          <div key={i} className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: p.color }} />
+              {p.name === 'total' ? "CA" : "Qté"}
+            </span>
+            <span className="font-bold text-xs" style={{ color: p.color }}>
+              {p.name === 'total'
+                ? `${typeof p.value === 'number' ? new Intl.NumberFormat('fr-FR').format(p.value) : p.value} F`
+                : p.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
   // Formatter personnalisé pour les labels du pie chart
   const renderCustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
     if (percent < 0.05) return null; // N'afficher le label que si > 5%
@@ -66,11 +87,30 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
         fill="white" 
         textAnchor={x > cx ? 'start' : 'end'} 
         dominantBaseline="central"
-        fontSize={12}
+        fontSize={11}
         fontWeight="bold"
       >
         {`${(percent * 100).toFixed(0)}%`}
       </text>
+    );
+  };
+
+  // Tooltip pie
+  const CustomPieTooltip = ({ active, payload }: any) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload;
+    return (
+      <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-4 py-3 text-sm min-w-[150px]">
+        <p className="font-semibold text-gray-800 mb-1.5 text-xs">{d.name}</p>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-muted-foreground">CA</span>
+          <span className="font-bold text-xs text-emerald-600">{formatNumberSafe(d.total)} F</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-muted-foreground">Qté</span>
+          <span className="font-bold text-xs text-blue-600">{d.quantity}</span>
+        </div>
+      </div>
     );
   };
 
@@ -79,34 +119,31 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
     const { payload } = props || {};
     if (!payload || !payload.length) return null;
     return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: isMobile ? 6 : 12, justifyContent: 'center', paddingTop: isMobile ? 6 : 12 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: isMobile ? 6 : 8, justifyContent: 'center', paddingTop: isMobile ? 6 : 12 }}>
         {payload.map((entry: any, idx: number) => {
           const d = entry.payload || {};
           const name = d.name || entry.value || '';
           const total = typeof d.total === 'number' ? `${new Intl.NumberFormat('fr-FR').format(d.total)} F` : 'N/A';
-          const qty = d.quantity !== undefined ? `Qté: ${d.quantity}` : '';
-          const label = `${name}${total ? ' (' + total : ''}${qty ? (total ? ', ' + qty : ' (' + qty) : ''}${total || qty ? ')' : ''}`;
+          const qty = d.quantity !== undefined ? `Qté : ${d.quantity}` : '';
+          const label = `${name}`;
           return (
             <div
               key={idx}
-              title={label}
+              title={`${name} — ${total}${qty ? ' • ' + qty : ''}`}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: isMobile ? 6 : 8,
-                maxWidth: isMobile ? 180 : 220,
-                whiteSpace: 'nowrap',
+                gap: 6,
+                padding: '5px 10px',
+                borderRadius: 999,
+                background: '#f9fafb',
+                border: `1.5px solid ${entry.color || '#ddd'}`,
+                maxWidth: isMobile ? 160 : 200,
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                padding: isMobile ? '6px 8px' : '8px 12px',
-                borderRadius: 8,
-                background: '#ffffff',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                border: '1px solid #ddd'
               }}
             >
-              <span style={{ width: isMobile ? 12 : 14, height: isMobile ? 12 : 14, background: entry.color || '#ccc', display: 'inline-block', borderRadius: 3 }} />
-              <span style={{ fontSize: isMobile ? 10 : 12, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+              <span style={{ width: 10, height: 10, background: entry.color || '#ccc', display: 'inline-block', borderRadius: '50%', flexShrink: 0 }} />
+              <span style={{ fontSize: isMobile ? 10 : 11, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
             </div>
           );
         })}
@@ -135,22 +172,8 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
             ))}
           </Pie>
-          <Tooltip 
-            formatter={formatTooltip}
-            // Affiche le nom, le montant et la quantité dans le tooltip
-            content={({ active, payload }) => {
-              if (active && payload && payload.length) {
-                const d = payload[0].payload;
-                return (
-                  <div style={{ background: '#fff', border: '1px solid #eee', padding: 8, fontSize: 12 }}>
-                    <div><b>{d.name}</b></div>
-                    <div>Chiffre d'affaires : {formatNumberSafe(d.total)} F</div>
-                    <div>Quantité : {d.quantity}</div>
-                  </div>
-                );
-              }
-              return null;
-            }}
+          <Tooltip
+            content={<CustomPieTooltip />}
           />
           <Legend content={renderCompactLegend} />
         </PieChart>
@@ -163,9 +186,11 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
   const rowHeight = isMobile ? 48 : 40; // espace vertical par élément
   const computedHeight = Math.max(baseMinHeight, data.length * rowHeight);
   const barHeight = computedHeight;
-  const leftMargin = 0;
-  const rightMargin = 0;
-  const yAxisWidth = isMobile ? 70 : isTablet ? 100 : 120;
+  const leftMargin = isMobile ? 4 : 8;
+  const rightMargin = isMobile ? 4 : 8;
+  const maxNameLength = data.reduce((max, item) => Math.max(max, String(item?.name || '').length), 0);
+  const estimatedLabelWidth = Math.round(maxNameLength * (isMobile ? 5.2 : 6.4) + 16);
+  const yAxisWidth = Math.min(isMobile ? 92 : isTablet ? 110 : 130, Math.max(isMobile ? 52 : 64, estimatedLabelWidth));
   const fontSize = isMobile ? 9 : isTablet ? 10 : 12;
 
   return (
@@ -182,10 +207,22 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
         barCategoryGap={isMobile ? '22%' : '14%'}
         barGap={8}
       >
-        <CartesianGrid strokeDasharray="3 3" />
+        <defs>
+          <linearGradient id="grad-total" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#10b981" stopOpacity={0.9} />
+            <stop offset="100%" stopColor="#34d399" stopOpacity={1} />
+          </linearGradient>
+          <linearGradient id="grad-qty" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#2563eb" stopOpacity={0.85} />
+            <stop offset="100%" stopColor="#60a5fa" stopOpacity={1} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" horizontal={false} />
         <XAxis 
           type="number" 
-          tick={{ fontSize: fontSize }}
+          tick={{ fontSize: fontSize, fill: '#9ca3af' }}
+          axisLine={false}
+          tickLine={false}
           tickFormatter={(value) => {
             const num = typeof value === 'number' ? value : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN);
             if (!Number.isFinite(num)) return String(value);
@@ -198,51 +235,40 @@ export default function ProductSalesChart({ data, chartType = 'bar' }: ProductSa
           orientation="top"
           axisLine={false}
           tickLine={false}
-          tick={{ fontSize: fontSize, fill: '#2563eb' }}
+          tick={{ fontSize: fontSize, fill: '#60a5fa' }}
           xAxisId="quantity"
           tickFormatter={(value) => `${value}`}
-          label={{ value: 'Quantité', position: 'insideTopRight', offset: 0, fill: '#2563eb', fontSize: fontSize+1 }}
+          label={{ value: 'Quantité', position: 'insideTopRight', offset: 0, fill: '#60a5fa', fontSize: fontSize + 1 }}
         />
         <YAxis 
           dataKey="name" 
           type="category" 
           width={yAxisWidth}
-          tick={{ fontSize: fontSize }}
+          tick={{ fontSize: fontSize, fill: '#6b7280' }}
+          axisLine={false}
+          tickLine={false}
           interval={0}
           tickFormatter={(value) => {
             if (isMobile && value.length > 10) {
-              return value.substring(0, 10) + '...';
+              return value.substring(0, 10) + '…';
             }
             if (isTablet && value.length > 15) {
-              return value.substring(0, 15) + '...';
+              return value.substring(0, 15) + '…';
             }
             return value;
           }}
         />
-        <Tooltip 
-          labelStyle={{ fontSize: fontSize }}
-          contentStyle={{ fontSize: fontSize }}
-          // Tooltip séparé pour chaque barre
-          formatter={(value, name) => {
-            if (name === 'total') {
-              return [`${formatNumberSafe(value)} F`, "Chiffre d\'affaires"];
-            }
-            if (name === 'quantity') {
-              return [value, 'Quantité'];
-            }
-            return [value, name];
-          }}
-        />
-        <Bar dataKey="total" fill="#f97316" radius={[0, 4, 4, 0]} name="Chiffre d'affaires" xAxisId="total" barSize={isMobile ? 12 : 22} />
-        <Bar dataKey="quantity" fill="#2563eb" radius={[0, 4, 4, 0]} name="Quantité vendue" xAxisId="quantity" barSize={isMobile ? 12 : 16} />
+        <Tooltip content={<CustomBarTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
+        <Bar dataKey="total" fill="url(#grad-total)" radius={[0, 5, 5, 0]} name="total" xAxisId="total" barSize={isMobile ? 10 : 18} />
+        <Bar dataKey="quantity" fill="url(#grad-qty)" radius={[0, 5, 5, 0]} name="quantity" xAxisId="quantity" barSize={isMobile ? 8 : 12} />
         <Legend
           verticalAlign="bottom"
           align="center"
-          iconType="rect"
-          wrapperStyle={{ fontSize: fontSize, marginTop: 8 }}
+          iconType="circle"
+          wrapperStyle={{ fontSize: fontSize, marginTop: 10, paddingTop: 8 }}
           payload={[
-            { value: "Chiffre d'affaires", type: 'rect', color: '#f97316' },
-            { value: 'Quantité vendue', type: 'rect', color: '#2563eb' }
+            { value: "Chiffre d'affaires", type: 'circle', color: '#10b981' },
+            { value: 'Quantité vendue', type: 'circle', color: '#2563eb' }
           ]}
         />
       </BarChart>

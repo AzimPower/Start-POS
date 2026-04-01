@@ -77,8 +77,9 @@ export default defineConfig(({ mode }) => ({
           {
             urlPattern: ({ url, request }) => {
               const isEmailAPI = url.href.includes('send-email.php');
+              const isBackendApi = url.pathname.includes('/backend/api/');
               const hasBypass = url.searchParams.has('_bypass_sw');
-              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com' && !isEmailAPI && !hasBypass;
+              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com' && !isEmailAPI && !isBackendApi && !hasBypass;
             },
             handler: 'NetworkFirst',
             options: {

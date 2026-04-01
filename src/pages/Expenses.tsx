@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
+import { getEmailSettings } from '@/lib/emailSettingsCache';
 import { useNetwork } from '@/hooks/useNetwork';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -216,8 +217,11 @@ export default function Expenses() {
           // Demander une limite très élevée pour avoir toutes les dépenses
           params.push('limit=9999');
           params.push('offset=0');
+          // Bypass explicite du service worker/cache HTTP pour éviter les données obsolètes
+          params.push('_bypass_sw=1');
+          params.push(`_ts=${Date.now()}`);
           if (params.length) expensesAdvancedUrl += '?' + params.join('&');
-          const expensesResponse = await fetch(expensesAdvancedUrl);
+          const expensesResponse = await fetch(expensesAdvancedUrl, { cache: 'no-store' });
           if (expensesResponse.ok) {
             const backendResult = await expensesResponse.json();
             const backendExpenses = backendResult.data || backendResult || []; // Gérer différents formats de réponse
@@ -231,12 +235,41 @@ export default function Expenses() {
             const syncQueue = await db.getAll('syncQueue');
             const pendingDeletes = new Set(
               syncQueue
-                .filter((op: any) => op.table === 'expensesAdvanced' && op.operation === 'DELETE')
+                .filter((op: any) => {
+                  if (op.table !== 'expensesAdvanced') return false;
+                  const verb = String(op.operation || op.method || '').toUpperCase();
+                  return verb === 'DELETE';
+                })
                 .map((op: any) => op.data?.id)
                 .filter(Boolean)
             );
+            const pendingIds = new Set(
+              syncQueue
+                .filter((op: any) => op.table === 'expensesAdvanced')
+                .map((op: any) => op?.data?.id)
+                .filter(Boolean)
+                .map((id: any) => String(id))
+            );
+            const backendIds = new Set(
+              (backendExpenses || [])
+                .map((e: any) => e?.id)
+                .filter(Boolean)
+                .map((id: any) => String(id))
+            );
             
             const tx = db.transaction('expensesAdvanced', 'readwrite');
+
+            // Supprimer localement ce qui n'existe plus au backend,
+            // sauf si une opération locale est en attente pour cet id.
+            const localExpenses = await tx.store.getAll();
+            for (const localExpense of localExpenses as any[]) {
+              const localId = String(localExpense?.id || '');
+              const belongsToCurrentStore = !user?.storeId || String(localExpense?.storeId) === String(user.storeId);
+              if (!localId || !belongsToCurrentStore) continue;
+              if (!backendIds.has(localId) && !pendingIds.has(localId)) {
+                await tx.store.delete(localId);
+              }
+            }
             
             for (const backendExpense of backendExpenses) {
               // ❌ Ne pas remettre les dépenses supprimées localement en attente de sync
@@ -635,29 +668,29 @@ export default function Expenses() {
           },
         };
         if (isStockProduct && user?.storeId) {
-          // Ne jamais modifier le stock local directement : passer par performSyncOp
-          const productDataForBackend = {
+          // Mettre à jour le stock local immédiatement (même logique que le chemin edit)
+          const newStock = (selectedProduct.stock[user.storeId] || 0) + qty;
+          const updatedProduct = {
             ...selectedProduct,
-            stock: (selectedProduct.stock[user.storeId] || 0) + qty,
-            trackStock: true
+            stock: {
+              ...selectedProduct.stock,
+              [user.storeId]: newStock,
+            },
+            updatedAt: Date.now(),
+          };
+          await db.put('products', updatedProduct);
+
+          // Envoyer au backend (stock = nombre plat attendu par l'API)
+          const productDataForBackend = {
+            ...updatedProduct,
+            stock: newStock,
+            trackStock: true,
           };
           await performSyncOp({
             url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
             method: 'PUT',
             data: productDataForBackend,
           });
-          // Recharger le produit depuis le backend après modification
-          try {
-            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
-            if (response.ok) {
-              const freshProduct = await response.json();
-              if (freshProduct && freshProduct.id) {
-                await db.put('products', freshProduct);
-              }
-            }
-          } catch (error) {
-            console.warn('Impossible de recharger le produit après modification:', error);
-          }
         }
       } else {
         expense = {
@@ -797,10 +830,10 @@ export default function Expenses() {
             console.log('🔍 [DEBUG] Début envoi email dépense', { isEdit, expenseId: finalExpense.id });
             const dbInstance = await getDB();
             
-            // Vérifier les paramètres d'email pour les dépenses
-            const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
+            // Vérifier les paramètres d'email pour les dépenses (lit depuis le backend = source de vérité)
+            const emailSettings = await getEmailSettings(user?.storeId || '');
             console.log('🔍 [DEBUG] Email settings:', emailSettings);
-            const shouldSendEmail = emailSettings?.expenses !== false; // Par défaut true si pas de config
+            const shouldSendEmail = emailSettings.expenses;
             
             if (!shouldSendEmail) {
               console.log('📧 Email désactivé pour les dépenses');
@@ -1691,7 +1724,7 @@ export default function Expenses() {
           ) : (
             <div>
               <div className="mb-4 text-sm text-muted-foreground">
-                Affichage: {displayedExpenses.length} / {getFilteredExpenses.length} • Encore ? {hasMore ? 'Oui' : 'Non'}
+                Affichage: {displayedExpenses.length}
               </div>
               <div 
                 ref={listScrollRef}

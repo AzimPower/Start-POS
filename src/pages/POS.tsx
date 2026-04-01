@@ -242,9 +242,9 @@ export default function POS() {
     }
   }, [showPayment]);
 
-  // 🔄 Vérifier périodiquement si un shift a été ouvert/fermé sur un autre appareil
+  // 🔄 Vérifier périodiquement si un shift a été ouvert/fermé (local DB, toujours actif)
   useEffect(() => {
-    if (!user || !isBackendReachable) return;
+    if (!user) return;
     
     const checkActiveShift = async () => {
       try {
@@ -262,23 +262,36 @@ export default function POS() {
       }
     };
     
-    // Vérifier toutes les 30 secondes
-    const interval = setInterval(checkActiveShift, 30000);
+    // Vérifier toutes les 3 secondes (réduit de 10s pour détecter la fermeture rapidement)
+    const interval = setInterval(checkActiveShift, 3000);
+
+    // Écouter l'événement de fermeture de shift depuis les autres onglets
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'shift_closed_event') {
+        console.log('🔔 [POS] Fermeture de shift détectée via localStorage, mise à jour immédiate');
+        checkActiveShift();
+      }
+    };
+    window.addEventListener('storage', handleStorageEvent);
     
-    return () => clearInterval(interval);
-  }, [user, isBackendReachable, activeShift?.id]);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [user, activeShift?.id]);
 
   // 👁️ Recharger le shift quand la page devient visible (retour depuis Shifts ou autre page)
   useEffect(() => {
     if (!user) return;
     
     const handleVisibilityChange = async () => {
-      if (document.visibilityState === 'visible' && isBackendReachable) {
+      if (document.visibilityState === 'visible') {
         console.log('👁️ [POS] Page visible - rechargement du shift actif');
         try {
           const db = await getDB();
           const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
           const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+          // Toujours mettre à jour l'état (shift fermé ou ouvert)
           if (userShift?.id !== activeShift?.id) {
             console.log(`🔄 [POS] Nouveau shift actif détecté:`, userShift?.id || 'aucun');
             setActiveShift(userShift || null);
@@ -291,7 +304,7 @@ export default function POS() {
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [user, isBackendReachable, activeShift?.id]);
+  }, [user, activeShift?.id]);
 
     const loadDraftSales = async () => {
       const db = await getDB();

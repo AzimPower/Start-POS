@@ -794,21 +794,31 @@ export default function Products() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Produits</h1>
-          <p className="text-muted-foreground mt-1 text-sm sm:text-base">Gérez votre inventaire</p>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Produits</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Gérez votre inventaire</p>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+        <div className="flex flex-row flex-wrap gap-2 w-full sm:w-auto">
           {canManageStockAdjustments && (
-            <Button className="w-full sm:w-auto" onClick={() => setAdjustDialogOpen(true)}>
-              <Package className="w-4 h-4 mr-2" />
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 sm:flex-none h-9 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:border-blue-300 hover:text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
+              onClick={() => setAdjustDialogOpen(true)}
+            >
+              <Package className="w-4 h-4 mr-1.5" />
               Ajustement
             </Button>
           )}
           {(user.role === 'admin' || user.role === 'super_admin') && (
-            <Button className="w-full sm:w-auto bg-orange-500 hover:bg-orange-600 text-white" onClick={() => navigate('/stock-adjustments')}>
-              <History className="w-4 h-4 mr-2" />
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 sm:flex-none h-9 border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 hover:border-orange-300 hover:text-orange-800 dark:border-orange-800 dark:bg-orange-950/50 dark:text-orange-300"
+              onClick={() => navigate('/stock-adjustments')}
+            >
+              <History className="w-4 h-4 mr-1.5" />
               Historique
             </Button>
           )}
@@ -818,8 +828,11 @@ export default function Products() {
             setCurrentStep(0);
           }}>
             <DialogTrigger asChild>
-              <Button className="w-full sm:w-auto">
-                <Plus className="w-4 h-4 mr-2" />
+              <Button
+                size="sm"
+                className="flex-1 sm:flex-none h-9 bg-primary hover:bg-primary/90 shadow-sm"
+              >
+                <Plus className="w-4 h-4 mr-1.5" />
                 Nouveau produit
               </Button>
             </DialogTrigger>
@@ -1251,17 +1264,19 @@ export default function Products() {
       </div>
 
       <div className="space-y-4">
-        <Card>
+        <Card className="border-muted/60">
           <CardContent className="p-4">
             <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-              <div className="flex-1 w-full space-y-2">
-                <Label>Rechercher les produits</Label>
-                <Input 
-                  placeholder="Nom, SKU, catégorie, prix..." 
-                  value={productsSearch} 
-                  onChange={e => setProductsSearch(e.target.value)}
-                  className="w-full"
-                />
+              <div className="flex-1 w-full space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rechercher les produits</Label>
+                <div className="relative">
+                  <Input 
+                    placeholder="Nom, SKU, catégorie, prix..." 
+                    value={productsSearch} 
+                    onChange={e => setProductsSearch(e.target.value)}
+                    className="w-full pl-3 h-10"
+                  />
+                </div>
               </div>
             </div>
           </CardContent>
@@ -1270,12 +1285,19 @@ export default function Products() {
         {/* Manager/Admin: trigger dialog for adjustments */}
         {canManageStockAdjustments && (
           <Dialog open={adjustDialogOpen} onOpenChange={(open) => setAdjustDialogOpen(open)}>
-            <DialogContent>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Ajustements de stock (résumé unique)</CardTitle>
-                </CardHeader>
-                <CardContent>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader className="pb-2 border-b">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/50">
+                    <Package className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div>
+                    <DialogTitle className="text-lg">Ajustement de stock</DialogTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">Corrigez les écarts entre l'inventaire physique et l'application</p>
+                  </div>
+                </div>
+              </DialogHeader>
+              <div className="pt-2">
                   <form onSubmit={submitAdjust} className="space-y-4">
                     <div className="space-y-2">
                       <Label>Motif global (optionnel)</Label>
@@ -1286,7 +1308,7 @@ export default function Products() {
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border rounded-lg p-3">
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border border-dashed rounded-lg p-3 bg-muted/30">
                       <div className="md:col-span-5 space-y-1">
                         <Label>Produit</Label>
                         <Select value={draftProductId} onValueChange={setDraftProductId}>
@@ -1350,7 +1372,11 @@ export default function Products() {
                                   {(() => {
                                     const n = parseInt(line.delta || '0', 10);
                                     const sign = n > 0 ? '+' : '';
-                                    return (<span>{sign}{n}</span>);
+                                    return (
+                                      <span className={`font-semibold ${ n > 0 ? 'text-green-600' : 'text-red-500' }`}>
+                                        {sign}{n}
+                                      </span>
+                                    );
                                   })()}
                                 </TableCell>
                                 <TableCell>{line.reason || '-'}</TableCell>
@@ -1372,9 +1398,10 @@ export default function Products() {
                       </div>
                     )}
 
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="submit" disabled={adjustSubmitting || trackedProducts.length === 0}>
-                        {adjustSubmitting ? 'Envoi...' : 'Envoyer tous les ajustements'}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button type="submit" disabled={adjustSubmitting || trackedProducts.length === 0} className="gap-2">
+                        <Package className="w-4 h-4" />
+                        {adjustSubmitting ? 'Envoi en cours...' : 'Envoyer les ajustements'}
                       </Button>
                     </div>
 
@@ -1382,24 +1409,119 @@ export default function Products() {
                       <p className="text-sm text-muted-foreground">Aucun produit avec suivi de stock disponible pour ajustement.</p>
                     )}
                   </form>
-                </CardContent>
-              </Card>
+              </div>
             </DialogContent>
           </Dialog>
         )}
 
-        <Card>
+        {/* ── MOBILE : liste de cartes ── */}
+        <div className="sm:hidden space-y-2">
+          {isLoading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="animate-pulse flex items-center gap-3 bg-card border rounded-xl p-3">
+                <div className="w-12 h-12 bg-muted rounded-lg flex-shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-muted rounded w-28" />
+                  <div className="h-3 bg-muted rounded w-20" />
+                  <div className="h-3 bg-muted rounded w-16" />
+                </div>
+              </div>
+            ))
+          ) : getFilteredProducts().length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Package className="w-12 h-12 mx-auto mb-2 opacity-40" />
+              {productsSearch ? (
+                <p className="text-sm">Aucun résultat pour « {productsSearch} »</p>
+              ) : (
+                <p className="text-sm">Aucun produit</p>
+              )}
+            </div>
+          ) : (
+            getFilteredProducts().map((product) => {
+              const stockQty = product.stock?.[user.storeId] ?? 0;
+              const hasStock = product.stock && Object.keys(product.stock).length > 0;
+              const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
+              const catName = getCategoryName(product.categoryId || '');
+              return (
+                <div key={product.id} className="flex items-center gap-3 bg-card border rounded-xl p-3 shadow-sm">
+                  {/* Image */}
+                  <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-muted flex items-center justify-center">
+                    {product.imageUrl ? (
+                      <img
+                        src={normalizeImageUrl(product.imageUrl)}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Package className="w-5 h-5 text-muted-foreground/50" />
+                    )}
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-1">
+                      <span className="font-semibold text-sm leading-tight truncate">{product.name}</span>
+                      {/* Actions */}
+                      {user.role !== 'manager' ? (
+                        <div className="flex gap-0.5 flex-shrink-0 ml-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEdit(product)}>
+                            <Edit className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(product.id)}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                      <span className="text-[11px] text-muted-foreground font-mono">{product.sku}</span>
+                      {catName && (
+                        <span className="text-[11px] text-primary font-medium">{catName}</span>
+                      )}
+                      {product.salePrice ? (
+                        <span className="text-[11px] font-semibold">{product.salePrice} FCFA</span>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground italic">Prix variable</span>
+                      )}
+                    </div>
+                    <div className="mt-1">
+                      {hasStock ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-xs font-semibold ${stockQty <= 0 ? 'text-red-500' : 'text-foreground'}`}>
+                            {stockQty} {product.unit}
+                          </span>
+                          {isLow && (
+                            <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                              ⚠ stock bas
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                          Non suivi
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* ── DESKTOP : tableau ── */}
+        <Card className="hidden sm:block">
           <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Produit</TableHead>
-                  <TableHead className="hidden sm:table-cell">SKU</TableHead>
-                  <TableHead className="hidden md:table-cell">Catégorie</TableHead>
-                  <TableHead className="hidden lg:table-cell">Prix</TableHead>
-                  <TableHead>Stock</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
+                <TableRow className="bg-muted/40">
+                  <TableHead className="font-semibold text-foreground">Produit</TableHead>
+                  <TableHead className="font-semibold text-foreground">SKU</TableHead>
+                  <TableHead className="hidden md:table-cell font-semibold text-foreground">Catégorie</TableHead>
+                  <TableHead className="hidden lg:table-cell font-semibold text-foreground">Prix</TableHead>
+                  <TableHead className="font-semibold text-foreground">Stock</TableHead>
+                  <TableHead className="w-[100px] font-semibold text-foreground">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1428,66 +1550,79 @@ export default function Products() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  getFilteredProducts().map((product) => (
-                    <TableRow key={product.id}>
-                      {/* ...existing code for product row... */}
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          {product.imageUrl && (
-                            <div className="w-10 h-10 rounded-md overflow-hidden flex-shrink-0">
-                              <img 
-                                src={normalizeImageUrl(product.imageUrl)} 
-                                alt={product.name} 
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium truncate">{product.name}</div>
-                            {isMobile && (
-                              <div className="text-sm text-muted-foreground mt-1 space-y-1">
-                                <div className="text-xs">SKU: {product.sku}</div>
-                                {product.categoryId && (
-                                  <div className="text-xs">{getCategoryName(product.categoryId)}</div>
-                                )}
-                                {product.salePrice && (
-                                  <div className="text-xs font-medium">{product.salePrice} FCFA</div>
-                                )}
+                  getFilteredProducts().map((product) => {
+                    const stockQty = product.stock?.[user.storeId] ?? 0;
+                    const hasStock = product.stock && Object.keys(product.stock).length > 0;
+                    const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
+                    return (
+                      <TableRow key={product.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            {product.imageUrl ? (
+                              <div className="w-9 h-9 rounded-md overflow-hidden flex-shrink-0 bg-muted">
+                                <img
+                                  src={normalizeImageUrl(product.imageUrl)}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div className="w-9 h-9 rounded-md flex-shrink-0 bg-muted flex items-center justify-center">
+                                <Package className="w-4 h-4 text-muted-foreground/50" />
                               </div>
                             )}
+                            <span className="text-sm font-medium truncate max-w-[160px]">{product.name}</span>
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">{product.sku}</TableCell>
-                      <TableCell className="hidden md:table-cell">{getCategoryName(product.categoryId || '') || 'Aucune'}</TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        {product.salePrice ? `${product.salePrice} FCFA` : 'Définir lors de la vente'}
-                      </TableCell>
-                      <TableCell>
-                        {product.stock && Object.keys(product.stock).length > 0
-                          ? `${product.stock[user.storeId] || 0} ${product.unit}`
-                          : <span className="text-muted-foreground text-xs">Non suivi</span>
-                        }
-                        {product.stock && product.minStock && product.stock[user.storeId] <= product.minStock && Object.keys(product.stock).length > 0 && (
-                          <span className="ml-2 text-red-500 text-xs">⚠️</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {user.role !== 'manager' ? (
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => handleEdit(product)} title="Modifier">
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleDelete(product.id)} title="Supprimer">
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">Via ajustement</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground font-mono">{product.sku}</TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          {product.categoryId ? (
+                            <span className="text-xs text-primary font-medium">{getCategoryName(product.categoryId)}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell text-sm">
+                          {product.salePrice ? `${product.salePrice} FCFA` : (
+                            <span className="text-muted-foreground text-xs italic">Variable</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {hasStock ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className={`font-semibold text-sm ${stockQty <= 0 ? 'text-red-500' : ''}`}>
+                                {stockQty}
+                              </span>
+                              <span className="text-muted-foreground text-xs">{product.unit}</span>
+                              {isLow && (
+                                <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                                  ⚠ bas
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                              Non suivi
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {user.role !== 'manager' ? (
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => handleEdit(product)} title="Modifier">
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleDelete(product.id)} title="Supprimer">
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">Via ajustement</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

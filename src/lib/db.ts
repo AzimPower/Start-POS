@@ -97,6 +97,7 @@ interface POSDB extends DBSchema {
       id: string;
       name: string;
       address: string;
+      trackIndirectExpenses?: boolean;
       active?: boolean;
       createdAt: number;
       subscriptionStart?: number;

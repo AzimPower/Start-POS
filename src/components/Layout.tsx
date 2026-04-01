@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
+import { getDB } from '@/lib/db';
 
 import {
   LayoutDashboard,
@@ -21,6 +22,7 @@ import {
   AlertTriangle,
   Wifi,
   ChevronDown,
+  CreditCard,
 } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
@@ -32,6 +34,22 @@ export default function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth();
   const network = useNetwork();
   const [isFullSyncing, setIsFullSyncing] = useState(false);
+  const [storeCount, setStoreCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (!user) return;
+    getDB().then(db => db.getAll('stores')).then(stores => {
+      if (user.role === 'super_admin') {
+        setStoreCount(stores.filter(s => s.active !== false).length);
+      } else {
+        // Pour un admin, ne compter que les magasins auxquels il est lié
+        const userStoreIds: string[] = (user as any).storeIds?.length > 0
+          ? (user as any).storeIds
+          : (user.storeId ? [user.storeId] : []);
+        setStoreCount(stores.filter(s => s.active !== false && userStoreIds.includes(s.id)).length);
+      }
+    }).catch(() => {});
+  }, [user]);
 
   // Handler pour synchronisation complète (queue + refresh)
   const handleFullSync = async () => {
@@ -82,11 +100,17 @@ export default function Layout({ children }: LayoutProps) {
     { icon: Package, label: 'Produits', path: '/products', roles: ['admin', 'manager'], group: 'gestion' },
     { icon: UserCircle, label: 'Utilisateurs', path: '/users', roles: ['admin', 'super_admin'], group: 'admin' },
     { icon: Store, label: 'Magasins', path: '/stores', roles: ['admin', 'super_admin'], group: 'admin' },
+    { icon: CreditCard, label: 'Encaissements', path: '/subscription-payments', roles: ['super_admin'], group: 'admin' },
     
     { icon: Menu, label: 'Paramètres', path: '/settings', roles: ['admin', 'cashier', 'manager'], group: 'admin' },
   ];
 
-  const filteredMenu = menuItems.filter(item => item.roles.includes(user?.role || ''));
+  const filteredMenu = menuItems.filter(item => {
+    if (!item.roles.includes(user?.role || '')) return false;
+    // Masquer "Magasins" pour les non-super_admin s'il y a moins de 2 magasins
+    if (item.path === '/stores' && user?.role !== 'super_admin' && storeCount < 2) return false;
+    return true;
+  });
   const groupOrder = ['principal', 'vente', 'gestion', 'admin'] as const;
   const groupLabels: Record<(typeof groupOrder)[number], string> = {
     principal: 'Essentiel',
@@ -232,47 +256,71 @@ export default function Layout({ children }: LayoutProps) {
       {/* Main Content */}
   <div className="flex-1 flex flex-col lg:ml-64 min-h-screen max-h-screen overflow-y-auto">
         {/* Mobile Header */}
-  <header className="lg:hidden border-b border-border bg-card px-3 py-2 flex items-center justify-between gap-2 sticky top-0 z-30">
-          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <SheetTrigger asChild>
-              <Button variant="ghost" className="flex items-center gap-2 px-3 py-2" style={{ minWidth: 48, minHeight: 48 }}>
-                <Menu className="w-7 h-7" />
-                <span className="font-semibold text-base">Menu</span>
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left" className="w-64 p-0 bg-sidebar" style={{ height: '100vh', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overflowY: 'auto' }}>
-              <NavContent />
-            </SheetContent>
-          </Sheet>
-          
+        <header className="lg:hidden sticky top-0 z-30 bg-gradient-to-r from-blue-700 to-blue-500 shadow-lg">
+          <div className="flex items-center justify-between px-3 py-2.5">
+            {/* Left: Menu button */}
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="flex items-center gap-2 px-2 py-2 text-white hover:bg-white/15 hover:text-white rounded-xl"
+                  style={{ minWidth: 44, minHeight: 44 }}
+                >
+                  <Menu className="w-6 h-6 text-white" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-64 p-0 bg-sidebar" style={{ height: '100vh', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overflowY: 'auto' }}>
+                <NavContent />
+              </SheetContent>
+            </Sheet>
 
-          
-          {/* Statut réseau pour mobile */}
-          <div className="flex lg:hidden items-center gap-2">
-            
-            <span
-              className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${network.isBackendReachable ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
-              title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
-              aria-live="polite"
-            >
-              <Wifi className={`w-4 h-4 mr-1 ${network.isBackendReachable ? 'text-green-700' : 'text-red-700'}`} />
-              {network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleFullSync}
-              disabled={!network.isBackendReachable || network.isSyncing || isFullSyncing}
-              title={network.isSyncing || isFullSyncing ? 'Synchronisation...' : 'Synchroniser'}
-              aria-label="Synchroniser"
-              className="ml-2"
-            >
-              <svg className={`w-4 h-4 mr-1 animate-spin ${isFullSyncing ? '' : 'hidden'}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.2"/><path d="M22 12a10 10 0 01-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/></svg>
-              {isFullSyncing ? 'Synchronisation...' : (network.isSyncing ? 'Sync...' : 'Synchroniser')}
-            </Button>
-            {network.pendingCount > 0 && (
-              <span className="inline-flex items-center justify-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800 font-semibold">{network.pendingCount}</span>
-            )}
+            {/* Center: App title */}
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
+                <ShoppingCart className="w-4 h-4 text-white" />
+              </div>
+              <span className="font-bold text-white text-base tracking-wide">Système POS</span>
+            </div>
+
+            {/* Right: Network status + sync */}
+            <div className="flex items-center gap-2">
+              {/* Badge réseau */}
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold ${
+                  network.isBackendReachable
+                    ? 'bg-green-500 text-white shadow-sm'
+                    : 'bg-red-500 text-white shadow-sm'
+                }`}
+                title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'}
+                aria-live="polite"
+              >
+                <Wifi className="w-4 h-4" />
+                <span>{network.isBackendReachable ? 'OK' : 'Offline'}</span>
+              </span>
+
+              {/* Bouton sync */}
+              <button
+                onClick={handleFullSync}
+                disabled={!network.isBackendReachable || network.isSyncing || isFullSyncing}
+                title={network.isSyncing || isFullSyncing ? 'Synchronisation...' : 'Synchroniser'}
+                aria-label="Synchroniser"
+                className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white/25 hover:bg-white/40 disabled:opacity-30 transition-colors border border-white/30"
+              >
+                <svg
+                  className={`w-5 h-5 text-white ${isFullSyncing || network.isSyncing ? 'animate-spin' : ''}`}
+                  viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+
+              {/* Badge opérations en attente */}
+              {network.pendingCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-yellow-400 text-yellow-900 shadow">
+                  {network.pendingCount}
+                </span>
+              )}
+            </div>
           </div>
         </header>
 

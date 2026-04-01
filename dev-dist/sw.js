@@ -82,7 +82,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "3ca0b8505b4bec776b69afdba2768812"
   }, {
     "url": "index.html",
-    "revision": "0.l94t0lfk4m8"
+    "revision": "0.qo0fjt88tj"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
@@ -103,8 +103,9 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     request
   }) => {
     const isEmailAPI = url.href.includes("send-email.php");
+    const isBackendApi = url.pathname.includes("/backend/api/");
     const hasBypass = url.searchParams.has("_bypass_sw");
-    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !hasBypass;
+    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !isBackendApi && !hasBypass;
   }, new workbox.NetworkFirst({
     "cacheName": "external-api-cache",
     "networkTimeoutSeconds": 15,

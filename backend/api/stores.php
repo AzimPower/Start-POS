@@ -44,6 +44,8 @@ try {
             // Pour chaque magasin, calculer le solde et les overrides manuels
             foreach ($stores as &$store) {
                 try {
+                    // Preference boutique pour StockSignals (par defaut: activee)
+                    $store['trackIndirectExpenses'] = true;
                     // Solde calculé (comme avant)
                     $ovStmt = $pdo->prepare('SELECT * FROM store_balance_overrides WHERE storeId = ? ORDER BY appliedAt DESC, createdAt DESC LIMIT 1');
                     $ovStmt->execute([$store['id']]);
@@ -65,6 +67,9 @@ try {
                         $benefCats = isset($settings['beneficeCategories']) && $settings['beneficeCategories'] ? json_decode($settings['beneficeCategories'], true) : [];
                         if (!is_array($fondCats)) $fondCats = [];
                         if (!is_array($benefCats)) $benefCats = [];
+                        if (isset($settings['trackIndirectExpenses'])) {
+                            $store['trackIndirectExpenses'] = ((int)$settings['trackIndirectExpenses'] === 1);
+                        }
                         // expose configured categories to the API consumer
                         $store['fondCategories'] = $fondCats;
                         $store['beneficeCategories'] = $benefCats;
@@ -452,6 +457,7 @@ try {
                     $storeId = $data['storeId'];
                     $fondCats = isset($data['fondCategories']) && is_array($data['fondCategories']) ? json_encode($data['fondCategories']) : null;
                     $benCats = isset($data['beneficeCategories']) && is_array($data['beneficeCategories']) ? json_encode($data['beneficeCategories']) : null;
+                    $trackIndirectExpenses = isset($data['trackIndirectExpenses']) ? ((int)!!$data['trackIndirectExpenses']) : null;
                     try {
                         // upsert logic: if exists update else insert
                         $check = $pdo->prepare('SELECT COUNT(*) FROM store_balance_settings WHERE storeId = ?');
@@ -459,12 +465,45 @@ try {
                         $cnt = (int)$check->fetchColumn();
                         if ($cnt === 0) {
                             $id = $data['id'] ?? uniqid();
-                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)');
-                            $ins->execute([$id, $storeId, $fondCats, $benCats, (int)(microtime(true)*1000), (int)(microtime(true)*1000)]);
+                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
+                            $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, (int)(microtime(true)*1000), (int)(microtime(true)*1000)]);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
-                            $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, updatedAt = ? WHERE storeId = ?');
-                            $upd->execute([$fondCats, $benCats, (int)(microtime(true)*1000), $storeId]);
+                            if ($trackIndirectExpenses === null) {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, (int)(microtime(true)*1000), $storeId]);
+                            } else {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, (int)(microtime(true)*1000), $storeId]);
+                            }
+                            echo json_encode(['success' => true]);
+                        }
+                    } catch (PDOException $ex) {
+                        http_response_code(500);
+                        echo json_encode(['success' => false, 'error' => $ex->getMessage()]);
+                    }
+                    exit;
+                } else if ($data['action'] === 'set_stock_signals_preferences') {
+                    if (!isset($data['storeId']) || !isset($data['trackIndirectExpenses'])) {
+                        http_response_code(400);
+                        echo json_encode(['success' => false, 'error' => 'storeId et trackIndirectExpenses requis']);
+                        exit;
+                    }
+                    $storeId = $data['storeId'];
+                    $trackIndirectExpenses = ((int)!!$data['trackIndirectExpenses']);
+                    try {
+                        $check = $pdo->prepare('SELECT id FROM store_balance_settings WHERE storeId = ? LIMIT 1');
+                        $check->execute([$storeId]);
+                        $existing = $check->fetch();
+                        $now = (int)(microtime(true)*1000);
+                        if (!$existing) {
+                            $id = $data['id'] ?? uniqid();
+                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
+                            $ins->execute([$id, $storeId, null, null, $trackIndirectExpenses, $now, $now]);
+                            echo json_encode(['success' => true, 'id' => $id]);
+                        } else {
+                            $upd = $pdo->prepare('UPDATE store_balance_settings SET trackIndirectExpenses = ?, updatedAt = ? WHERE storeId = ?');
+                            $upd->execute([$trackIndirectExpenses, $now, $storeId]);
                             echo json_encode(['success' => true]);
                         }
                     } catch (PDOException $ex) {

@@ -26,8 +26,7 @@ import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import Categories from "./pages/Categories";
 import Expenses from "./pages/Expenses";
-import StockSignals from "./pages/StockSignals";import StockAdjustmentHistory from './pages/StockAdjustmentHistory';import useAndroidBackButton from './hooks/useAndroidBackButton';
-
+import StockSignals from "./pages/StockSignals";import StockAdjustmentHistory from './pages/StockAdjustmentHistory';import useAndroidBackButton from './hooks/useAndroidBackButton';import SubscriptionPayments from './pages/SubscriptionPayments';
 const queryClient = new QueryClient();
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -344,6 +343,16 @@ function InnerApp() {
                   <AdminRoute>
                     <StockAdjustmentHistory />
                   </AdminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/subscription-payments"
+              element={
+                <ProtectedRoute>
+                  <SuperAdminRoute>
+                    <SubscriptionPayments />
+                  </SuperAdminRoute>
                 </ProtectedRoute>
               }
             />

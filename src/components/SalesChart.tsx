@@ -1,4 +1,4 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Defs, LinearGradient, Stop, Area, AreaChart } from 'recharts';
 
 interface SalesChartProps {
   data: any[];
@@ -8,51 +8,106 @@ interface SalesChartProps {
   chartType?: 'line' | 'bar';
 }
 
+const CustomTooltip = ({ active, payload, label, color }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const value = payload[0]?.value;
+  const formatted = typeof value === 'number'
+    ? new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(value)
+    : value;
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-4 py-2.5 text-sm">
+      <p className="text-muted-foreground text-xs mb-1">{label}</p>
+      <p className="font-bold" style={{ color }}>{formatted} <span className="font-normal text-muted-foreground">F</span></p>
+    </div>
+  );
+};
+
 export default function SalesChart({ data, xKey, yKey, color = '#4ade80', chartType = 'line' }: SalesChartProps) {
+  const gradientId = `grad-${yKey}`;
   return (
     <ResponsiveContainer width="100%" height={300}>
       {chartType === 'bar' ? (
-        <BarChart data={data} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          <Bar dataKey={yKey} fill={color} radius={[4, 4, 0, 0]} />
+        <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={1} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.55} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+          <XAxis
+            dataKey={xKey}
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => {
+              const n = Number(v);
+              if (!Number.isFinite(n)) return String(v);
+              return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
+            }}
+            width={40}
+          />
+          <Tooltip content={(props: any) => <CustomTooltip {...props} color={color} />} cursor={{ fill: `${color}18` }} />
+          <Bar dataKey={yKey} fill={`url(#${gradientId})`} radius={[6, 6, 0, 0]} />
         </BarChart>
       ) : (
-        <LineChart data={data} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          {/* Use linear type and a custom dot to make all points clearly visible; disable animation for stability */}
-          <Line
-            type="linear"
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+          <XAxis
+            dataKey={xKey}
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => {
+              const n = Number(v);
+              if (!Number.isFinite(n)) return String(v);
+              return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
+            }}
+            width={40}
+          />
+          <Tooltip content={(props: any) => <CustomTooltip {...props} color={color} />} />
+          <Area
+            type="monotone"
             dataKey={yKey}
             stroke={color}
-            strokeWidth={2}
+            strokeWidth={2.5}
+            fill={`url(#${gradientId})`}
             isAnimationActive={false}
             connectNulls={true}
             dot={(props) => {
-              // props.index is provided by Recharts when mapping dots; use it as a stable key.
               const key = (props as any).index ?? `${props.cx}-${props.cy}`;
-              // Guard: if coordinates are null/undefined, don't render the circle
               if (props.cx == null || props.cy == null) return null;
               return (
                 <circle
                   key={key}
                   cx={props.cx}
                   cy={props.cy}
-                  r={3}
+                  r={3.5}
                   fill={color}
                   stroke="#ffffff"
-                  strokeWidth={1}
+                  strokeWidth={2}
                   style={{ pointerEvents: 'none' }}
                 />
               );
             }}
           />
-        </LineChart>
+        </AreaChart>
       )}
     </ResponsiveContainer>
   );

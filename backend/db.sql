@@ -342,6 +342,7 @@ CREATE TABLE `store_balance_settings` (
   `storeId` varchar(255) NOT NULL,
   `fondCategories` text DEFAULT NULL,
   `beneficeCategories` text DEFAULT NULL,
+  `trackIndirectExpenses` tinyint(1) DEFAULT 1,
   `fondManualValue` double DEFAULT NULL,
   `fondManualAppliedAt` bigint(20) DEFAULT NULL,
   `beneficeManualValue` double DEFAULT NULL,

@@ -47,6 +47,7 @@ import { Switch } from '@/components/ui/switch';
 import { Sun, Printer, ImageIcon, Trash, Check, ZapOff, RefreshCw, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
+import { invalidateEmailSettingsCache } from '@/lib/emailSettingsCache';
 import { versionManager } from '@/lib/versionManager';
 import { checkForUpdates, forceUpdateApp } from '@/registerServiceWorker';
 
@@ -94,8 +95,32 @@ export default function Settings() {
   const loadEmailSettings = async () => {
     try {
       const db = await getDB();
-      const settings = await db.get('emailSettings', user?.storeId);
+
+      // Charger depuis le backend en priorité (source de vérité partagée entre appareils)
+      let remoteSettings: any = null;
+      try {
+        const res = await fetch(
+          `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php?storeId=${encodeURIComponent(user?.storeId || '')}`
+        );
+        if (res.ok) {
+          remoteSettings = await res.json();
+        }
+      } catch (e) {
+        console.warn('Impossible de récupérer les paramètres email depuis le backend, fallback local:', e);
+      }
+
+      const settings = remoteSettings || await db.get('emailSettings', user?.storeId);
+
       if (settings) {
+        // Mettre à jour le cache local avec les données du backend
+        if (remoteSettings) {
+          await db.put('emailSettings', {
+            id: user?.storeId,
+            storeId: user?.storeId,
+            ...remoteSettings,
+            updatedAt: Date.now()
+          });
+        }
         setEmailSettings({
           shifts: settings.shifts !== false,
           stockSignals: settings.stockSignals !== false,
@@ -138,6 +163,7 @@ export default function Settings() {
       }
       
       setEmailSettings(newSettings);
+      invalidateEmailSettingsCache(user?.storeId || '');
       toast.success('Paramètres d\'email sauvegardés');
     } catch (e) {
       console.error('Error saving email settings:', e);
@@ -1260,8 +1286,8 @@ export default function Settings() {
         {/* Admin Store Balance Section */}
         {(user.role === 'admin' || user.role === 'super_admin') && (
           <div className="mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <Card className="col-span-2">
+            <div className="grid grid-cols-1 gap-4 mb-6">
+              <Card>
                 <CardHeader>
                   <CardTitle>Solde du magasin</CardTitle>
                 </CardHeader>
@@ -1542,17 +1568,6 @@ export default function Settings() {
                       <p className="text-xs text-muted-foreground">L'ajustement manuel devient la base — les ventes/dépenses postérieures seront prises en compte automatiquement.</p>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-              <Card className="hidden md:block">
-                <CardHeader>
-                  <CardTitle>Informations</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm">Seuls les comptes admin peuvent voir et modifier le solde manuel du magasin. Les ajustements sont historisés dans la base de données.</p>
-                  <div className="mt-4">
-                    <Button variant="ghost" onClick={fetchStore} disabled={loadingStore}>Rafraîchir</Button>
-                  </div>
                 </CardContent>
               </Card>
             </div>

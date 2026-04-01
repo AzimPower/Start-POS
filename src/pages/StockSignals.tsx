@@ -6,6 +6,7 @@ import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -134,6 +135,8 @@ export default function StockSignals() {
   const [expenseTypeFilter, setExpenseTypeFilter] = useState<'all' | 'direct' | 'indirect'>('all');
   // Filter by expense type for history signals (direct / indirect)
   const [historyExpenseTypeFilter, setHistoryExpenseTypeFilter] = useState<'all' | 'direct' | 'indirect'>('direct');
+  // Paramètre boutique: suivi des dépenses indirectes (décidé par l'admin)
+  const [trackIndirectExpenses, setTrackIndirectExpenses] = useState<boolean>(true);
   // Recherche simple pour Stocks Actifs (full-text sur produit/catégorie/prix/date)
   const [activeSearch, setActiveSearch] = useState('');
   // (expense creation is handled on the dedicated Expenses page)
@@ -1291,6 +1294,103 @@ export default function StockSignals() {
     }
   }, [categoryMap, getProductName, isOnline, loadData]);
 
+  useEffect(() => {
+    if (!user?.storeId) return;
+
+    let cancelled = false;
+    const loadStorePreference = async () => {
+      try {
+        // 1) Local (IndexedDB)
+        const db = await getDB();
+        const localStore = await db.get('stores', user.storeId);
+        const localValue = (localStore as any)?.trackIndirectExpenses;
+        if (!cancelled && localValue !== undefined && localValue !== null) {
+          setTrackIndirectExpenses(localValue === true || localValue === 1 || localValue === '1');
+        }
+
+        // 2) Backend (source de vérité) si accessible
+        if (!isBackendReachable) return;
+        const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1&_t=' + Date.now());
+        if (!res.ok) return;
+        const stores = await res.json();
+        if (!Array.isArray(stores)) return;
+        const remoteStore = stores.find((s: any) => String(s?.id) === String(user.storeId));
+        const remoteValue = remoteStore?.trackIndirectExpenses;
+        if (remoteValue !== undefined && remoteValue !== null && !cancelled) {
+          const normalizedRemoteValue = remoteValue === true || remoteValue === 1 || remoteValue === '1';
+          setTrackIndirectExpenses(normalizedRemoteValue);
+          try {
+            const mergedStore = localStore ? { ...localStore } as any : { id: user.storeId } as any;
+            mergedStore.trackIndirectExpenses = normalizedRemoteValue;
+            await db.put('stores', mergedStore);
+          } catch (err) {
+            console.warn('Erreur sauvegarde locale de trackIndirectExpenses:', err);
+          }
+        }
+      } catch (err) {
+        console.warn('Erreur chargement préférence dépenses indirectes:', err);
+      }
+    };
+
+    loadStorePreference();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.storeId, isBackendReachable]);
+
+  const saveTrackIndirectExpenses = useCallback(async (next: boolean) => {
+    if (!user?.storeId || !isAdmin) return;
+
+    setTrackIndirectExpenses(next);
+    try {
+      const db = await getDB();
+      const existingStore = await db.get('stores', user.storeId);
+      const updatedStore = existingStore ? { ...existingStore } as any : { id: user.storeId } as any;
+      updatedStore.trackIndirectExpenses = next;
+      await db.put('stores', updatedStore);
+    } catch (err) {
+      console.warn('Erreur sauvegarde locale trackIndirectExpenses:', err);
+    }
+
+    const syncResp = await performSyncOp({
+      url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+      method: 'POST',
+      data: {
+        action: 'set_stock_signals_preferences',
+        storeId: user.storeId,
+        trackIndirectExpenses: next,
+      }
+    });
+
+    if ((syncResp as any)?.queued) {
+      toast.info('Préférence enregistrée localement. Synchronisation en attente.');
+    }
+  }, [user?.storeId, isAdmin]);
+
+  useEffect(() => {
+    if (trackIndirectExpenses) return;
+    if (expenseTypeFilter === 'indirect') setExpenseTypeFilter('direct');
+    if (historyExpenseTypeFilter === 'indirect') setHistoryExpenseTypeFilter('direct');
+  }, [trackIndirectExpenses, expenseTypeFilter, historyExpenseTypeFilter]);
+
+  const resolveSignalExpenseType = useCallback((signal: StockSignal): 'direct' | 'indirect' => {
+    const mappedExpenseType = expenseTypeMap.get(signal.expenseId);
+    if (mappedExpenseType === 'direct' || mappedExpenseType === 'indirect') {
+      return mappedExpenseType;
+    }
+    return categoryMap.has(signal.productId) ? 'indirect' : 'direct';
+  }, [expenseTypeMap, categoryMap]);
+
+  const visibleCompletedSignals = useMemo(() => {
+    if (trackIndirectExpenses) return completedSignals;
+    return completedSignals.filter((signal) => resolveSignalExpenseType(signal) === 'direct');
+  }, [completedSignals, trackIndirectExpenses, resolveSignalExpenseType]);
+
+  const visibleActiveStocks = useMemo(() => {
+    if (trackIndirectExpenses) return activeStocks;
+    return activeStocks.filter((exp) => exp.type === 'direct');
+  }, [activeStocks, trackIndirectExpenses]);
+
   // Fonction pour filtrer les signaux - optimisée avec useMemo
   const filteredSignals = useMemo(() => {
     const now = nowTimestamp;
@@ -1301,7 +1401,7 @@ export default function StockSignals() {
     const oneMonthAgo = now - 30 * DAY_MS;
     const searchLower = searchTerm.trim().toLowerCase();
 
-    return completedSignals.filter(s => {
+    return visibleCompletedSignals.filter(s => {
       // Filtre par période (utilise endDate pour déterminer si le signalement concerne la période)
       if (periodFilter === 'day') {
         // Pour "Aujourd'hui", on affiche les signalements dont la date de fin est aujourd'hui
@@ -1323,7 +1423,7 @@ export default function StockSignals() {
 
       // Filtre par type de dépense (direct/indirect)
       if (historyExpenseTypeFilter !== 'all') {
-        const expenseType = expenseTypeMap.get(s.expenseId);
+        const expenseType = resolveSignalExpenseType(s);
         if (expenseType !== historyExpenseTypeFilter) return false;
       }
 
@@ -1349,14 +1449,14 @@ export default function StockSignals() {
 
       return true;
     });
-  }, [completedSignals, periodFilter, typeFilter, historyExpenseTypeFilter, searchTerm, nowTimestamp, categoryMap, productNameMap, expenseTypeMap]);
+  }, [visibleCompletedSignals, periodFilter, typeFilter, historyExpenseTypeFilter, searchTerm, nowTimestamp, categoryMap, productNameMap, resolveSignalExpenseType]);
 
   // Simple full-text search for active stocks - optimisé avec useMemo
   const filteredActiveStocks = useMemo(() => {
     const q = activeSearch.trim().toLowerCase();
-    if (!q) return activeStocks;
+    if (!q) return visibleActiveStocks;
 
-    return activeStocks.filter(exp => {
+    return visibleActiveStocks.filter(exp => {
       // product name - utilise le cache
       if (exp.type === 'direct' && exp.directProduct) {
         const prodName = productNameMap.get(exp.directProduct.productId)?.toLowerCase() || '';
@@ -1380,7 +1480,7 @@ export default function StockSignals() {
 
       return false;
     });
-  }, [activeStocks, activeSearch, productNameMap, categoryMap]);
+  }, [visibleActiveStocks, activeSearch, productNameMap, categoryMap]);
 
   // Expense creation removed from this page. Use the Expenses page to add new expenses.
 
@@ -1396,34 +1496,40 @@ export default function StockSignals() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex justify-between items-start">
+      <div className="flex justify-between items-start gap-4">
         <div>
           <h1 className="text-3xl font-bold">Signalement des Stocks</h1>
           <p className="text-muted-foreground">
             Signalez la fin des stocks pour calculer automatiquement les marges
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Network status + manual sync moved to app header (Layout).
-              Keep logic for pending count and manualSync in hooks/libraries,
-              but remove duplicate UI here to avoid inconsistent UX. */}
-        </div>
+        {isAdmin && <div className="flex items-center gap-2 shrink-0">
+          <Label htmlFor="track-indirect-expenses-toggle" className="text-sm whitespace-nowrap">
+            Indirectes ?
+          </Label>
+          <Switch
+            id="track-indirect-expenses-toggle"
+            checked={trackIndirectExpenses}
+            onCheckedChange={(checked) => saveTrackIndirectExpenses(Boolean(checked))}
+            aria-label="Activer le suivi des dépenses indirectes"
+          />
+        </div>}
       </div>
 
       <Tabs defaultValue="active" className="w-full">
         {user?.role === 'admin' ? (
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="active">
-              Stocks Actifs ({activeStocks.length})
+              Stocks Actifs ({visibleActiveStocks.length})
             </TabsTrigger>
             <TabsTrigger value="completed">
-              Historique ({completedSignals.length})
+              Historique ({visibleCompletedSignals.length})
             </TabsTrigger>
           </TabsList>
         ) : (
           <TabsList className="grid w-full grid-cols-1">
             <TabsTrigger value="active">
-              Stocks Actifs ({activeStocks.length})
+              Stocks Actifs ({visibleActiveStocks.length})
             </TabsTrigger>
           </TabsList>
         )}
@@ -1470,7 +1576,9 @@ export default function StockSignals() {
                         <SelectContent>
                           <SelectItem value="all">Tous les types</SelectItem>
                           <SelectItem value="direct">Directe (1 produit)</SelectItem>
-                          <SelectItem value="indirect">Indirecte (plusieurs produits)</SelectItem>
+                          {trackIndirectExpenses && (
+                            <SelectItem value="indirect">Indirecte (plusieurs produits)</SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                       <Button variant="outline" onClick={() => { setActiveSearch(''); setExpenseTypeFilter('all'); }}>Réinitialiser</Button>
@@ -1791,7 +1899,9 @@ export default function StockSignals() {
                         <SelectContent>
                           <SelectItem value="all">Tous</SelectItem>
                           <SelectItem value="direct">Dépense Directe</SelectItem>
-                          <SelectItem value="indirect">Dépense Indirecte</SelectItem>
+                          {trackIndirectExpenses && (
+                            <SelectItem value="indirect">Dépense Indirecte</SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                     </div>

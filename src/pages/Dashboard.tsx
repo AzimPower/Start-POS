@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSpreadsheet, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSpreadsheet, FileText, ChevronLeft, ChevronRight, ArrowUpRight, ArrowDownRight, Package, RefreshCcw, TrendingDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
@@ -698,57 +698,125 @@ export default function Dashboard() {
     ];
 
   return (
-    <div className="p-6 space-y-6 min-h-screen max-h-screen overflow-y-auto">
-      <div>
-        <h1 className="text-3xl font-bold">Tableau de bord</h1>
-        <p className="text-muted-foreground mt-1">Bienvenue, {user?.username}</p>
+    <div className="p-4 sm:p-6 space-y-5 min-h-screen max-h-screen overflow-y-auto bg-background">
+
+      {/* En-tête */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Tableau de bord</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm">
+            Bienvenue, <span className="font-semibold text-foreground">{user?.username}</span>
+          </p>
+        </div>
+        <span className="self-start sm:self-auto text-xs text-muted-foreground bg-muted/60 border px-3 py-1.5 rounded-full">
+          {format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        </span>
       </div>
 
-      {/* Récapitulatif des ventes admin (affiché uniquement en ligne) */}
-  {isBackendReachable && (
-  <div className="grid gap-2 grid-cols-2 md:grid-cols-2 lg:grid-cols-3">
-        {/* Optimisé mobile : moins de padding, texte plus petit, chiffres plus compacts */}
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Ventes brutes</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
-            <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.ventesBrutes)} F</div>
-            <div className="text-[11px] text-destructive"> - {formatCurrency(Math.abs(recapStats.evolVentes))} F ({(recapStats.evolVentesPercent ?? 0).toFixed(2)}%)</div>
-          </CardContent>
-        </Card>
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Remboursements</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
-            <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.remboursements)} F</div>
-            <div className="text-[11px] text-success"> {formatCurrency(recapStats.evolRemboursements)} F ({(recapStats.evolRemboursementsPercent ?? 0).toFixed(2)}%)</div>
-          </CardContent>
-        </Card>
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Surplus</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
-            <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.surplus)} F</div>
-            <div className="text-[11px] text-success"> {formatCurrency(recapStats.evolSurplus)} F ({(recapStats.evolSurplusPercent ?? 0).toFixed(2)}%)</div>
-          </CardContent>
-        </Card>
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Manque</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
-            <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.manque)} F</div>
-            <div className="text-[11px] text-destructive"> {formatCurrency(recapStats.evolManque)} F ({(recapStats.evolManquePercent ?? 0).toFixed(2)}%)</div>
-          </CardContent>
-        </Card>
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Marchandises</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
+      {/* KPI admin (en ligne) */}
+      {isBackendReachable && (
+        <div className="grid gap-3 grid-cols-2 lg:grid-cols-3">
+
+          {/* Ventes brutes */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/20 dark:to-background">
+            <div className="h-1 bg-emerald-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Ventes brutes</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center shrink-0">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-emerald-700 dark:text-emerald-400 leading-tight">
+                {formatCurrency(recapStats.ventesBrutes)} <span className="text-sm font-normal text-muted-foreground">F</span>
+              </div>
+              <div className="flex items-center gap-0.5 mt-1 text-[11px] text-destructive">
+                <ArrowDownRight className="w-3 h-3 shrink-0" />
+                {formatCurrency(Math.abs(recapStats.evolVentes))} F ({(recapStats.evolVentesPercent ?? 0).toFixed(2)}%)
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Remboursements */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-orange-50 to-white dark:from-orange-950/20 dark:to-background">
+            <div className="h-1 bg-orange-400 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Remboursements</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-orange-100 dark:bg-orange-900/40 flex items-center justify-center shrink-0">
+                  <RefreshCcw className="w-3.5 h-3.5 text-orange-600" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-orange-700 dark:text-orange-400 leading-tight">
+                {formatCurrency(recapStats.remboursements)} <span className="text-sm font-normal text-muted-foreground">F</span>
+              </div>
+              <div className="flex items-center gap-0.5 mt-1 text-[11px] text-success">
+                <ArrowUpRight className="w-3 h-3 shrink-0" />
+                {formatCurrency(recapStats.evolRemboursements)} F ({(recapStats.evolRemboursementsPercent ?? 0).toFixed(2)}%)
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Surplus */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+            <div className="h-1 bg-blue-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Surplus</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center shrink-0">
+                  <TrendingUp className="w-3.5 h-3.5 text-blue-600" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-blue-700 dark:text-blue-400 leading-tight">
+                {formatCurrency(recapStats.surplus)} <span className="text-sm font-normal text-muted-foreground">F</span>
+              </div>
+              <div className="flex items-center gap-0.5 mt-1 text-[11px] text-success">
+                <ArrowUpRight className="w-3 h-3 shrink-0" />
+                {formatCurrency(recapStats.evolSurplus)} F ({(recapStats.evolSurplusPercent ?? 0).toFixed(2)}%)
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Manque */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-red-50 to-white dark:from-red-950/20 dark:to-background">
+            <div className="h-1 bg-red-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Manque</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-red-100 dark:bg-red-900/40 flex items-center justify-center shrink-0">
+                  <TrendingDown className="w-3.5 h-3.5 text-red-600" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-red-700 dark:text-red-400 leading-tight">
+                {formatCurrency(recapStats.manque)} <span className="text-sm font-normal text-muted-foreground">F</span>
+              </div>
+              <div className="flex items-center gap-0.5 mt-1 text-[11px] text-destructive">
+                <ArrowDownRight className="w-3 h-3 shrink-0" />
+                {formatCurrency(recapStats.evolManque)} F ({(recapStats.evolManquePercent ?? 0).toFixed(2)}%)
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Marchandises */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+            <div className="h-1 bg-purple-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Marchandises</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center shrink-0">
+                  <Package className="w-3.5 h-3.5 text-purple-600" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
               {(() => {
                 // Exclure les tickets remboursés du calcul du coût des marchandises
                 // On suppose que recapStats.ventesBrutes et recapStats.margeBrute incluent tous les tickets, donc il faut soustraire les remboursés
@@ -761,106 +829,128 @@ export default function Dashboard() {
                 const percent = ventes > 0 ? ((cost / ventes) * 100).toFixed(2) : '0.00';
                 return (
                   <>
-                    <div className="text-lg font-bold leading-tight"> {formatCurrency(cost)} F</div>
-                    <div className="text-[11px] text-success">{percent}%</div>
+                    <div className="text-xl font-bold text-purple-700 dark:text-purple-400 leading-tight">
+                      {formatCurrency(cost)} <span className="text-sm font-normal text-muted-foreground">F</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-muted-foreground">{percent}% des ventes nettes</div>
                   </>
                 );
               })()}
-          </CardContent>
-        </Card>
-        <Card className="p-2 sm:p-4">
-          <CardHeader className="pb-1 px-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Marge brute</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 py-1">
-            <div className="text-lg font-bold leading-tight"> {formatCurrency(recapStats.margeBrute)} F</div>
-            <div className={`text-[11px] ${recapStats.margeBrutePourcent > 0 ? 'text-success' : 'text-muted-foreground'}`}>{recapStats.margeBrutePourcent > 0 ? `${(typeof recapStats.margeBrutePourcent === 'number' ? recapStats.margeBrutePourcent : parseFloat(String(recapStats.margeBrutePourcent)) || 0).toFixed(2)}%` : '0%'}</div>
-          </CardContent>
-        </Card>
-    </div>
-  )}
+            </CardContent>
+          </Card>
 
-  {user?.role === 'cashier' && !isBackendReachable && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-          <Card className="p-2">
-            <CardHeader className="pb-1 px-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">Ventes (local)</CardTitle>
+          {/* Marge brute */}
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-teal-50 to-white dark:from-teal-950/20 dark:to-background">
+            <div className="h-1 bg-teal-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Marge brute</CardTitle>
+                <div className="w-7 h-7 rounded-full bg-teal-100 dark:bg-teal-900/40 flex items-center justify-center shrink-0">
+                  <BarChart3 className="w-3.5 h-3.5 text-teal-600" />
+                </div>
+              </div>
             </CardHeader>
-            <CardContent className="px-2 py-1">
-              <div className="text-lg font-bold"> {formatCurrency(cashierLocalStats.totalSales)} F</div>
-              <div className="text-[11px] text-muted-foreground">{cashierLocalStats.transactions} transactions</div>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-teal-700 dark:text-teal-400 leading-tight">
+                {formatCurrency(recapStats.margeBrute)} <span className="text-sm font-normal text-muted-foreground">F</span>
+              </div>
+              <div className={`mt-1 text-[11px] ${recapStats.margeBrutePourcent > 0 ? 'text-success' : 'text-muted-foreground'}`}>
+                {recapStats.margeBrutePourcent > 0 ? `${(typeof recapStats.margeBrutePourcent === 'number' ? recapStats.margeBrutePourcent : parseFloat(String(recapStats.margeBrutePourcent)) || 0).toFixed(2)}%` : '0%'} de marge
+              </div>
             </CardContent>
           </Card>
-          <Card className="p-2">
-            <CardHeader className="pb-1 px-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">Remboursements</CardTitle>
+
+        </div>
+      )}
+
+      {/* KPI caissier hors-ligne */}
+      {user?.role === 'cashier' && !isBackendReachable && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-emerald-50 to-white">
+            <div className="h-1 bg-emerald-500 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Ventes (local)</CardTitle>
             </CardHeader>
-            <CardContent className="px-2 py-1">
-              <div className="text-lg font-bold"> {formatCurrency(cashierLocalStats.refunds)} F</div>
-              <div className="text-[11px] text-muted-foreground">Montant remboursé aujourd'hui</div>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-emerald-700">{formatCurrency(cashierLocalStats.totalSales)} <span className="text-sm font-normal text-muted-foreground">F</span></div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">{cashierLocalStats.transactions} transactions</div>
             </CardContent>
           </Card>
-          <Card className="p-2">
-            <CardHeader className="pb-1 px-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">En attente (local)</CardTitle>
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-orange-50 to-white">
+            <div className="h-1 bg-orange-400 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Remboursements</CardTitle>
             </CardHeader>
-            <CardContent className="px-2 py-1">
-              <div className="text-lg font-bold"> {formatCurrency(cashierLocalStats.pendingLocalSales)} F</div>
-              <div className="text-[11px] text-muted-foreground">{cashierLocalStats.pendingOpsCount} ops en file</div>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-orange-700">{formatCurrency(cashierLocalStats.refunds)} <span className="text-sm font-normal text-muted-foreground">F</span></div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">Montant remboursé aujourd'hui</div>
             </CardContent>
           </Card>
-          <Card className="p-2">
-            <CardHeader className="pb-1 px-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground">Shift</CardTitle>
+          <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-yellow-50 to-white">
+            <div className="h-1 bg-yellow-400 w-full" />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">En attente (local)</CardTitle>
             </CardHeader>
-            <CardContent className="px-2 py-1">
-              <div className="text-lg font-bold">{cashierLocalStats.activeShift ? 'En cours' : 'Aucun'}</div>
-              <div className="text-[11px] text-muted-foreground">Etat du shift courant</div>
+            <CardContent className="px-4 pb-4">
+              <div className="text-xl font-bold text-yellow-700">{formatCurrency(cashierLocalStats.pendingLocalSales)} <span className="text-sm font-normal text-muted-foreground">F</span></div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">{cashierLocalStats.pendingOpsCount} ops en file</div>
+            </CardContent>
+          </Card>
+          <Card className={`border-0 shadow-sm overflow-hidden bg-gradient-to-br ${cashierLocalStats.activeShift ? 'from-green-50 to-white' : 'from-gray-50 to-white'}`}>
+            <div className={`h-1 w-full ${cashierLocalStats.activeShift ? 'bg-green-500' : 'bg-gray-300'}`} />
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Shift</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className={`text-xl font-bold ${cashierLocalStats.activeShift ? 'text-green-700' : 'text-muted-foreground'}`}>
+                {cashierLocalStats.activeShift ? 'En cours' : 'Aucun'}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">Etat du shift courant</div>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Sélecteur de période et graphique - uniquement pour admin */}
+      {/* Section admin : période + graphiques */}
       {user?.role === 'admin' && (
         <>
           {/* Sélecteur de période */}
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <CardTitle className="text-base font-semibold">Sélectionner la période</CardTitle>
+          <Card className="shadow-sm">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <CalendarIcon className="w-4 h-4 text-primary" />
+                  </div>
+                  <CardTitle className="text-base font-semibold">Période d'analyse</CardTitle>
+                </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={exportToExcel} className="flex items-center gap-2">
-                <FileSpreadsheet className="w-4 h-4" />
-                 Export Excel
+                  <Button variant="outline" size="sm" onClick={exportToExcel} className="flex items-center gap-1.5 text-xs">
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Excel
                   </Button>
-                  <Button variant="outline" size="sm" onClick={exportToPDF} className="flex items-center gap-2">
-                <FileText className="w-4 h-4" />
-                 Export PDF
+                  <Button variant="outline" size="sm" onClick={exportToPDF} className="flex items-center gap-1.5 text-xs">
+                    <FileText className="w-3.5 h-3.5" />
+                    PDF
                   </Button>
                 </div>
               </div>
-
             </CardHeader>
-            <CardContent>
+            <CardContent className="pt-0">
               <div className="space-y-4">
-                {/* Affichage de la période sélectionnée avec boutons de navigation */}
+                {/* Navigation + sélecteur de date */}
                 <div className="flex gap-2 items-center">
-                  <Button 
-                    variant="outline" 
-                    size="icon"
-                    onClick={goToPreviousPeriod}
-                    title="Période précédente"
-                  >
+                  <Button variant="outline" size="icon" onClick={goToPreviousPeriod} title="Période précédente" className="shrink-0">
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
-                  
                   <Popover open={showPeriodSelector} onOpenChange={setShowPeriodSelector}>
                     <PopoverTrigger asChild>
                       <Button variant="outline" className={cn("flex-1 justify-start text-left font-normal", !startDate && "text-muted-foreground")}>
-                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
                         {startDate && endDate ? (
-                          `${format(startDate, 'dd/MM/yyyy', { locale: fr })} - ${format(endDate, 'dd/MM/yyyy', { locale: fr })}`
+                          <span className="font-medium">
+                            {format(startDate, 'dd/MM/yyyy', { locale: fr })} — {format(endDate, 'dd/MM/yyyy', { locale: fr })}
+                          </span>
                         ) : (
                           <span>Sélectionner une période</span>
                         )}
@@ -869,35 +959,17 @@ export default function Dashboard() {
                     <PopoverContent className="w-auto p-0 flex flex-col xl:flex-row max-w-none" align="start">
                       {/* Raccourcis à gauche - optimisé pour desktop */}
                       <div className="xl:border-r p-2 space-y-1 w-full xl:min-w-[220px]">
-                        <p className="text-xs font-medium text-muted-foreground px-2 py-1">Raccourcis</p>
+                        <p className="text-xs font-semibold text-muted-foreground px-2 py-1 uppercase tracking-wide">Raccourcis</p>
                         <div className="grid grid-cols-2 xl:grid-cols-1 gap-1">
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('today')}>
-                            Aujourd'hui
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('yesterday')}>
-                            Hier
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisWeek')}>
-                            Cette semaine
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastWeek')}>
-                            La semaine dernière
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisMonth')}>
-                            Ce mois
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastMonth')}>
-                            Le mois dernier
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last7days')}>
-                            Il y a 7 jours
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last30days')}>
-                            Il y a 30 jours
-                          </Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisYear')}>
-                            Cette année
-                          </Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('today')}>Aujourd'hui</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('yesterday')}>Hier</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisWeek')}>Cette semaine</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastWeek')}>La semaine dernière</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisMonth')}>Ce mois</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastMonth')}>Le mois dernier</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last7days')}>Il y a 7 jours</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last30days')}>Il y a 30 jours</Button>
+                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisYear')}>Cette année</Button>
                         </div>
                       </div>
                       {/* Calendrier à droite - optimisé pour desktop */}
@@ -919,12 +991,12 @@ export default function Dashboard() {
                       </div>
                     </PopoverContent>
                   </Popover>
-
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     size="icon"
                     onClick={goToNextPeriod}
                     title="Période suivante"
+                    className="shrink-0"
                     disabled={(() => {
                       const durationDays = getPeriodDurationInDays();
                       const newStartDate = new Date(endDate);
@@ -939,20 +1011,15 @@ export default function Dashboard() {
                     <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>
-                
                 {/* Sélection des heures */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-sm">Heure de début</Label>
-                    <div className="relative">
-                      <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="pr-10 max-w-[120px] w-full sm:w-auto" />
-                    </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Heure de début</Label>
+                    <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="max-w-[130px]" />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-sm">Heure de fin</Label>
-                    <div className="relative">
-                      <Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="pr-10 max-w-[120px] w-full sm:w-auto" />
-                    </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Heure de fin</Label>
+                    <Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="max-w-[130px]" />
                   </div>
                 </div>
               </div>
@@ -960,72 +1027,70 @@ export default function Dashboard() {
           </Card>
 
           {/* Graphique des ventes par produit */}
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <CardTitle className="text-base font-semibold">Ventes par produit</CardTitle>
-                <div className="flex gap-2">
-                  <Select value={productChartType} onValueChange={(value: 'bar' | 'pie') => setProductChartType(value)}>
-                    <SelectTrigger className="w-[140px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bar">
-                        <div className="flex items-center gap-2">
-                          <BarChart3 className="w-4 h-4" />
-                          <span>Barres</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="pie">
-                        <div className="flex items-center gap-2">
-                          <span className="w-4 h-4 rounded-full bg-orange-500"></span>
-                          <span>Circulaire</span>
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+          <Card className="shadow-sm">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
+                    <ShoppingCart className="w-4 h-4 text-orange-600" />
+                  </div>
+                  <CardTitle className="text-base font-semibold">Ventes par produit</CardTitle>
                 </div>
+                <Select value={productChartType} onValueChange={(value: 'bar' | 'pie') => setProductChartType(value)}>
+                  <SelectTrigger className="w-[130px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bar">
+                      <div className="flex items-center gap-2"><BarChart3 className="w-4 h-4" /><span>Barres</span></div>
+                    </SelectItem>
+                    <SelectItem value="pie">
+                      <div className="flex items-center gap-2"><span className="w-4 h-4 rounded-full bg-orange-500 inline-block" /><span>Circulaire</span></div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </CardHeader>
             <CardContent>
               {salesByProduct && salesByProduct.length > 0 ? (
                 <ProductSalesChart data={salesByProduct} chartType={productChartType} />
               ) : (
-                <div className="text-center text-muted-foreground py-8">Aucune donnée disponible</div>
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <BarChart3 className="w-10 h-10 mb-2 opacity-25" />
+                  <p className="text-sm">Aucune donnée disponible</p>
+                </div>
               )}
             </CardContent>
           </Card>
 
-          {/* Chart des ventes brutes */}
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <CardTitle className="text-base font-semibold">Ventes brutes</CardTitle>
+          {/* Graphique ventes brutes */}
+          <Card className="shadow-sm">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                    <TrendingUpIcon className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <CardTitle className="text-base font-semibold">Ventes brutes</CardTitle>
+                </div>
                 <div className="flex gap-2">
                   {/* Sélecteur de type de graphique */}
                   <Select value={chartType} onValueChange={(value: 'line' | 'bar') => setChartType(value)}>
-                    <SelectTrigger className="w-[140px]">
+                    <SelectTrigger className="w-[130px]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="bar">
-                        <div className="flex items-center gap-2">
-                          <BarChart3 className="w-4 h-4" />
-                          <span>Colonnes</span>
-                        </div>
+                        <div className="flex items-center gap-2"><BarChart3 className="w-4 h-4" /><span>Colonnes</span></div>
                       </SelectItem>
                       <SelectItem value="line">
-                        <div className="flex items-center gap-2">
-                          <TrendingUpIcon className="w-4 h-4" />
-                          <span>Courbe</span>
-                        </div>
+                        <div className="flex items-center gap-2"><TrendingUpIcon className="w-4 h-4" /><span>Courbe</span></div>
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                  
                   {/* Sélecteur de regroupement */}
                   <Select value={groupBy} onValueChange={(value: 'minutes' | 'hours' | 'days' | 'weeks' | 'months') => setGroupBy(value)}>
-                    <SelectTrigger className="w-[140px]">
+                    <SelectTrigger className="w-[130px]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

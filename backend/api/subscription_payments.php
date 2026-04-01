@@ -100,6 +100,23 @@ try {
             echo json_encode(['success' => true, 'id' => $id]);
             break;
 
+        case 'DELETE':
+            $id = isset($_GET['id']) && $_GET['id'] !== '' ? $_GET['id'] : null;
+            if (!$id) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Identifiant manquant']);
+                exit;
+            }
+            $stmt = $pdo->prepare('DELETE FROM subscription_payments WHERE id = ?');
+            $stmt->execute([$id]);
+            if ($stmt->rowCount() === 0) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Enregistrement introuvable']);
+            } else {
+                echo json_encode(['success' => true]);
+            }
+            break;
+
         default:
             http_response_code(405);
             echo json_encode(['success' => false, 'error' => 'Méthode non autorisée']);

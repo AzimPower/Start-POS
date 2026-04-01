@@ -18,16 +18,15 @@ try {
     switch ($method) {
         case 'GET':
             $storeId = $_GET['storeId'] ?? null;
-            $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 100; // Par défaut 100 shifts max
             
-            // Requête optimisée: tri + limite côté serveur
+            // Récupérer tous les shifts sans limite
             $sql = 'SELECT * FROM shifts';
             $params = [];
             if ($storeId) {
                 $sql .= ' WHERE storeId = ?';
                 $params[] = $storeId;
             }
-            $sql .= ' ORDER BY openedAt DESC LIMIT ' . $limit;
+            $sql .= ' ORDER BY openedAt DESC';
             
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);

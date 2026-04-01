@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
+import { getEmailSettings } from '@/lib/emailSettingsCache';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -590,8 +591,8 @@ export default function Receipts() {
 
       // Envoyer notification email aux admins du store
       try {
-        const emailSettings = JSON.parse(localStorage.getItem(`emailSettings_${saleToRefund.storeId}`) || '{}');
-        const shouldSendEmail = emailSettings?.refunds !== false; // Par défaut true si pas de config
+        const emailSettings = await getEmailSettings(saleToRefund.storeId || '');
+        const shouldSendEmail = emailSettings.refunds;
         
         if (shouldSendEmail) {
           const store = stores.find(s => s.id === saleToRefund.storeId);

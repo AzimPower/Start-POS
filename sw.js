@@ -78,13 +78,13 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
-    "url": "assets/index-Bt-gobOo.js",
+    "url": "assets/index-Bra02pxV.css",
     "revision": null
   }, {
-    "url": "assets/index-DX5PXfQ4.css",
+    "url": "assets/index-HQ3IA4iZ.js",
     "revision": null
   }, {
-    "url": "assets/virtual_pwa-register-DsjdkNrx.js",
+    "url": "assets/virtual_pwa-register-YcvW9vL9.js",
     "revision": null
   }, {
     "url": "assets/workbox-window.prod.es5-B9K5rw8f.js",
@@ -139,7 +139,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
   }, {
     "url": "index.html",
-    "revision": "592774a9bcce7a8a09b4076f44fd7cca"
+    "revision": "f02d51c9866a4a6ab04dc05c3dbb6cbf"
   }, {
     "url": "offline.html",
     "revision": "893dde22b9df46cfbc4f8746c7bffa32"
@@ -179,8 +179,9 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     request
   }) => {
     const isEmailAPI = url.href.includes("send-email.php");
+    const isBackendApi = url.pathname.includes("/backend/api/");
     const hasBypass = url.searchParams.has("_bypass_sw");
-    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !hasBypass;
+    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !isBackendApi && !hasBypass;
   }, new workbox.NetworkFirst({
     "cacheName": "external-api-cache",
     "networkTimeoutSeconds": 15,

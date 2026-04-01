@@ -103,10 +103,19 @@ export default function Customers() {
             const backendCustomers = await response.json();
             // Filtrer côté client aussi pour sécurité
             const storeCustomers = backendCustomers.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
-            // Mettre à jour la base locale
+            // Mettre à jour la base locale et supprimer les clients effacés côté backend
             const tx = db.transaction('customers', 'readwrite');
+            const backendCustomerIds = new Set(storeCustomers.map((c: any) => c.id));
+            const localCustomers = await tx.store.getAll();
+            const storeLocalCustomers = user?.storeId
+              ? localCustomers.filter((c: any) => c.storeId === user.storeId)
+              : localCustomers;
+            const deletes = storeLocalCustomers
+              .filter((c: any) => !backendCustomerIds.has(c.id))
+              .map((c: any) => tx.store.delete(c.id));
             await Promise.all([
               ...storeCustomers.map(c => tx.store.put(c)),
+              ...deletes,
               tx.done
             ]);
             // reset pagination and load first page
