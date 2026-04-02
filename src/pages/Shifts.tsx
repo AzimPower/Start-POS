@@ -22,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import ShiftReceiptDetails from './ShiftReceiptDetails';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerTrigger, DrawerClose } from '@/components/ui/drawer';
-import { fetchAndMerge, reconcileSalesToLastClosedShift } from '@/lib/sync';
+import { fetchAndMerge, mergeBackendShifts, persistClosedShiftMarker, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
 
 interface Shift {
   id: string;
@@ -62,6 +62,11 @@ const formatMoneyCompactFn = (value: number) => {
   return new Intl.NumberFormat('fr-FR')
     .format(Math.round(Number(value) || 0))
     .replace(/\u00A0|\u202F/g, ' ');
+};
+
+const getSaleTime = (sale: { createdAt?: number } & Record<string, unknown>) => {
+  const legacyTimestamp = sale['timestamp'];
+  return Number(sale.createdAt) || (typeof legacyTimestamp === 'number' ? legacyTimestamp : Number(legacyTimestamp) || 0);
 };
 
 // Tri d'affichage: ouverts toujours en haut, fermés triés par closedAt décroissant (fallback openedAt)
@@ -592,7 +597,7 @@ export default function Shifts() {
         if (salesNoShiftId.length > 0) {
           const shiftEnd = shift.closedAt || Date.now();
           const extra = salesNoShiftId.filter((s: any) => {
-            const t = s.createdAt || s.timestamp || 0;
+            const t = getSaleTime(s);
             return t >= shift.openedAt && t <= shiftEnd;
           });
           if (extra.length > 0) sales = sales.length > 0 ? [...sales, ...extra] : extra;
@@ -678,34 +683,9 @@ export default function Shifts() {
             const backendShifts = await response.json();
             
             if (Array.isArray(backendShifts) && backendShifts.length > 0) {
-              // Mettre à jour la base locale (merge: put tous les shifts backend)
-              const tx = db.transaction('shifts', 'readwrite');
-              await Promise.all([
-                ...backendShifts.map(s => tx.store.put(s)),
-                tx.done
-              ]);
+              await mergeBackendShifts(backendShifts);
               // Invalider le cache des calculs
               shiftsCache.current.clear();
-
-              // Supprimer les shifts ouverts locaux fantômes (ouverts en local mais absents du backend)
-              // SÉCURITÉ: ne pas supprimer un shift récent (<5 min) ou qui a une op en attente de sync
-              const backendIds = new Set(backendShifts.map((s: any) => String(s.id)));
-              const allLocal = await db.getAll('shifts');
-              const pendingOps = await db.getAll('syncQueue');
-              const pendingShiftIds = new Set(
-                pendingOps.filter((op: any) => op.table === 'shifts' || op.url?.includes('shifts')).map((op: any) => String(op.data?.id))
-              );
-              const FIVE_MINUTES = 5 * 60 * 1000;
-              const ghostOpen = allLocal.filter((s: any) =>
-                s.status === 'open' && !backendIds.has(String(s.id)) &&
-                (!user?.storeId || s.storeId === user.storeId) &&
-                !pendingShiftIds.has(String(s.id)) &&
-                (Date.now() - (s.openedAt || 0)) > FIVE_MINUTES
-              );
-              if (ghostOpen.length > 0) {
-                const tx2 = db.transaction('shifts', 'readwrite');
-                await Promise.all([...ghostOpen.map((s: any) => tx2.store.delete(s.id)), tx2.done]);
-              }
 
               // Relire depuis le local en respectant la pagination
               await loadShiftsPage(db, 0, pageSize, true);
@@ -764,7 +744,7 @@ export default function Shifts() {
         });
       }
       setHasMore(reset ? totalVisible > page.length : (offset + page.length) < totalVisible);
-      const active = (reset ? page : [...shifts, ...page]).find(s => s.status === 'open' && s.userId === user?.id);
+      const active = await resolveUserOpenShift(user?.id, user?.storeId);
       setActiveShift(active || null);
       return page;
     } catch (e) {
@@ -788,6 +768,8 @@ export default function Shifts() {
         });
       }
       setHasMore(reset ? totalFiltered > page.length : (offset + page.length) < totalFiltered);
+      const active = await resolveUserOpenShift(user?.id, user?.storeId);
+      setActiveShift(active || null);
       return page;
     }
   };
@@ -881,8 +863,7 @@ export default function Shifts() {
       visibleShifts = normalizedShifts.filter(s => s.userId === user?.id);
     }
     setShifts(visibleShifts.sort((a, b) => getShiftSortTs(b) - getShiftSortTs(a)));
-    const active = visibleShifts.find(s => s.status === 'open' && s.userId === user?.id);
-    setActiveShift(active || null);
+    resolveUserOpenShift(user?.id, user?.storeId).then(active => setActiveShift(active || null)).catch(() => setActiveShift(null));
   }, [user?.role, user?.storeId, user?.id]);
 
 
@@ -897,7 +878,7 @@ export default function Shifts() {
       const allShiftSales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
       // Filtrer les ventes dans l'intervalle de temps du shift
       const sales = allShiftSales.filter((s: any) => {
-        const saleTime = s.createdAt || s.timestamp || 0;
+        const saleTime = getSaleTime(s);
         const shiftStart = shift.openedAt;
         const shiftEnd = shift.closedAt || Date.now();
         return saleTime >= shiftStart && saleTime <= shiftEnd;
@@ -1279,15 +1260,33 @@ export default function Shifts() {
       const db = await getDB();
       
       // Calculate expected amount - sans les dépenses
+      const shiftStart = activeShift.openedAt;
+      const shiftEnd = Date.now();
       const allShiftSales = await db.getAllFromIndex('sales', 'by-shift', activeShift.id);
-      // Filtrer les ventes dans l'intervalle de temps du shift
-      const sales = allShiftSales.filter((s: any) => {
-        const saleTime = s.createdAt || s.timestamp || 0;
-        const shiftStart = activeShift.openedAt;
-        const shiftEnd = Date.now(); // Shift en cours de fermeture
-        return saleTime >= shiftStart && saleTime <= shiftEnd;
-      });
-      console.log(`🔐 [CLOSE] Shift ${activeShift.id}: ${allShiftSales.length} ventes trouvées, ${sales.length} dans l'intervalle de temps`);
+      const salesById = new Map<string, any>();
+
+      for (const sale of allShiftSales) {
+        const saleTime = getSaleTime(sale);
+        if (saleTime >= shiftStart && saleTime <= shiftEnd && !sale.draft) {
+          salesById.set(String(sale.id), sale);
+        }
+      }
+
+      // Inclure aussi les ventes locales sans shiftId rattachable pour éviter les faux surplus.
+      const allSalesDb = await db.getAll('sales');
+      for (const sale of allSalesDb) {
+        if (sale.draft || sale.shiftId) continue;
+        if (String(sale.storeId || '') !== String(activeShift.storeId || '')) continue;
+        if (String(sale.userId || '') !== String(activeShift.userId || '')) continue;
+
+        const saleTime = getSaleTime(sale);
+        if (saleTime >= shiftStart && saleTime <= shiftEnd) {
+          salesById.set(String(sale.id), sale);
+        }
+      }
+
+      const sales = Array.from(salesById.values());
+      console.log(`🔐 [CLOSE] Shift ${activeShift.id}: ${allShiftSales.length} ventes liées, ${sales.length} ventes retenues pour le calcul`);
       // robust numeric parser to tolerate strings like "5 000", null, undefined, etc.
       const toNum = (v: any) => {
         if (v === null || v === undefined) return 0;
@@ -1329,31 +1328,15 @@ export default function Shifts() {
       console.log('Données du shift à envoyer:', updatedShift);
       console.log('cashAmount:', cash, 'mobileMoneyAmount:', mobile, 'otherAmount:', other);
       
-      // Fallback: ventes sans shiftId dans l'intervalle du shift
-      if (sales.length === 0) {
-        const allSalesDb = await db.getAll('sales');
-        const shiftEnd = Date.now();
-        const extraSales = allSalesDb.filter((s: any) => {
-          if (s.shiftId) return false; // déjà couvert par l'index
-          const t = s.createdAt || s.timestamp || 0;
-          return t >= activeShift.openedAt && t <= shiftEnd;
-        });
-        if (extraSales.length > 0) {
-          // Il y a des ventes sans shiftId → ne pas supprimer
-          // On continue la fermeture normale
-        }
-      }
-
       // Si aucune vente dans ce shift (ni par shiftId ni par plage horaire), supprimer
-      const allSalesForCheck = sales.length === 0 ? await (async () => {
-        const allSalesDb = await db.getAll('sales');
-        return allSalesDb.filter((s: any) => {
-          if (s.shiftId) return false;
-          const t = s.createdAt || s.timestamp || 0;
-          return t >= activeShift.openedAt && t <= Date.now();
+      if (sales.length === 0) {
+        persistClosedShiftMarker({
+          id: activeShift.id,
+          userId: activeShift.userId,
+          storeId: activeShift.storeId,
+          openedAt: activeShift.openedAt,
+          closedAt: Date.now(),
         });
-      })() : [];
-      if (sales.length === 0 && allSalesForCheck.length === 0) {
         await db.delete('shifts', activeShift.id);
         if (isOnline) {
           fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`, {
@@ -1366,13 +1349,14 @@ export default function Shifts() {
         setMobileMoneyAmount('');
         setOtherAmount('');
         shiftsCache.current.clear();
-        await loadShifts();
+        await loadShiftsPage(db, 0, pageSize, true);
         toast.success('Shift sans vente supprimé automatiquement');
         return;
       }
 
       // Sauvegarder localement d'abord
       await db.put('shifts', updatedShift);
+  persistClosedShiftMarker(updatedShift);
 
       // ✅ Mettre à jour l'état UI immédiatement — ne pas attendre email/sync
       setActiveShift(null);
@@ -1380,7 +1364,7 @@ export default function Shifts() {
       setCashAmount('');
       setMobileMoneyAmount('');
       setOtherAmount('');
-      loadShifts();
+      await loadShiftsPage(db, 0, pageSize, true);
       toast.success('Shift fermé avec succès');
 
       // Notifier les autres onglets (POS, etc.) que le shift est fermé

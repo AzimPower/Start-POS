@@ -23,7 +23,8 @@ import {
   Clock,
   CheckCircle,
   Wifi,
-  WifiOff
+  WifiOff,
+  Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { pendingEmailService } from '@/lib/pendingEmailService';
@@ -108,6 +109,46 @@ interface Sale {
   refunded?: boolean;
 }
 
+const normalizeBackendCollection = (payload: any): any[] => {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.results)) return payload.results;
+
+  if (typeof payload === 'object') {
+    const values = Object.values(payload).filter((value) => value && typeof value === 'object');
+    return values.length > 0 ? values : [payload];
+  }
+
+  return [];
+};
+
+const toSafeNumber = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const isBogusStockSignal = (signal: Partial<StockSignal> | null | undefined): boolean => {
+  if (!signal) return true;
+
+  const startDate = toSafeNumber(signal.startDate);
+  const endDate = toSafeNumber(signal.endDate);
+  const purchaseAmount = toSafeNumber(signal.purchaseAmount);
+  const revenue = toSafeNumber(signal.revenue);
+  const margin = toSafeNumber(signal.margin);
+  const realMargin = toSafeNumber(signal.realMargin);
+  const quantityBought = toSafeNumber(signal.quantityBought);
+  const quantitySold = toSafeNumber(signal.quantitySold);
+
+  const hasEpochDates = startDate <= 0 || endDate <= 0 || endDate < startDate;
+  const hasEmptyMetrics = purchaseAmount === 0 && revenue === 0 && margin === 0 && realMargin === 0;
+  const hasBrokenQuantities = quantityBought === 0 && quantitySold > 0;
+
+  return hasEpochDates && (hasEmptyMetrics || hasBrokenQuantities);
+};
+
 export default function StockSignals() {
   const { user } = useAuth();
   // treat super_admin as admin for UI purposes
@@ -119,6 +160,8 @@ export default function StockSignals() {
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [allExpenses, setAllExpenses] = useState<ExpenseAdvanced[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isPreparingSignal, setIsPreparingSignal] = useState(false);
+  const [preparingExpenseId, setPreparingExpenseId] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [showSignalDialog, setShowSignalDialog] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<ExpenseAdvanced | null>(null);
@@ -143,6 +186,7 @@ export default function StockSignals() {
 
   // 🔄 Ref pour éviter les rechargements multiples
   const loadedOnceRef = useRef(false);
+  const cleanedInvalidSignalIdsRef = useRef<Set<string>>(new Set());
 
   // ==== CACHES OPTIMISÉS ====
   // Cache des noms de produits pour éviter les recherches répétées
@@ -468,15 +512,19 @@ export default function StockSignals() {
     setShowSignalDialog(true);
   };
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (showPageLoading: boolean = true) => {
+    if (showPageLoading) {
+      setLoading(true);
+    }
     try {
       const db = await getDB();
       
       // Stratégie optimisée: charger immédiatement depuis le cache local,
       // puis rafraîchir en arrière-plan si en ligne
       await processData(db);
-      setLoading(false); // Afficher les données locales immédiatement
+      if (showPageLoading) {
+        setLoading(false); // Afficher les données locales immédiatement
+      }
 
       // Si en ligne, synchroniser en arrière-plan sans bloquer l'UI
       if (isOnline) {
@@ -503,7 +551,9 @@ export default function StockSignals() {
     } catch (error) {
       toast.error('Erreur lors du chargement des données');
       console.error('Erreur:', error);
-      setLoading(false);
+      if (showPageLoading) {
+        setLoading(false);
+      }
     }
   }, [isOnline, user?.storeId]);
 
@@ -533,7 +583,7 @@ export default function StockSignals() {
       if (user?.storeId) url += `?storeId=${user.storeId}`;
       const response = await fetch(url);
       if (response.ok) {
-        const backendCategories = await response.json();
+        const backendCategories = normalizeBackendCollection(await response.json());
         // Filtrer côté client aussi pour sécurité
         const storeCategories = backendCategories.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
         const tx = db.transaction('expenseCategories', 'readwrite');
@@ -550,10 +600,13 @@ export default function StockSignals() {
   const loadExpensesAdvancedFromBackend = async (db: any) => {
     try {
       let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
-      if (user?.storeId) url += `?storeId=${user.storeId}`;
+      const params = new URLSearchParams();
+      if (user?.storeId) params.set('storeId', user.storeId);
+      params.set('limit', '10000');
+      url += `?${params.toString()}`;
       const response = await fetch(url);
       if (response.ok) {
-        const backendExpenses = await response.json();
+        const backendExpenses = normalizeBackendCollection(await response.json());
         // Filtrer côté client aussi pour sécurité
         const storeExpenses = backendExpenses.filter((e: any) => !user?.storeId || e.storeId === user.storeId);
         const tx = db.transaction('expensesAdvanced', 'readwrite');
@@ -573,30 +626,7 @@ export default function StockSignals() {
       if (user?.storeId) url += `?storeId=${user.storeId}`;
       const response = await fetch(url);
       if (response.ok) {
-        let backendSignals: any = await response.json();
-
-        // Defensive normalization: some backends return an object wrapper
-        // (e.g. { data: [...] }) or an object of records instead of a plain array.
-        if (!backendSignals) return;
-        if (!Array.isArray(backendSignals)) {
-          if (backendSignals.data && Array.isArray(backendSignals.data)) {
-            backendSignals = backendSignals.data;
-          } else if (typeof backendSignals === 'object') {
-            // If the object looks like a map of id -> record, convert to values
-            const values = Object.values(backendSignals).filter(v => v && typeof v === 'object');
-            if (values.length > 0) {
-              backendSignals = values;
-            } else {
-              // Fallback: wrap single object into an array
-              backendSignals = [backendSignals];
-            }
-          } else {
-            // Primitive response — wrap it so code below can treat it as array
-            backendSignals = [backendSignals];
-          }
-        }
-
-        if (!Array.isArray(backendSignals)) return;
+        const backendSignals = normalizeBackendCollection(await response.json());
 
         // Filtrer côté client aussi pour sécurité
         const storeSignals = backendSignals.filter((s: any) => !user?.storeId || s.storeId === user.storeId);
@@ -627,11 +657,14 @@ export default function StockSignals() {
 
   const loadSalesFromBackend = async (db: any) => {
     try {
-  let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php';
-  if (user?.storeId) url += `?storeId=${user.storeId}`;
-  const response = await fetch(url);
+      let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php';
+      const params = new URLSearchParams();
+      if (user?.storeId) params.set('storeId', user.storeId);
+      params.set('all', '1');
+      url += `?${params.toString()}`;
+      const response = await fetch(url);
       if (response.ok) {
-        const backendSales = await response.json();
+        const backendSales = normalizeBackendCollection(await response.json());
         const tx = db.transaction('sales', 'readwrite');
         await Promise.all([
           ...backendSales.map(s => tx.store.put(s)),
@@ -646,6 +679,44 @@ export default function StockSignals() {
   const loadFromLocal = async (db: any) => {
     await processData(db);
   };
+
+  const cleanupInvalidStockSignals = useCallback(async (signalsToCleanup: StockSignal[]) => {
+    const uniqueSignals = signalsToCleanup.filter((signal) => signal?.id && !cleanedInvalidSignalIdsRef.current.has(signal.id));
+    if (uniqueSignals.length === 0) return;
+
+    const db = await getDB();
+    const url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+
+    for (const signal of uniqueSignals) {
+      cleanedInvalidSignalIdsRef.current.add(signal.id);
+
+      try {
+        await db.delete('stockSignals', signal.id);
+      } catch (error) {
+        console.warn('Erreur suppression locale du signalement invalide:', signal.id, error);
+      }
+
+      if (isOnline) {
+        try {
+          const response = await fetch(`${url}?id=${encodeURIComponent(signal.id)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        } catch (error) {
+          console.warn('Suppression backend différée pour signalement invalide:', signal.id, error);
+          await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+        }
+      } else {
+        await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+      }
+    }
+
+    await updatePendingSyncCount();
+  }, [isOnline]);
 
   const processData = useCallback(async (db: any) => {
     // Charger toutes les données en une seule transaction pour optimiser les performances
@@ -662,10 +733,17 @@ export default function StockSignals() {
     const userSignals = signalsData
       .filter((signal: StockSignal) => signal.storeId === user?.storeId)
       .sort((a: StockSignal, b: StockSignal) => b.createdAt - a.createdAt);
+
+    const invalidSignals = userSignals.filter((signal: StockSignal) => isBogusStockSignal(signal));
+    const validSignals = userSignals.filter((signal: StockSignal) => !isBogusStockSignal(signal));
+
+    if (invalidSignals.length > 0) {
+      void cleanupInvalidStockSignals(invalidSignals);
+    }
     
     // Créer un Set pour des lookups rapides de signaux existants
     const signalLookup = new Set(
-      userSignals.map((s: StockSignal) => `${s.expenseId}_${s.productId}`)
+      validSignals.map((s: StockSignal) => `${s.expenseId}_${s.productId}`)
     );
 
     // Filtrer les dépenses actives avec lookups optimisés
@@ -692,10 +770,10 @@ export default function StockSignals() {
     // Mettre à jour tous les états en batch
     setProducts(productsData);
     setExpenseCategories(categoriesData);
-    setCompletedSignals(userSignals);
+    setCompletedSignals(validSignals);
     setActiveStocks(activeExpenses);
     setAllExpenses(expensesData);
-  }, [user?.storeId]);
+  }, [cleanupInvalidStockSignals, user?.storeId]);
 
   // Cache pour éviter de recharger les ventes et signaux à chaque calcul
   const salesCache = useMemo(() => ({ data: null as Sale[] | null, timestamp: 0 }), []);
@@ -739,6 +817,7 @@ export default function StockSignals() {
       let latestEndDate = 0;
       const storeId = user?.storeId;
       for (const signal of stockSignals) {
+        if (isBogusStockSignal(signal)) continue;
         if (signal.productId === productId && signal.storeId === storeId && signal.endDate > latestEndDate) {
           latestEndDate = signal.endDate;
         }
@@ -807,6 +886,7 @@ export default function StockSignals() {
       for (const productId of productIds) {
         let latestEndDate = 0;
         for (const signal of stockSignals) {
+          if (isBogusStockSignal(signal)) continue;
           if (signal.productId === productId && signal.storeId === storeId && signal.endDate > latestEndDate) {
             latestEndDate = signal.endDate;
           }
@@ -854,7 +934,8 @@ export default function StockSignals() {
     
     // 🔄 IMPORTANT : Recharger TOUTES les données fraîches avant de calculer
     // Cela garantit que les ventes, dépenses et produits sont à jour
-    setLoading(true);
+    setIsPreparingSignal(true);
+    setPreparingExpenseId(expense.id);
     toast.info('Chargement des données les plus récentes...', { duration: 2000 });
     
     try {
@@ -862,7 +943,7 @@ export default function StockSignals() {
       invalidateCaches();
       
       // Recharger toutes les données depuis le backend
-      await loadData();
+      await loadData(false);
       
       // ✅ CORRECTION : Récupérer l'expense MISE À JOUR depuis IndexedDB
       // après le rechargement pour avoir le bon montant
@@ -888,7 +969,8 @@ export default function StockSignals() {
       console.error('Erreur lors du rechargement des données:', error);
       toast.error('Erreur lors du chargement des données. Veuillez réessayer.');
     } finally {
-      setLoading(false);
+      setIsPreparingSignal(false);
+      setPreparingExpenseId(null);
     }
   };
 
@@ -1495,7 +1577,22 @@ export default function StockSignals() {
   }, [filteredActiveStocks, expenseTypeFilter]);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="relative p-6 space-y-6">
+      {isPreparingSignal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md shadow-xl border-primary/20">
+            <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
+              <Loader2 className="w-10 h-10 animate-spin text-primary" />
+              <div className="space-y-1">
+                <p className="text-lg font-semibold">Chargement des données les plus récentes...</p>
+                <p className="text-sm text-muted-foreground">
+                  Vérification des ventes et du stock avant d'ouvrir le signalement.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       <div className="flex justify-between items-start gap-4">
         <div>
           <h1 className="text-3xl font-bold">Signalement des Stocks</h1>
@@ -1747,11 +1844,17 @@ export default function StockSignals() {
                               onClick={() => handleStockEnd(expense)}
                               variant={isOld ? "destructive" : "default"}
                               size="lg"
-                              disabled={disableSignal}
+                              disabled={disableSignal || isPreparingSignal}
                               className={disableSignal ? "opacity-50" : ""}
                             >
-                              <Package className="w-4 h-4 mr-2" />
-                              {disableSignal
+                              {preparingExpenseId === expense.id ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              ) : (
+                                <Package className="w-4 h-4 mr-2" />
+                              )}
+                              {preparingExpenseId === expense.id
+                                ? "Chargement..."
+                                : disableSignal
                                 ? "Signaler l'ancien d'abord"
                                 : expense.type === 'direct'
                                 ? "Stock Fini"

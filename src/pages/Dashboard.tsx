@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB } from '@/lib/db';
+import { resolveUserOpenShift } from '@/lib/sync';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import SalesChart from '@/components/SalesChart';
 import ProductSalesChart from '@/components/ProductSalesChart';
@@ -594,8 +595,7 @@ export default function Dashboard() {
       }
     }
     // Get active shift
-    const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-    const userShift = shifts.find(s => s.userId === user?.id);
+    const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
 
     setStats({
       todaySales: todaySalesTotal,
@@ -640,8 +640,7 @@ export default function Dashboard() {
       }, 0);
 
       // Active shift
-      const openShifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-      const activeShift = openShifts.find((s: any) => s.userId === user?.id) || null;
+      const activeShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
 
       setCashierLocalStats({
         totalSales,

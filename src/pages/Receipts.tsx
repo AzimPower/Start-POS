@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { pendingEmailService } from '@/lib/pendingEmailService';
+import { resolveUserOpenShift } from '@/lib/sync';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -79,6 +80,7 @@ export default function Receipts() {
   const [showRefundDialog, setShowRefundDialog] = useState(false);
   const [saleToRefund, setSaleToRefund] = useState<Sale | null>(null);
   const [refundComment, setRefundComment] = useState('');
+  const [pendingRefundIds, setPendingRefundIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     // Check if the user has an active (open) shift, but load data regardless
@@ -87,9 +89,7 @@ export default function Receipts() {
       setShiftsChecked(false);
       let userShift: any = null;
       try {
-        const db = await getDB();
-        const shiftsOpen = await db.getAllFromIndex('shifts', 'by-status', 'open');
-        userShift = shiftsOpen.find((s: any) => s.userId === user?.id);
+        userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
         if (!cancelled) setActiveShift(userShift);
       } catch (e) {
         console.error('Erreur vérification shift:', e);
@@ -110,7 +110,7 @@ export default function Receipts() {
 
     checkShiftAndLoad();
     return () => { cancelled = true; };
-  }, [user]);
+  }, [user, isBackendReachable]);
 
   // we'll lazy-import getPendingSyncCount when needed to avoid circular imports
   const updatePendingSyncCount = async () => {
@@ -469,8 +469,15 @@ export default function Receipts() {
   const handleRefund = async () => {
     if (!saleToRefund) return;
 
+    const targetSaleId = saleToRefund.id;
     try {
       setLoading(true);
+      setPendingRefundIds(prev => {
+        const next = new Set(prev);
+        next.add(targetSaleId);
+        return next;
+      });
+      setShowRefundDialog(false);
       const db = await getDB();
       
       // Créer l'objet vente remboursée
@@ -674,13 +681,22 @@ export default function Receipts() {
         // Ne pas bloquer le processus si l'email échoue
       }
 
-  setShowRefundDialog(false);
-  setSaleToRefund(null);
-  setRefundComment('');
-  // Update pending sync count and reload
-  await updatePendingSyncCount();
-  loadData();
+      setSaleToRefund(null);
+      setRefundComment('');
+      setPendingRefundIds(prev => {
+        const next = new Set(prev);
+        next.delete(targetSaleId);
+        return next;
+      });
+      // Update pending sync count and reload
+      await updatePendingSyncCount();
+      loadData();
     } catch (error) {
+      setPendingRefundIds(prev => {
+        const next = new Set(prev);
+        next.delete(targetSaleId);
+        return next;
+      });
       toast.error('Erreur lors du remboursement');
       console.error('Erreur:', error);
     } finally {
@@ -701,7 +717,7 @@ export default function Receipts() {
       <Card>
         <CardHeader>
           <div className="flex justify-between items-start">
-            <CardTitle className="text-xl sm:text-2xl">Liste des Reçus</CardTitle>
+            <CardTitle className="text-xl sm:text-2xl">Historique des Ventes</CardTitle>
             {/* Network status is shown in the header; duplicate controls removed here. */}
           </div>
           
@@ -770,7 +786,7 @@ export default function Receipts() {
                     const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
                     // ...existing code for receipt row...
                     return (
-                      <TableRow key={sale.id} className={sale.refunded ? 'opacity-50' : ''}>
+                      <TableRow key={sale.id} className={sale.refunded || pendingRefundIds.has(sale.id) ? 'opacity-50' : ''}>
                         <TableCell className="font-medium">
                           <div>
                             <div className="font-medium">{receiptNumber}</div>
@@ -788,7 +804,7 @@ export default function Receipts() {
                                 <div className="text-xs">
                                   {sale.items?.length || 0} article{(sale.items?.length || 0) > 1 ? 's' : ''} • {getPaymentMethodText(sale.paymentMethod)}
                                 </div>
-                                {sale.refunded ? (
+                                {sale.refunded || pendingRefundIds.has(sale.id) ? (
                                   <div className="text-xs text-destructive font-medium">Remboursé</div>
                                 ) : null}
                               </div>
@@ -813,7 +829,7 @@ export default function Receipts() {
                         )}
                         <TableCell className="hidden md:table-cell">{getPaymentMethodText(sale.paymentMethod)}</TableCell>
                         <TableCell className="hidden lg:table-cell">
-                          {sale.refunded ? (
+                          {sale.refunded || pendingRefundIds.has(sale.id) ? (
                             <span className="text-destructive font-medium">Remboursé</span>
                           ) : (
                             <span className="text-green-600 font-medium">Payé</span>
@@ -844,7 +860,7 @@ export default function Receipts() {
                                 <Printer className="w-4 h-4" />
                               </Button>
                             )}
-                            {!sale.refunded && (() => {
+                            {!sale.refunded && !pendingRefundIds.has(sale.id) && (() => {
                               const shift = shifts.find(s => s.id === sale.shiftId);
                               const isClosed = shift && shift.status === 'closed';
                               return (

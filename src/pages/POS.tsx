@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
 
 interface Product {
   id: string;
@@ -248,9 +249,7 @@ export default function POS() {
     
     const checkActiveShift = async () => {
       try {
-        const db = await getDB();
-        const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-        const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+        const userShift = await resolveUserOpenShift(user?.id, user?.storeId);
         
         // Si le shift actif a changé (nouvel ID ou fermé)
         if (userShift?.id !== activeShift?.id) {
@@ -288,9 +287,7 @@ export default function POS() {
       if (document.visibilityState === 'visible') {
         console.log('👁️ [POS] Page visible - rechargement du shift actif');
         try {
-          const db = await getDB();
-          const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-          const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+          const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
           // Toujours mettre à jour l'état (shift fermé ou ouvert)
           if (userShift?.id !== activeShift?.id) {
             console.log(`🔄 [POS] Nouveau shift actif détecté:`, userShift?.id || 'aucun');
@@ -304,7 +301,7 @@ export default function POS() {
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [user, activeShift?.id]);
+  }, [user, activeShift?.id, isBackendReachable]);
 
     const loadDraftSales = async () => {
       const db = await getDB();
@@ -369,16 +366,11 @@ export default function POS() {
           if (shiftsResponse.ok) {
             const backendShifts = await shiftsResponse.json();
             if (Array.isArray(backendShifts)) {
-              const tx = db.transaction('shifts', 'readwrite');
-              await Promise.all([
-                ...backendShifts.map(s => tx.store.put(s)),
-                tx.done
-              ]);
+              await mergeBackendShifts(backendShifts);
               console.log(`✅ [POS] ${backendShifts.length} shifts synchronisés depuis le backend`);
               
               // Recharger le shift actif après synchronisation
-              const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-              const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+              const userShift = await resolveUserOpenShift(user?.id, user?.storeId);
               if (userShift) {
                 console.log(`🔄 [POS] Shift actif rechargé depuis le backend:`, userShift.id);
                 setActiveShift(userShift);
@@ -485,8 +477,7 @@ export default function POS() {
 
   const loadLocalData = async (db: any) => {
     // Check for active shift - filter by both userId and storeId
-    const shifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
-    const userShift = shifts.find(s => s.userId === user?.id && s.storeId === user?.storeId);
+    const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
     setActiveShift(userShift);
     // Indicate that we've finished checking for shifts (used to avoid flashing the
     // "no active shift" message before the DB/backend check completes)

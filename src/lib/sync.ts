@@ -191,6 +191,191 @@ export async function syncWithServer() {
 
 	return { success: true, itemsCount: successCount };
 }
+
+async function getQueuedShiftIds() {
+	const queuedShiftIds = new Set<string>();
+
+	try {
+		const pendingOps = await getPendingSyncOps();
+		for (const op of pendingOps) {
+			if ((op.url || '').includes('shifts.php') && op.data?.id) {
+				queuedShiftIds.add(String(op.data.id));
+			}
+		}
+	} catch (e) {
+		console.warn('Erreur lecture pending_ops shifts:', e);
+	}
+
+	try {
+		const { getDB } = await import('./db');
+		const db = await getDB();
+		const syncQueue = await db.getAll('syncQueue');
+		for (const op of syncQueue) {
+			if ((op.table === 'shifts' || (op.url || '').includes('shifts')) && op.data?.id) {
+				queuedShiftIds.add(String(op.data.id));
+			}
+		}
+	} catch (e) {
+		console.warn('Erreur lecture syncQueue shifts:', e);
+	}
+
+	return queuedShiftIds;
+}
+
+const closedShiftMarkerKey = (userId?: string, storeId?: string) => `closed_shift_marker_${String(userId || '')}_${String(storeId || '')}`;
+
+function readClosedShiftMarker(userId?: string, storeId?: string) {
+	if (!userId) return null;
+	try {
+		const raw = localStorage.getItem(closedShiftMarkerKey(userId, storeId));
+		return raw ? JSON.parse(raw) : null;
+	} catch {
+		return null;
+	}
+}
+
+export function persistClosedShiftMarker(shift: { id: string; userId: string; storeId: string; openedAt?: number; closedAt?: number | null }) {
+	try {
+		localStorage.setItem(closedShiftMarkerKey(shift.userId, shift.storeId), JSON.stringify({
+			id: shift.id,
+			userId: shift.userId,
+			storeId: shift.storeId,
+			openedAt: Number(shift.openedAt || 0),
+			closedAt: Number(shift.closedAt || Date.now()),
+			storedAt: Date.now(),
+		}));
+	} catch {
+		// ignore localStorage issues
+	}
+}
+
+function shouldKeepLocalShift(localShift: any, backendShift: any, queuedShiftIds: Set<string>) {
+	if (!localShift) return false;
+	if (queuedShiftIds.has(String(backendShift.id))) return true;
+	if (localShift.status === 'closed' && backendShift.status === 'open') return true;
+
+	const localClosedAt = Number(localShift.closedAt || 0);
+	const backendClosedAt = Number(backendShift.closedAt || 0);
+	if (localClosedAt && localClosedAt >= backendClosedAt && backendShift.status !== 'closed') return true;
+
+	return false;
+}
+
+export async function mergeBackendShifts(backendShifts: any[]) {
+	if (!Array.isArray(backendShifts) || backendShifts.length === 0) return;
+
+	const { getDB } = await import('./db');
+	const db = await getDB();
+	const queuedShiftIds = await getQueuedShiftIds();
+	const tx = db.transaction('shifts', 'readwrite');
+
+	for (const backendShift of backendShifts) {
+		const localShift = await tx.store.get(backendShift.id);
+		if (shouldKeepLocalShift(localShift, backendShift, queuedShiftIds)) continue;
+		await tx.store.put(localShift ? { ...localShift, ...backendShift } : backendShift);
+	}
+
+	await tx.done;
+}
+
+export async function resolveUserOpenShift(userId?: string, storeId?: string, options?: { syncWithBackend?: boolean }) {
+	if (!userId) return null;
+
+	const { getDB } = await import('./db');
+	const db = await getDB();
+
+	if (options?.syncWithBackend && storeId && navigator.onLine) {
+		const backendUp = await backendAvailable().catch(() => false);
+		if (backendUp) {
+			try {
+				const url = new URL('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php');
+				url.searchParams.set('storeId', String(storeId));
+				const response = await fetch(url.toString(), { cache: 'no-store' });
+				if (response.ok) {
+					const backendShifts = await response.json();
+					if (Array.isArray(backendShifts)) {
+						await mergeBackendShifts(backendShifts);
+
+						const queuedShiftIds = await getQueuedShiftIds();
+						const backendIds = new Set(backendShifts.map((shift: any) => String(shift.id)));
+						const localShifts = await db.getAll('shifts');
+						const fiveMinutes = 5 * 60 * 1000;
+						const ghostOpenShifts = localShifts.filter((shift: any) =>
+							shift.status === 'open' &&
+							String(shift.userId) === String(userId) &&
+							String(shift.storeId || '') === String(storeId || '') &&
+							!backendIds.has(String(shift.id)) &&
+							!queuedShiftIds.has(String(shift.id)) &&
+							(Date.now() - Number(shift.openedAt || 0)) > fiveMinutes
+						);
+
+						if (ghostOpenShifts.length > 0) {
+							const cleanupTx = db.transaction('shifts', 'readwrite');
+							await Promise.all([
+								...ghostOpenShifts.map((shift: any) => cleanupTx.store.delete(shift.id)),
+								cleanupTx.done,
+							]);
+						}
+					}
+				}
+			} catch (e) {
+				console.warn('Erreur sync shifts pour résolution shift actif:', e);
+			}
+		}
+	}
+
+	let openShifts = await db.getAllFromIndex('shifts', 'by-status', 'open');
+	openShifts = openShifts
+		.filter((shift: any) =>
+			String(shift.userId) === String(userId) &&
+			(storeId ? String(shift.storeId || '') === String(storeId) : true)
+		)
+		.sort((a: any, b: any) => Number(b.openedAt || 0) - Number(a.openedAt || 0));
+
+	const closedMarker = readClosedShiftMarker(userId, storeId);
+	if (closedMarker) {
+		const staleOpenShifts = openShifts.filter((shift: any) =>
+			String(shift.id) === String(closedMarker.id) ||
+			Number(shift.openedAt || 0) <= Number(closedMarker.closedAt || 0)
+		);
+
+		if (staleOpenShifts.length > 0) {
+			const tx = db.transaction('shifts', 'readwrite');
+			await Promise.all([
+				...staleOpenShifts.map((shift: any) => tx.store.put({
+					...shift,
+					status: 'closed',
+					closedAt: Number(closedMarker.closedAt || Date.now()),
+					closingAmount: shift.closingAmount ?? shift.openingAmount ?? 0,
+					expectedAmount: shift.expectedAmount ?? shift.openingAmount ?? 0,
+					difference: shift.difference ?? 0,
+				})),
+				tx.done,
+			]);
+
+			openShifts = openShifts.filter((shift: any) => !staleOpenShifts.some((stale: any) => String(stale.id) === String(shift.id)));
+		}
+	}
+
+	if (openShifts.length > 1) {
+		const [latestShift, ...duplicates] = openShifts;
+		const tx = db.transaction('shifts', 'readwrite');
+		await Promise.all([
+			...duplicates.map((shift: any) => tx.store.put({
+				...shift,
+				status: 'closed',
+				closedAt: Date.now(),
+				closingAmount: shift.openingAmount || 0,
+				expectedAmount: shift.openingAmount || 0,
+				difference: 0,
+			})),
+			tx.done,
+		]);
+		return latestShift;
+	}
+
+	return openShifts[0] || null;
+}
  
  // Helper générique pour récupérer et merger une entité depuis le backend
 export async function fetchAndMerge(endpoint: string, storeName: string, tableName?: string, normalizeFn?: (item: any)=>any, params?: Record<string, string>) {

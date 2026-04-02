@@ -78,13 +78,13 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
-    "url": "assets/index-Bra02pxV.css",
+    "url": "assets/index-BU6rgffP.css",
     "revision": null
   }, {
-    "url": "assets/index-HQ3IA4iZ.js",
+    "url": "assets/index-DJqAg0Ww.js",
     "revision": null
   }, {
-    "url": "assets/virtual_pwa-register-YcvW9vL9.js",
+    "url": "assets/virtual_pwa-register-Bcx2oZGA.js",
     "revision": null
   }, {
     "url": "assets/workbox-window.prod.es5-B9K5rw8f.js",
@@ -139,7 +139,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
   }, {
     "url": "index.html",
-    "revision": "f02d51c9866a4a6ab04dc05c3dbb6cbf"
+    "revision": "ade84b70fccab206dca0cf24ca95a16e"
   }, {
     "url": "offline.html",
     "revision": "893dde22b9df46cfbc4f8746c7bffa32"
