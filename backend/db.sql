@@ -343,6 +343,7 @@ CREATE TABLE `store_balance_settings` (
   `fondCategories` text DEFAULT NULL,
   `beneficeCategories` text DEFAULT NULL,
   `trackIndirectExpenses` tinyint(1) DEFAULT 1,
+  `trackIndirectExpensesEnabledAt` bigint(20) DEFAULT NULL,
   `fondManualValue` double DEFAULT NULL,
   `fondManualAppliedAt` bigint(20) DEFAULT NULL,
   `beneficeManualValue` double DEFAULT NULL,
@@ -366,6 +367,40 @@ CREATE TABLE `store_indicator_overrides` (
   `userId` varchar(36) DEFAULT NULL,
   `note` varchar(255) DEFAULT NULL,
   `createdAt` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `notifications`
+--
+
+CREATE TABLE `notifications` (
+  `id` varchar(36) NOT NULL,
+  `title` varchar(160) NOT NULL,
+  `message` text NOT NULL,
+  `type` enum('info','success','warning','critical') NOT NULL DEFAULT 'info',
+  `targetType` enum('all','role','store','user') NOT NULL,
+  `targetRole` enum('super_admin','manager','admin','cashier') DEFAULT NULL,
+  `targetStoreId` varchar(36) DEFAULT NULL,
+  `targetUserId` varchar(36) DEFAULT NULL,
+  `senderUserId` varchar(36) NOT NULL,
+  `active` tinyint(1) NOT NULL DEFAULT 1,
+  `createdAt` bigint(20) NOT NULL,
+  `expiresAt` bigint(20) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `notification_reads`
+--
+
+CREATE TABLE `notification_reads` (
+  `id` varchar(36) NOT NULL,
+  `notificationId` varchar(36) NOT NULL,
+  `userId` varchar(36) NOT NULL,
+  `readAt` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -457,6 +492,28 @@ ALTER TABLE `expenses_advanced`
 --
 ALTER TABLE `expense_categories`
   ADD PRIMARY KEY (`id`);
+
+--
+-- Index pour la table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_notifications_createdAt` (`createdAt`),
+  ADD KEY `idx_notifications_targetType` (`targetType`),
+  ADD KEY `idx_notifications_targetRole` (`targetRole`),
+  ADD KEY `idx_notifications_targetStoreId` (`targetStoreId`),
+  ADD KEY `idx_notifications_targetUserId` (`targetUserId`),
+  ADD KEY `idx_notifications_senderUserId` (`senderUserId`),
+  ADD KEY `idx_notifications_active_expires` (`active`,`expiresAt`);
+
+--
+-- Index pour la table `notification_reads`
+--
+ALTER TABLE `notification_reads`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_notification_user` (`notificationId`,`userId`),
+  ADD KEY `idx_notification_reads_userId` (`userId`),
+  ADD KEY `idx_notification_reads_notificationId` (`notificationId`);
 
 --
 -- Index pour la table `payments`

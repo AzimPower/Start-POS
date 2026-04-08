@@ -9,13 +9,16 @@ export default defineConfig(({ mode }) => ({
     host: "::",
     port: 8080,
   },
+  esbuild: mode === 'production' ? {
+    drop: ['console', 'debugger'],
+  } : undefined,
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       devOptions: {
-        enabled: true, // Activer en développement pour tester
+        enabled: false,
         type: 'module'
       },
       includeAssets: ['favicon/site.webmanifest', 'robots.txt', 'offline.html'],

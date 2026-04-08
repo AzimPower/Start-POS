@@ -25,6 +25,38 @@ require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+function normalize_optional_timestamp($value) {
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    $parsed = (int)$value;
+    return $parsed > 0 ? $parsed : null;
+}
+
+function resolve_track_indirect_enabled_at($nextTracking, $requestedEnabledAt, $existingSettings, $now) {
+    if ($nextTracking === null) {
+        if (!$existingSettings) {
+            return null;
+        }
+
+        return normalize_optional_timestamp($existingSettings['trackIndirectExpensesEnabledAt'] ?? null);
+    }
+
+    if ((int)$nextTracking !== 1) {
+        return null;
+    }
+
+    $existingWasTracking = $existingSettings && isset($existingSettings['trackIndirectExpenses'])
+        && (int)$existingSettings['trackIndirectExpenses'] === 1;
+
+    if ($existingWasTracking) {
+        return normalize_optional_timestamp($existingSettings['trackIndirectExpensesEnabledAt'] ?? null);
+    }
+
+    return $requestedEnabledAt ?? $now;
+}
+
 try {
     switch ($method) {
         case 'GET':
@@ -46,6 +78,7 @@ try {
                 try {
                     // Preference boutique pour StockSignals (par defaut: activee)
                     $store['trackIndirectExpenses'] = true;
+                    $store['trackIndirectExpensesEnabledAt'] = null;
                     // Solde calculé (comme avant)
                     $ovStmt = $pdo->prepare('SELECT * FROM store_balance_overrides WHERE storeId = ? ORDER BY appliedAt DESC, createdAt DESC LIMIT 1');
                     $ovStmt->execute([$store['id']]);
@@ -70,6 +103,7 @@ try {
                         if (isset($settings['trackIndirectExpenses'])) {
                             $store['trackIndirectExpenses'] = ((int)$settings['trackIndirectExpenses'] === 1);
                         }
+                        $store['trackIndirectExpensesEnabledAt'] = normalize_optional_timestamp($settings['trackIndirectExpensesEnabledAt'] ?? null);
                         // expose configured categories to the API consumer
                         $store['fondCategories'] = $fondCats;
                         $store['beneficeCategories'] = $benefCats;
@@ -458,23 +492,26 @@ try {
                     $fondCats = isset($data['fondCategories']) && is_array($data['fondCategories']) ? json_encode($data['fondCategories']) : null;
                     $benCats = isset($data['beneficeCategories']) && is_array($data['beneficeCategories']) ? json_encode($data['beneficeCategories']) : null;
                     $trackIndirectExpenses = isset($data['trackIndirectExpenses']) ? ((int)!!$data['trackIndirectExpenses']) : null;
+                    $requestedEnabledAt = normalize_optional_timestamp($data['trackIndirectExpensesEnabledAt'] ?? null);
                     try {
                         // upsert logic: if exists update else insert
-                        $check = $pdo->prepare('SELECT COUNT(*) FROM store_balance_settings WHERE storeId = ?');
+                        $check = $pdo->prepare('SELECT * FROM store_balance_settings WHERE storeId = ? LIMIT 1');
                         $check->execute([$storeId]);
-                        $cnt = (int)$check->fetchColumn();
-                        if ($cnt === 0) {
+                        $existing = $check->fetch();
+                        $now = (int)(microtime(true)*1000);
+                        $trackIndirectExpensesEnabledAt = resolve_track_indirect_enabled_at($trackIndirectExpenses, $requestedEnabledAt, $existing, $now);
+                        if (!$existing) {
                             $id = $data['id'] ?? uniqid();
-                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
-                            $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, (int)(microtime(true)*1000), (int)(microtime(true)*1000)]);
+                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                            $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $now]);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
                             if ($trackIndirectExpenses === null) {
                                 $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, updatedAt = ? WHERE storeId = ?');
-                                $upd->execute([$fondCats, $benCats, (int)(microtime(true)*1000), $storeId]);
+                                $upd->execute([$fondCats, $benCats, $now, $storeId]);
                             } else {
-                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, updatedAt = ? WHERE storeId = ?');
-                                $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, (int)(microtime(true)*1000), $storeId]);
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $storeId]);
                             }
                             echo json_encode(['success' => true]);
                         }
@@ -491,19 +528,21 @@ try {
                     }
                     $storeId = $data['storeId'];
                     $trackIndirectExpenses = ((int)!!$data['trackIndirectExpenses']);
+                    $requestedEnabledAt = normalize_optional_timestamp($data['trackIndirectExpensesEnabledAt'] ?? null);
                     try {
-                        $check = $pdo->prepare('SELECT id FROM store_balance_settings WHERE storeId = ? LIMIT 1');
+                        $check = $pdo->prepare('SELECT * FROM store_balance_settings WHERE storeId = ? LIMIT 1');
                         $check->execute([$storeId]);
                         $existing = $check->fetch();
                         $now = (int)(microtime(true)*1000);
+                        $trackIndirectExpensesEnabledAt = resolve_track_indirect_enabled_at($trackIndirectExpenses, $requestedEnabledAt, $existing, $now);
                         if (!$existing) {
                             $id = $data['id'] ?? uniqid();
-                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
-                            $ins->execute([$id, $storeId, null, null, $trackIndirectExpenses, $now, $now]);
+                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                            $ins->execute([$id, $storeId, null, null, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $now]);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
-                            $upd = $pdo->prepare('UPDATE store_balance_settings SET trackIndirectExpenses = ?, updatedAt = ? WHERE storeId = ?');
-                            $upd->execute([$trackIndirectExpenses, $now, $storeId]);
+                            $upd = $pdo->prepare('UPDATE store_balance_settings SET trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, updatedAt = ? WHERE storeId = ?');
+                            $upd->execute([$trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $storeId]);
                             echo json_encode(['success' => true]);
                         }
                     } catch (PDOException $ex) {
@@ -639,6 +678,9 @@ try {
                     // Supprimer les items de vente liés aux ventes du magasin
                     $stmt = $pdo->prepare('DELETE si FROM sale_items si INNER JOIN sales s ON si.saleId = s.id WHERE s.storeId = ?');
                     $stmt->execute([$id]);
+                    // Supprimer les paiements liés aux ventes du magasin
+                    $stmt = $pdo->prepare('DELETE p FROM payments p INNER JOIN sales s ON p.saleId = s.id WHERE s.storeId = ?');
+                    $stmt->execute([$id]);
                     // Supprimer les ventes liées
                     $stmt = $pdo->prepare('DELETE FROM sales WHERE storeId=?');
                     $stmt->execute([$id]);
@@ -647,6 +689,12 @@ try {
                     $stmt->execute([$id]);
                     // Supprimer les produits liés
                     $stmt = $pdo->prepare('DELETE FROM products WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    // Supprimer le stock produit lié
+                    $stmt = $pdo->prepare('DELETE FROM product_stock WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    // Supprimer les ajustements de stock liés
+                    $stmt = $pdo->prepare('DELETE FROM stock_adjustments WHERE storeId=?');
                     $stmt->execute([$id]);
                     // Supprimer les catégories liées
                     $stmt = $pdo->prepare('DELETE FROM categories WHERE storeId=?');

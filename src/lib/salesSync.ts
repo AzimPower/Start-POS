@@ -1,0 +1,100 @@
+import { getPendingSyncOps } from './sync';
+const SALES_API_PATH = '/backend/api/sales.php';
+type QueryParams = URLSearchParams | Record<string, string | number | boolean | null | undefined>;
+export function buildBypassUrl(baseUrl: string, params?: QueryParams) {
+    const url = new URL(baseUrl);
+    if (params instanceof URLSearchParams) {
+        params.forEach((value, key) => {
+            if (value != null) {
+                url.searchParams.set(key, value);
+            }
+        });
+    }
+    else if (params) {
+        for (const [key, value] of Object.entries(params)) {
+            if (value != null) {
+                url.searchParams.set(key, String(value));
+            }
+        }
+    }
+    url.searchParams.set('_bypass_sw', '1');
+    url.searchParams.set('_ts', String(Date.now()));
+    return url.toString();
+}
+export function isSaleRefunded(sale: any) {
+    return sale?.refunded === true || sale?.refunded === 1 || sale?.refunded === '1';
+}
+function toTimestamp(value: any) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+function mergeLocalSale(localSale: any, backendSale: any) {
+    const mergedSale = {
+        ...backendSale,
+        ...localSale,
+    };
+    if (Array.isArray(localSale?.items) && localSale.items.length > 0) {
+        mergedSale.items = localSale.items;
+    }
+    return mergedSale;
+}
+async function getPendingSaleIds(db: any) {
+    const pendingSaleIds = new Set<string>();
+    try {
+        const syncQueue = await db.getAll('syncQueue');
+        for (const op of syncQueue) {
+            const url = String(op?.url || '');
+            const table = String(op?.table || '');
+            if ((table === 'sales' || url.includes(SALES_API_PATH)) && op?.data?.id) {
+                pendingSaleIds.add(String(op.data.id));
+            }
+        }
+    }
+    catch (error) {
+    }
+    try {
+        const pendingOps = await getPendingSyncOps();
+        for (const op of pendingOps) {
+            if (String(op?.url || '').includes(SALES_API_PATH) && op?.data?.id) {
+                pendingSaleIds.add(String(op.data.id));
+            }
+        }
+    }
+    catch (error) {
+    }
+    return pendingSaleIds;
+}
+export function shouldPreferLocalSale(localSale: any, backendSale: any, pendingSaleIds: Set<string>) {
+    const saleId = String(backendSale?.id || localSale?.id || '');
+    if (!saleId)
+        return false;
+    if (pendingSaleIds.has(saleId)) {
+        return true;
+    }
+    const localRefunded = isSaleRefunded(localSale);
+    const backendRefunded = isSaleRefunded(backendSale);
+    if (localRefunded && !backendRefunded) {
+        return true;
+    }
+    return toTimestamp(localSale?.refundedAt) > toTimestamp(backendSale?.refundedAt);
+}
+export async function mergeBackendSalesIntoLocalDb(db: any, backendSales: any[]) {
+    const localSales = await db.getAll('sales');
+    const localSalesById = new Map<string, any>(localSales
+        .filter((sale: any) => sale?.id != null)
+        .map((sale: any) => [String(sale.id), sale]));
+    const pendingSaleIds = await getPendingSaleIds(db);
+    const mergedSales = (backendSales || []).map((backendSale: any) => {
+        const localSale = localSalesById.get(String(backendSale?.id || ''));
+        if (!localSale || !shouldPreferLocalSale(localSale, backendSale, pendingSaleIds)) {
+            return backendSale;
+        }
+        return mergeLocalSale(localSale, backendSale);
+    });
+    const tx = db.transaction('sales', 'readwrite');
+    await Promise.all([
+        ...mergedSales.map((sale: any) => tx.store.put(sale)),
+        tx.done,
+    ]);
+    return mergedSales;
+}

@@ -1,5 +1,5 @@
 export function buildReceiptHtml(contentElement: HTMLElement, title = 'Reçu') {
-  const html = `<!DOCTYPE html>
+    const html = `<!DOCTYPE html>
   <html>
     <head>
       <meta charset="utf-8">
@@ -14,18 +14,15 @@ export function buildReceiptHtml(contentElement: HTMLElement, title = 'Reçu') {
       ${contentElement.innerHTML}
     </body>
   </html>`;
-  return html;
+    return html;
 }
-
 export async function tryNativePrint(html: string, fileName?: string): Promise<boolean> {
-  // Force native ESC/POS printing only. This function will throw if native APIs are not available
-  // to ensure the web fallback is removed as requested.
-  const { isNativePrinterAvailable, nativePrint } = await import('./nativePrinter.ts');
-  if (!(await isNativePrinterAvailable())) {
-    // Explicit failure mode: caller should handle this to inform user to pair a printer.
-    console.error('Native printer not available');
-    return false;
-  }
-  return await nativePrint(html, fileName);
+    // Force native ESC/POS printing only. This function will throw if native APIs are not available
+    // to ensure the web fallback is removed as requested.
+    const { isNativePrinterAvailable, nativePrint } = await import('./nativePrinter.ts');
+    if (!(await isNativePrinterAvailable())) {
+        return false;
+    }
+    return await nativePrint(html, fileName);
 }
 // browserPrint removed: printing is native-only now.

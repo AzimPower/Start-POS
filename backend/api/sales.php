@@ -15,6 +15,10 @@ require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+function is_refunded_sale_flag($value) {
+    return $value === true || $value === 1 || $value === '1' || $value === 'true';
+}
+
 switch ($method) {
     case 'GET':
         $storeId = $_GET['storeId'] ?? null;
@@ -124,12 +128,18 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+
+        $existingSaleStmt = $pdo->prepare('SELECT refunded, refundedAt FROM sales WHERE id = ? LIMIT 1');
+        $existingSaleStmt->execute([$data['id'] ?? '']);
+        $existingSale = $existingSaleStmt->fetch(PDO::FETCH_ASSOC);
+        $wasRefunded = $existingSale ? is_refunded_sale_flag($existingSale['refunded'] ?? false) : false;
         
         // Vérifier si c'est un remboursement (refunded = true et refundedAt défini)
         $isRefund = isset($data['refunded']) && $data['refunded'] === true && isset($data['refundedAt']);
+        $shouldRestoreStock = $isRefund && !$wasRefunded;
         
         // Si c'est un remboursement, restaurer le stock des produits
-        if ($isRefund && isset($data['items']) && is_array($data['items'])) {
+        if ($shouldRestoreStock && isset($data['items']) && is_array($data['items'])) {
             foreach ($data['items'] as $item) {
                 try {
                     // Récupérer le stock actuel du produit pour ce magasin
@@ -199,8 +209,11 @@ switch ($method) {
         
         $response = ['success' => true];
         if ($isRefund) {
-            $response['stockRestored'] = true;
-            $response['message'] = 'Vente remboursée et stock restauré';
+            $response['stockRestored'] = $shouldRestoreStock;
+            $response['alreadyRefunded'] = $wasRefunded;
+            $response['message'] = $shouldRestoreStock
+                ? 'Vente remboursée et stock restauré'
+                : 'Vente déjà remboursée, aucune restauration supplémentaire appliquée';
         }
         
         echo json_encode($response);

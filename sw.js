@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
+define(['./workbox-462d1bf5'], (function (workbox) { 'use strict';
 
   self.skipWaiting();
   workbox.clientsClaim();
@@ -78,74 +78,74 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
-    "url": "assets/index-BU6rgffP.css",
-    "revision": null
-  }, {
-    "url": "assets/index-DJqAg0Ww.js",
-    "revision": null
-  }, {
-    "url": "assets/virtual_pwa-register-Bcx2oZGA.js",
-    "revision": null
-  }, {
-    "url": "assets/workbox-window.prod.es5-B9K5rw8f.js",
-    "revision": null
-  }, {
-    "url": "favicon/apple-touch-icon.png",
-    "revision": "bdf391ce0f39c8245b44ab485cc5a100"
-  }, {
-    "url": "favicon/favicon-96x96.png",
-    "revision": "f2f0453dfcb30cb50e87f1f89556a47a"
-  }, {
-    "url": "favicon/favicon.svg",
-    "revision": "c4413c13486b9a638c2a3d98add8efc2"
-  }, {
-    "url": "favicon/icon-128x128.png",
-    "revision": "b8d86a73e8c0d33b7163862d5dd1d039"
-  }, {
-    "url": "favicon/icon-16x16.png",
-    "revision": "884a7d13f50d103c6d55523a2f3c7f49"
-  }, {
-    "url": "favicon/icon-192x192.png",
-    "revision": "5faca95786400124dad823057e7bca7a"
-  }, {
-    "url": "favicon/icon-256x256.png",
-    "revision": "8e6dba4d886dd7a68ea1e0946bedd87e"
-  }, {
-    "url": "favicon/icon-32x32.png",
-    "revision": "da2ec5899caf7eb1c4572550a1820625"
-  }, {
-    "url": "favicon/icon-384x384.png",
-    "revision": "f094ca3ca425e0d927feb4096eeb62bc"
-  }, {
-    "url": "favicon/icon-48x48.png",
-    "revision": "84d46450c24a0801a373a50e7cc6ee77"
-  }, {
-    "url": "favicon/icon-512x512.png",
-    "revision": "9f76a0a096475ec2265f996f02c6faf6"
-  }, {
-    "url": "favicon/icon-64x64.png",
-    "revision": "0a4069de4d3bb1c1d4147e0a3a5f13a9"
-  }, {
-    "url": "favicon/icon-96x96.png",
-    "revision": "ebae54b8432f6bc7c255a65653764e1f"
-  }, {
-    "url": "favicon/logo.svg",
-    "revision": "d41d8cd98f00b204e9800998ecf8427e"
-  }, {
-    "url": "favicon/web-app-manifest-192x192.png",
-    "revision": "4d86d4a20cf2eeac58d942976a25e2c4"
-  }, {
-    "url": "favicon/web-app-manifest-512x512.png",
-    "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
-  }, {
-    "url": "index.html",
-    "revision": "ade84b70fccab206dca0cf24ca95a16e"
+    "url": "placeholder.svg",
+    "revision": "35707bd9960ba5281c72af927b79291f"
   }, {
     "url": "offline.html",
     "revision": "893dde22b9df46cfbc4f8746c7bffa32"
   }, {
-    "url": "placeholder.svg",
-    "revision": "35707bd9960ba5281c72af927b79291f"
+    "url": "index.html",
+    "revision": "b7f3820ba1389b8ffed15071cafb3a40"
+  }, {
+    "url": "favicon/web-app-manifest-512x512.png",
+    "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
+  }, {
+    "url": "favicon/web-app-manifest-192x192.png",
+    "revision": "4d86d4a20cf2eeac58d942976a25e2c4"
+  }, {
+    "url": "favicon/logo.svg",
+    "revision": "d41d8cd98f00b204e9800998ecf8427e"
+  }, {
+    "url": "favicon/icon-96x96.png",
+    "revision": "ebae54b8432f6bc7c255a65653764e1f"
+  }, {
+    "url": "favicon/icon-64x64.png",
+    "revision": "0a4069de4d3bb1c1d4147e0a3a5f13a9"
+  }, {
+    "url": "favicon/icon-512x512.png",
+    "revision": "9f76a0a096475ec2265f996f02c6faf6"
+  }, {
+    "url": "favicon/icon-48x48.png",
+    "revision": "84d46450c24a0801a373a50e7cc6ee77"
+  }, {
+    "url": "favicon/icon-384x384.png",
+    "revision": "f094ca3ca425e0d927feb4096eeb62bc"
+  }, {
+    "url": "favicon/icon-32x32.png",
+    "revision": "da2ec5899caf7eb1c4572550a1820625"
+  }, {
+    "url": "favicon/icon-256x256.png",
+    "revision": "8e6dba4d886dd7a68ea1e0946bedd87e"
+  }, {
+    "url": "favicon/icon-192x192.png",
+    "revision": "5faca95786400124dad823057e7bca7a"
+  }, {
+    "url": "favicon/icon-16x16.png",
+    "revision": "884a7d13f50d103c6d55523a2f3c7f49"
+  }, {
+    "url": "favicon/icon-128x128.png",
+    "revision": "b8d86a73e8c0d33b7163862d5dd1d039"
+  }, {
+    "url": "favicon/favicon.svg",
+    "revision": "c4413c13486b9a638c2a3d98add8efc2"
+  }, {
+    "url": "favicon/favicon-96x96.png",
+    "revision": "f2f0453dfcb30cb50e87f1f89556a47a"
+  }, {
+    "url": "favicon/apple-touch-icon.png",
+    "revision": "bdf391ce0f39c8245b44ab485cc5a100"
+  }, {
+    "url": "assets/workbox-window.prod.es5-vqzQaGvo.js",
+    "revision": null
+  }, {
+    "url": "assets/virtual_pwa-register-7lGW8GKE.js",
+    "revision": null
+  }, {
+    "url": "assets/index-Du8FibKf.css",
+    "revision": null
+  }, {
+    "url": "assets/index-CW10ouKF.js",
+    "revision": null
   }, {
     "url": "/offline.html",
     "revision": null

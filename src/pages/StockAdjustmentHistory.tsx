@@ -9,137 +9,138 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { History, RefreshCw, Package, TrendingUp, TrendingDown, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
-
 interface AdjustmentHistory {
-  id: string;
-  sessionId: string;
-  productId: string;
-  productName: string;
-  sku: string;
-  userId: string;
-  userName: string;
-  storeId: string;
-  oldStock: number | null;
-  delta: number;
-  newStock: number | null;
-  reason: string;
-  globalReason: string;
-  createdAt: number;
+    id: string;
+    sessionId: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    userId: string;
+    userName: string;
+    storeId: string;
+    oldStock: number | null;
+    delta: number;
+    newStock: number | null;
+    reason: string;
+    globalReason: string;
+    createdAt: number;
 }
-
 export default function StockAdjustmentHistory() {
-  const { user } = useAuth();
-  const { isBackendReachable } = useNetwork();
-  const [history, setHistory] = useState<AdjustmentHistory[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-  const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'yesterday' | 'week' | 'month'>('today');
-  const [deltaFilter, setDeltaFilter] = useState<'all' | 'plus' | 'moins'>('all');
-
-  const load = useCallback(async () => {
-    if (!isBackendReachable) {
-      toast.error('Serveur inaccessible. Vérifiez votre connexion.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const url = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_adjust.php?storeId=${user?.storeId}&limit=500`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('Erreur serveur');
-      const json = await res.json();
-      if (json.ok) {
-        const data: AdjustmentHistory[] = json.data || [];
-        // Déduplication simple: privilégie l'`id` si présent,
-        // sinon utilise une clé composite (session+product+delta+ts).
-        const map = new Map<string, AdjustmentHistory>();
-        for (const it of data) {
-          const key = it.id && String(it.id).trim() !== ''
-            ? String(it.id)
-            : `${it.sessionId}_${it.productId}_${it.delta}_${it.createdAt}`;
-          if (!map.has(key)) map.set(key, it);
+    const { user } = useAuth();
+    const { isBackendReachable } = useNetwork();
+    const [history, setHistory] = useState<AdjustmentHistory[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [search, setSearch] = useState('');
+    const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'yesterday' | 'week' | 'month'>('today');
+    const [deltaFilter, setDeltaFilter] = useState<'all' | 'plus' | 'moins'>('all');
+    const load = useCallback(async () => {
+        if (!isBackendReachable) {
+            toast.error('Serveur inaccessible. Vérifiez votre connexion.');
+            return;
         }
-        const unique = Array.from(map.values());
-        if (unique.length !== data.length) {
-          console.warn('StockAdjustmentHistory: doublons détectés et supprimés', { before: data.length, after: unique.length });
+        setLoading(true);
+        try {
+            const url = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_adjust.php?storeId=${user?.storeId}&limit=500`;
+            const res = await fetch(url);
+            if (!res.ok)
+                throw new Error('Erreur serveur');
+            const json = await res.json();
+            if (json.ok) {
+                const data: AdjustmentHistory[] = json.data || [];
+                // Déduplication simple: privilégie l'`id` si présent,
+                // sinon utilise une clé composite (session+product+delta+ts).
+                const map = new Map<string, AdjustmentHistory>();
+                for (const it of data) {
+                    const key = it.id && String(it.id).trim() !== ''
+                        ? String(it.id)
+                        : `${it.sessionId}_${it.productId}_${it.delta}_${it.createdAt}`;
+                    if (!map.has(key))
+                        map.set(key, it);
+                }
+                const unique = Array.from(map.values());
+                if (unique.length !== data.length) {
+                }
+                setHistory(unique);
+            }
+            else {
+                toast.error('Erreur : ' + (json.error || 'inconnue'));
+            }
         }
-        setHistory(unique);
-      } else {
-        toast.error('Erreur : ' + (json.error || 'inconnue'));
-      }
-    } catch (err) {
-      console.error('Erreur historique ajustements:', err);
-      toast.error('Erreur réseau lors du chargement.');
-    } finally {
-      setLoading(false);
-    }
-  }, [isBackendReachable, user?.storeId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // Filtrage
-  const filtered = history.filter((h) => {
-    // Filtre texte
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      const match =
-        (h.productName || '').toLowerCase().includes(q) ||
-        (h.userName || '').toLowerCase().includes(q) ||
-        (h.sku || '').toLowerCase().includes(q) ||
-        (h.reason || '').toLowerCase().includes(q) ||
-        (h.globalReason || '').toLowerCase().includes(q);
-      if (!match) return false;
-    }
-
-    // Filtre delta
-    if (deltaFilter === 'plus' && Number(h.delta) <= 0) return false;
-    if (deltaFilter === 'moins' && Number(h.delta) >= 0) return false;
-
-    // Filtre période
-    if (periodFilter !== 'all') {
-      const now = Date.now();
-      const ts = Number(h.createdAt);
-      if (periodFilter === 'today') {
-        const start = new Date(); start.setHours(0, 0, 0, 0);
-        if (ts < start.getTime()) return false;
-      } else if (periodFilter === 'yesterday') {
-        const start = new Date(); start.setHours(0, 0, 0, 0);
-        const startYesterday = start.getTime() - 86400000;
-        // keep items where ts is in [startYesterday, start)
-        if (ts < startYesterday || ts >= start.getTime()) return false;
-      } else if (periodFilter === 'week') {
-        if (ts < now - 7 * 86400000) return false;
-      } else if (periodFilter === 'month') {
-        if (ts < now - 30 * 86400000) return false;
-      }
-    }
-
-    return true;
-  });
-
-  // Stats
-  const totalPlus = filtered.filter(h => Number(h.delta) > 0).reduce((s, h) => s + Number(h.delta), 0);
-  const totalMoins = filtered.filter(h => Number(h.delta) < 0).reduce((s, h) => s + Number(h.delta), 0);
-  if (!user || (user.role !== 'admin' && user.role !== 'super_admin')) {
-    return (
-      <div className="p-6 text-center text-muted-foreground">
+        catch (err) {
+            toast.error('Erreur réseau lors du chargement.');
+        }
+        finally {
+            setLoading(false);
+        }
+    }, [isBackendReachable, user?.storeId]);
+    useEffect(() => {
+        load();
+    }, [load]);
+    // Filtrage
+    const filtered = history.filter((h) => {
+        // Filtre texte
+        if (search.trim()) {
+            const q = search.toLowerCase();
+            const match = (h.productName || '').toLowerCase().includes(q) ||
+                (h.userName || '').toLowerCase().includes(q) ||
+                (h.sku || '').toLowerCase().includes(q) ||
+                (h.reason || '').toLowerCase().includes(q) ||
+                (h.globalReason || '').toLowerCase().includes(q);
+            if (!match)
+                return false;
+        }
+        // Filtre delta
+        if (deltaFilter === 'plus' && Number(h.delta) <= 0)
+            return false;
+        if (deltaFilter === 'moins' && Number(h.delta) >= 0)
+            return false;
+        // Filtre période
+        if (periodFilter !== 'all') {
+            const now = Date.now();
+            const ts = Number(h.createdAt);
+            if (periodFilter === 'today') {
+                const start = new Date();
+                start.setHours(0, 0, 0, 0);
+                if (ts < start.getTime())
+                    return false;
+            }
+            else if (periodFilter === 'yesterday') {
+                const start = new Date();
+                start.setHours(0, 0, 0, 0);
+                const startYesterday = start.getTime() - 86400000;
+                // keep items where ts is in [startYesterday, start)
+                if (ts < startYesterday || ts >= start.getTime())
+                    return false;
+            }
+            else if (periodFilter === 'week') {
+                if (ts < now - 7 * 86400000)
+                    return false;
+            }
+            else if (periodFilter === 'month') {
+                if (ts < now - 30 * 86400000)
+                    return false;
+            }
+        }
+        return true;
+    });
+    // Stats
+    const totalPlus = filtered.filter(h => Number(h.delta) > 0).reduce((s, h) => s + Number(h.delta), 0);
+    const totalMoins = filtered.filter(h => Number(h.delta) < 0).reduce((s, h) => s + Number(h.delta), 0);
+    if (!user || (user.role !== 'admin' && user.role !== 'super_admin')) {
+        return (<div className="p-6 text-center text-muted-foreground">
         Accès réservé aux administrateurs.
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-4 sm:p-6 space-y-6">
+      </div>);
+    }
+    return (<div className="p-4 sm:p-6 space-y-6">
       {/* En-tête */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => window.history.back()} aria-label="Retour">
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-5 h-5"/>
             </Button>
             <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
-              <History className="w-7 h-7" />
+              <History className="w-7 h-7"/>
               Historique des ajustements
             </h1>
           </div>
@@ -148,7 +149,7 @@ export default function StockAdjustmentHistory() {
           </p>
         </div>
         <Button variant="outline" onClick={load} disabled={loading}>
-          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`}/>
           Actualiser
         </Button>
       </div>
@@ -164,7 +165,7 @@ export default function StockAdjustmentHistory() {
         <Card>
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground flex items-center gap-1">
-              <TrendingUp className="w-3 h-3 text-green-600" /> Entrées
+              <TrendingUp className="w-3 h-3 text-green-600"/> Entrées
             </div>
             <div className="text-2xl font-bold text-green-600">+{totalPlus}</div>
           </CardContent>
@@ -172,7 +173,7 @@ export default function StockAdjustmentHistory() {
         <Card>
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground flex items-center gap-1">
-              <TrendingDown className="w-3 h-3 text-red-600" /> Sorties
+              <TrendingDown className="w-3 h-3 text-red-600"/> Sorties
             </div>
             <div className="text-2xl font-bold text-red-600">{totalMoins}</div>
           </CardContent>
@@ -183,12 +184,7 @@ export default function StockAdjustmentHistory() {
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col sm:flex-row gap-3">
-            <Input
-              className="flex-1"
-              placeholder="Rechercher produit, utilisateur, motif..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <Input className="flex-1" placeholder="Rechercher produit, utilisateur, motif..." value={search} onChange={(e) => setSearch(e.target.value)}/>
             <Select value={periodFilter} onValueChange={(v: any) => setPeriodFilter(v)}>
               <SelectTrigger className="w-full sm:w-40">
                 <SelectValue />
@@ -223,18 +219,13 @@ export default function StockAdjustmentHistory() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin opacity-40" />
+          {loading ? (<div className="text-center py-12 text-muted-foreground">
+              <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin opacity-40"/>
               Chargement...
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Package className="w-12 h-12 mx-auto mb-2 opacity-30" />
+            </div>) : filtered.length === 0 ? (<div className="text-center py-12 text-muted-foreground">
+              <Package className="w-12 h-12 mx-auto mb-2 opacity-30"/>
               <p>Aucun ajustement trouvé</p>
-            </div>
-          ) : (
-            <>
+            </div>) : (<>
               {/* Desktop table (hidden on small screens) */}
               <div className="hidden sm:block overflow-x-auto">
                 <Table>
@@ -251,14 +242,13 @@ export default function StockAdjustmentHistory() {
                   </TableHeader>
                   <TableBody>
                     {filtered.map((h) => {
-                      const deltaNum = Number(h.delta);
-                      const isPositive = deltaNum > 0;
-                      const date = new Date(Number(h.createdAt)).toLocaleString('fr-FR', {
-                        day: '2-digit', month: '2-digit', year: '2-digit',
-                        hour: '2-digit', minute: '2-digit'
-                      });
-                      return (
-                        <TableRow key={h.id}>
+                const deltaNum = Number(h.delta);
+                const isPositive = deltaNum > 0;
+                const date = new Date(Number(h.createdAt)).toLocaleString('fr-FR', {
+                    day: '2-digit', month: '2-digit', year: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                return (<TableRow key={h.id}>
                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                             {date}
                           </TableCell>
@@ -283,9 +273,8 @@ export default function StockAdjustmentHistory() {
                           <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">
                             {h.reason || h.globalReason || '—'}
                           </TableCell>
-                        </TableRow>
-                      );
-                    })}
+                        </TableRow>);
+            })}
                   </TableBody>
                 </Table>
               </div>
@@ -293,14 +282,13 @@ export default function StockAdjustmentHistory() {
               {/* Mobile list (visible only on small screens) */}
               <div className="block sm:hidden space-y-3 p-3">
                 {filtered.map((h) => {
-                  const deltaNum = Number(h.delta);
-                  const isPositive = deltaNum > 0;
-                  const date = new Date(Number(h.createdAt)).toLocaleString('fr-FR', {
+                const deltaNum = Number(h.delta);
+                const isPositive = deltaNum > 0;
+                const date = new Date(Number(h.createdAt)).toLocaleString('fr-FR', {
                     day: '2-digit', month: '2-digit', year: '2-digit',
                     hour: '2-digit', minute: '2-digit'
-                  });
-                  return (
-                    <Card key={h.id}>
+                });
+                return (<Card key={h.id}>
                       <CardContent className="p-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
@@ -323,14 +311,11 @@ export default function StockAdjustmentHistory() {
                         </div>
                         <div className="mt-2 text-xs">Par: {h.userName || h.userId || '—'}</div>
                       </CardContent>
-                    </Card>
-                  );
-                })}
+                    </Card>);
+            })}
               </div>
-            </>
-          )}
+            </>)}
         </CardContent>
       </Card>
-    </div>
-  );
+    </div>);
 }

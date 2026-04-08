@@ -27,6 +27,44 @@
 
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        var isLocalhost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/i.test(window.location.hostname);
+        if (!isLocalhost || !('serviceWorker' in navigator)) {
+          return;
+        }
+
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          if (!registrations.length) {
+            return;
+          }
+
+          return Promise.all(registrations.map(function (registration) {
+            return registration.unregister();
+          })).then(function () {
+            if (!('caches' in window)) {
+              return;
+            }
+
+            return caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (key) {
+                return caches.delete(key);
+              }));
+            });
+          }).then(function () {
+            var reloadKey = '__dev_sw_cleanup_done__';
+            if (!sessionStorage.getItem(reloadKey)) {
+              sessionStorage.setItem(reloadKey, '1');
+              window.location.reload();
+              return;
+            }
+
+            sessionStorage.removeItem(reloadKey);
+          });
+        }).catch(function () {
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
