@@ -21,11 +21,32 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
+        $storeId = $_GET['storeId'] ?? null;
+        $expenseId = $_GET['id'] ?? null;
         $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
         $limit = isset($_GET['limit']) ? intval($_GET['limit']) : 25;
-        $sql = 'SELECT * FROM expenses_advanced ORDER BY createdAt DESC LIMIT ? OFFSET ?';
+        $sql = 'SELECT * FROM expenses_advanced';
+        $params = [];
+        $conditions = [];
+        if ($storeId) {
+            $conditions[] = 'storeId = ?';
+            $params[] = $storeId;
+        }
+        if ($expenseId) {
+            $conditions[] = 'id = ?';
+            $params[] = $expenseId;
+        }
+        if (!empty($conditions)) {
+            $sql .= ' WHERE ' . implode(' AND ', $conditions);
+        }
+        $sql .= ' ORDER BY createdAt DESC';
+        if (!$expenseId) {
+            $sql .= ' LIMIT ? OFFSET ?';
+            $params[] = $limit;
+            $params[] = $offset;
+        }
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$limit, $offset]);
+        $stmt->execute($params);
         $expenses = $stmt->fetchAll();
 
         // Reconstruire la structure directProduct pour chaque expense
@@ -46,7 +67,14 @@ switch ($method) {
         }
 
         // Compter le total pour la pagination
-        $countStmt = $pdo->query('SELECT COUNT(*) as total FROM expenses_advanced');
+        $countSql = 'SELECT COUNT(*) as total FROM expenses_advanced';
+        $countParams = [];
+        if (!empty($conditions)) {
+            $countSql .= ' WHERE ' . implode(' AND ', $conditions);
+            $countParams = array_slice($params, 0, count($conditions));
+        }
+        $countStmt = $pdo->prepare($countSql);
+        $countStmt->execute($countParams);
         $total = $countStmt->fetchColumn();
 
         echo json_encode([

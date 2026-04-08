@@ -283,6 +283,7 @@ interface POSDB extends DBSchema {
             'by-user': string;
             'by-store': string;
             'by-customer': string;
+            'by-store-createdAt': [string, number];
         };
     };
     expenses: {
@@ -356,6 +357,7 @@ interface POSDB extends DBSchema {
             'by-user': string;
             'by-product': string;
             'by-expense': string;
+            'by-store-product': [string, string];
         };
     };
     expenseCategories: {
@@ -455,7 +457,7 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
     if (dbInstance)
         return dbInstance;
-    dbInstance = await openDB<POSDB>('pos-db', 15, {
+    dbInstance = await openDB<POSDB>('pos-db', 16, {
         upgrade(db, oldVersion, newVersion, transaction) {
             if (!db.objectStoreNames.contains('notificationInbox')) {
                 const notificationInboxStore = db.createObjectStore('notificationInbox', { keyPath: 'cacheKey' });
@@ -522,6 +524,13 @@ export async function getDB() {
                 salesStore.createIndex('by-user', 'userId');
                 salesStore.createIndex('by-store', 'storeId');
                 salesStore.createIndex('by-customer', 'customerId');
+                salesStore.createIndex('by-store-createdAt', ['storeId', 'createdAt']);
+            }
+            else {
+                const salesStore = transaction.objectStore('sales');
+                if (!salesStore.indexNames.contains('by-store-createdAt')) {
+                    salesStore.createIndex('by-store-createdAt', ['storeId', 'createdAt']);
+                }
             }
             // Expenses
             if (!db.objectStoreNames.contains('expenses')) {
@@ -544,6 +553,13 @@ export async function getDB() {
                 stockSignalStore.createIndex('by-user', 'userId');
                 stockSignalStore.createIndex('by-product', 'productId');
                 stockSignalStore.createIndex('by-expense', 'expenseId');
+                stockSignalStore.createIndex('by-store-product', ['storeId', 'productId']);
+            }
+            else {
+                const stockSignalStore = transaction.objectStore('stockSignals');
+                if (!stockSignalStore.indexNames.contains('by-store-product')) {
+                    stockSignalStore.createIndex('by-store-product', ['storeId', 'productId']);
+                }
             }
             // Expense Categories (new)
             if (!db.objectStoreNames.contains('expenseCategories')) {

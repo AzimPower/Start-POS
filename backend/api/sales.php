@@ -22,14 +22,28 @@ function is_refunded_sale_flag($value) {
 switch ($method) {
     case 'GET':
         $storeId = $_GET['storeId'] ?? null;
+        $startDate = isset($_GET['startDate']) ? intval($_GET['startDate']) : null;
+        $endDate = isset($_GET['endDate']) ? intval($_GET['endDate']) : null;
         $all = isset($_GET['all']) && $_GET['all'] === '1'; // Désactiver la pagination si all=1
         $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
         $limit = isset($_GET['limit']) ? intval($_GET['limit']) : 25;
         $sql = 'SELECT * FROM sales';
         $params = [];
+        $conditions = [];
         if ($storeId) {
-            $sql .= ' WHERE storeId = ?';
+            $conditions[] = 'storeId = ?';
             $params[] = $storeId;
+        }
+        if ($startDate !== null && $startDate > 0) {
+            $conditions[] = 'createdAt >= ?';
+            $params[] = $startDate;
+        }
+        if ($endDate !== null && $endDate > 0) {
+            $conditions[] = 'createdAt <= ?';
+            $params[] = $endDate;
+        }
+        if (!empty($conditions)) {
+            $sql .= ' WHERE ' . implode(' AND ', $conditions);
         }
         $sql .= ' ORDER BY createdAt DESC';
         
@@ -67,9 +81,9 @@ switch ($method) {
         // Compter le total pour la pagination
         $countSql = 'SELECT COUNT(*) as total FROM sales';
         $countParams = [];
-        if ($storeId) {
-            $countSql .= ' WHERE storeId = ?';
-            $countParams[] = $storeId;
+        if (!empty($conditions)) {
+            $countSql .= ' WHERE ' . implode(' AND ', $conditions);
+            $countParams = $params;
         }
         $countStmt = $pdo->prepare($countSql);
         $countStmt->execute($countParams);

@@ -78,8 +78,19 @@ export function shouldPreferLocalSale(localSale: any, backendSale: any, pendingS
     }
     return toTimestamp(localSale?.refundedAt) > toTimestamp(backendSale?.refundedAt);
 }
-export async function mergeBackendSalesIntoLocalDb(db: any, backendSales: any[]) {
-    const localSales = await db.getAll('sales');
+export async function mergeBackendSalesIntoLocalDb(db: any, backendSales: any[], options?: { restrictToBackendIds?: boolean; }) {
+    let localSales: any[];
+    if (options?.restrictToBackendIds) {
+        const backendIds = Array.from(new Set((backendSales || [])
+            .map((sale: any) => sale?.id)
+            .filter((id: any) => id != null)
+            .map((id: any) => String(id))));
+        localSales = (await Promise.all(backendIds.map((id) => db.get('sales', id))))
+            .filter((sale: any) => sale?.id != null);
+    }
+    else {
+        localSales = await db.getAll('sales');
+    }
     const localSalesById = new Map<string, any>(localSales
         .filter((sale: any) => sale?.id != null)
         .map((sale: any) => [String(sale.id), sale]));

@@ -3,8 +3,8 @@
 -- https://www.phpmyadmin.net/
 --
 -- Hôte : 127.0.0.1:3306
--- Généré le : lun. 16 mars 2026 à 02:16
--- Version du serveur : 11.8.3-MariaDB-log
+-- Généré le : mer. 08 avr. 2026 à 22:16
+-- Version du serveur : 11.8.6-MariaDB-log
 -- Version de PHP : 7.2.34
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
@@ -132,6 +132,40 @@ CREATE TABLE `expense_categories` (
 -- --------------------------------------------------------
 
 --
+-- Structure de la table `notifications`
+--
+
+CREATE TABLE `notifications` (
+  `id` varchar(36) NOT NULL,
+  `title` varchar(160) NOT NULL,
+  `message` text NOT NULL,
+  `type` enum('info','success','warning','critical') NOT NULL DEFAULT 'info',
+  `targetType` enum('all','role','store','user') NOT NULL,
+  `targetRole` enum('super_admin','manager','admin','cashier') DEFAULT NULL,
+  `targetStoreId` varchar(36) DEFAULT NULL,
+  `targetUserId` varchar(36) DEFAULT NULL,
+  `senderUserId` varchar(36) NOT NULL,
+  `active` tinyint(1) NOT NULL DEFAULT 1,
+  `createdAt` bigint(20) NOT NULL,
+  `expiresAt` bigint(20) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `notification_reads`
+--
+
+CREATE TABLE `notification_reads` (
+  `id` varchar(36) NOT NULL,
+  `notificationId` varchar(36) NOT NULL,
+  `userId` varchar(36) NOT NULL,
+  `readAt` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Structure de la table `payments`
 --
 
@@ -177,6 +211,26 @@ CREATE TABLE `product_stock` (
   `productId` varchar(36) NOT NULL,
   `storeId` varchar(36) NOT NULL,
   `stock` int(11) DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `push_subscriptions`
+--
+
+CREATE TABLE `push_subscriptions` (
+  `id` varchar(36) NOT NULL,
+  `userId` varchar(36) NOT NULL,
+  `endpoint` text NOT NULL,
+  `endpointHash` char(64) NOT NULL,
+  `p256dh` varchar(255) NOT NULL,
+  `auth` varchar(255) NOT NULL,
+  `contentEncoding` varchar(32) DEFAULT 'aes128gcm',
+  `userAgent` varchar(255) DEFAULT NULL,
+  `active` tinyint(1) NOT NULL DEFAULT 1,
+  `createdAt` bigint(20) NOT NULL,
+  `updatedAt` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -372,35 +426,17 @@ CREATE TABLE `store_indicator_overrides` (
 -- --------------------------------------------------------
 
 --
--- Structure de la table `notifications`
+-- Structure de la table `subscription_payments`
 --
 
-CREATE TABLE `notifications` (
+CREATE TABLE `subscription_payments` (
   `id` varchar(36) NOT NULL,
-  `title` varchar(160) NOT NULL,
-  `message` text NOT NULL,
-  `type` enum('info','success','warning','critical') NOT NULL DEFAULT 'info',
-  `targetType` enum('all','role','store','user') NOT NULL,
-  `targetRole` enum('super_admin','manager','admin','cashier') DEFAULT NULL,
-  `targetStoreId` varchar(36) DEFAULT NULL,
-  `targetUserId` varchar(36) DEFAULT NULL,
-  `senderUserId` varchar(36) NOT NULL,
-  `active` tinyint(1) NOT NULL DEFAULT 1,
-  `createdAt` bigint(20) NOT NULL,
-  `expiresAt` bigint(20) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
-
---
--- Structure de la table `notification_reads`
---
-
-CREATE TABLE `notification_reads` (
-  `id` varchar(36) NOT NULL,
-  `notificationId` varchar(36) NOT NULL,
-  `userId` varchar(36) NOT NULL,
-  `readAt` bigint(20) NOT NULL
+  `storeId` varchar(36) NOT NULL,
+  `storeName` varchar(255) NOT NULL,
+  `months` int(11) NOT NULL DEFAULT 1,
+  `amount` decimal(10,2) NOT NULL,
+  `paidAt` bigint(20) NOT NULL,
+  `note` varchar(255) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -540,6 +576,16 @@ ALTER TABLE `product_stock`
   ADD KEY `idx_product_stock_storeId` (`storeId`);
 
 --
+-- Index pour la table `push_subscriptions`
+--
+ALTER TABLE `push_subscriptions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_push_endpoint_hash` (`endpointHash`),
+  ADD KEY `idx_push_subscriptions_userId` (`userId`),
+  ADD KEY `idx_push_subscriptions_active` (`active`),
+  ADD KEY `idx_push_subscriptions_user_active` (`userId`,`active`);
+
+--
 -- Index pour la table `sales`
 --
 ALTER TABLE `sales`
@@ -581,7 +627,9 @@ ALTER TABLE `stock_adjustments`
 -- Index pour la table `stock_signals`
 --
 ALTER TABLE `stock_signals`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_stock_signals_store_created` (`storeId`,`createdAt`),
+  ADD KEY `idx_stock_signals_store_product_created` (`storeId`,`productId`,`createdAt`);
 
 --
 -- Index pour la table `stores`
@@ -608,6 +656,14 @@ ALTER TABLE `store_balance_settings`
 ALTER TABLE `store_indicator_overrides`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_store_indicator_overrides_storeId` (`storeId`);
+
+--
+-- Index pour la table `subscription_payments`
+--
+ALTER TABLE `subscription_payments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_sp_storeId` (`storeId`),
+  ADD KEY `idx_sp_paidAt` (`paidAt`);
 
 --
 -- Index pour la table `users`

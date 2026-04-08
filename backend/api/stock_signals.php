@@ -17,7 +17,25 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
-        $stmt = $pdo->query('SELECT * FROM stock_signals');
+        $storeId = $_GET['storeId'] ?? null;
+        $productId = $_GET['productId'] ?? null;
+        $sql = 'SELECT * FROM stock_signals';
+        $params = [];
+        $conditions = [];
+        if ($storeId) {
+            $conditions[] = 'storeId = ?';
+            $params[] = $storeId;
+        }
+        if ($productId) {
+            $conditions[] = 'productId = ?';
+            $params[] = $productId;
+        }
+        if (!empty($conditions)) {
+            $sql .= ' WHERE ' . implode(' AND ', $conditions);
+        }
+        $sql .= ' ORDER BY createdAt DESC';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
         $signals = $stmt->fetchAll();
         echo json_encode($signals);
         break;

@@ -153,6 +153,8 @@ export default function StockSignals() {
     const [marginCalculation, setMarginCalculation] = useState<any>(null);
     const [showEndDateDialog, setShowEndDateDialog] = useState(false);
     const [endDateInput, setEndDateInput] = useState<string>('');
+    const [isRefreshingSignalData, setIsRefreshingSignalData] = useState(false);
+    const [isComputingMargin, setIsComputingMargin] = useState(false);
     // Filtres pour l'historique
     const [searchTerm, setSearchTerm] = useState('');
     // Afficher par défaut l'historique d'aujourd'hui dans l'onglet "Historique"
@@ -171,6 +173,8 @@ export default function StockSignals() {
     // 🔄 Ref pour éviter les rechargements multiples
     const loadedOnceRef = useRef(false);
     const cleanedInvalidSignalIdsRef = useRef<Set<string>>(new Set());
+    const lastSignalDataRefreshAtRef = useRef(0);
+    const signalRefreshPromiseRef = useRef<Promise<void> | null>(null);
     // ==== CACHES OPTIMISÉS ====
     // Cache des noms de produits pour éviter les recherches répétées
     const productNameMap = useMemo(() => {
@@ -342,133 +346,154 @@ export default function StockSignals() {
             setPendingSyncCount(0);
         }
     };
+    const getStoreScopedRecords = useCallback(async <T,>(db: any, storeName: string, indexName: string): Promise<T[]> => {
+        if (!user?.storeId) {
+            return db.getAll(storeName);
+        }
+        return db.getAllFromIndex(storeName, indexName, user.storeId);
+    }, [user?.storeId]);
     const computeMarginForEnd = async (endIso?: string) => {
         if (!selectedExpense)
             return;
-        const endTime = endIso ? new Date(endIso).getTime() : Date.now();
-        const startTime = selectedExpense.type === 'direct' && selectedExpense.directProduct
-            ? selectedExpense.directProduct.startDate
-            : selectedExpense.date;
-        // Validate endTime is not before startTime
-        if (endTime < startTime) {
-            toast.error('La date de fin doit être postérieure ou égale à la date de début / date d\'achat. Choisissez une autre date.');
-            // keep the end-date dialog open for correction
-            setShowEndDateDialog(true);
-            return;
-        }
-        // Chercher la marge visée depuis la fiche du produit - utilise le cache
-        let targetMargin: number | null = null;
-        let product: Product | undefined;
-        if (selectedExpense.type === 'direct' && selectedExpense.directProduct) {
-            product = productMap.get(selectedExpense.directProduct.productId);
-            if (product && (product as any).targetMargin != null) {
-                const parsed = Number((product as any).targetMargin);
+        setIsComputingMargin(true);
+        try {
+            const db = await getDB();
+            await refreshSignalComputationData(db, selectedExpense);
+            const refreshedExpense = await db.get('expensesAdvanced', selectedExpense.id);
+            const expenseForCalculation = refreshedExpense || selectedExpense;
+            if (refreshedExpense) {
+                setSelectedExpense(refreshedExpense);
+            }
+            const endTime = endIso ? new Date(endIso).getTime() : Date.now();
+            const startTime = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
+                ? expenseForCalculation.directProduct.startDate
+                : expenseForCalculation.date;
+            if (endTime < startTime) {
+                toast.error('La date de fin doit être postérieure ou égale à la date de début / date d\'achat. Choisissez une autre date.');
+                setShowEndDateDialog(true);
+                return;
+            }
+            let targetMargin: number | null = null;
+            let product: Product | undefined;
+            let category: ExpenseCategory | undefined;
+            if (expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct) {
+                product = await db.get('products', expenseForCalculation.directProduct.productId);
+                if (product && (product as any).targetMargin != null) {
+                    const parsed = Number((product as any).targetMargin);
+                    if (!isNaN(parsed))
+                        targetMargin = parsed;
+                }
+                if (targetMargin === null && product && typeof product.salePrice === 'number' && typeof product.costPrice === 'number' && product.costPrice > 0) {
+                    const inferred = ((product.salePrice - product.costPrice) / product.costPrice) * 100;
+                    if (!isNaN(inferred))
+                        targetMargin = inferred;
+                }
+            }
+            else if (expenseForCalculation.type === 'indirect' && expenseForCalculation.categoryId) {
+                category = await db.get('expenseCategories', expenseForCalculation.categoryId);
+            }
+            if (targetMargin === null && (expenseForCalculation as any).targetMargin != null) {
+                const parsed = Number((expenseForCalculation as any).targetMargin);
                 if (!isNaN(parsed))
                     targetMargin = parsed;
             }
-            if (targetMargin === null && product && typeof product.salePrice === 'number' && typeof product.costPrice === 'number' && product.costPrice > 0) {
-                const inferred = ((product.salePrice - product.costPrice) / product.costPrice) * 100;
-                if (!isNaN(inferred))
-                    targetMargin = inferred;
+            let periodSalesData: any;
+            let totalSalesData: any;
+            if (expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct) {
+                periodSalesData = await calculateSalesBetween(startTime, endTime, expenseForCalculation.directProduct.productId, true);
+                totalSalesData = await calculateSalesBetween(periodSalesData.adjustedStartDate || startTime, endTime, expenseForCalculation.directProduct.productId, false);
             }
-        }
-        if (targetMargin === null && (selectedExpense as any).targetMargin != null) {
-            const parsed = Number((selectedExpense as any).targetMargin);
-            if (!isNaN(parsed))
-                targetMargin = parsed;
-        }
-        // (startTime already defined and validated)
-        let periodSalesData: any;
-        let totalSalesData: any;
-        if (selectedExpense.type === 'direct' && selectedExpense.directProduct) {
-            periodSalesData = await calculateSalesBetween(startTime, endTime, selectedExpense.directProduct.productId, true);
-            totalSalesData = await calculateSalesBetween(periodSalesData.adjustedStartDate || startTime, endTime, selectedExpense.directProduct.productId, false);
-        }
-        else if (selectedExpense.type === 'indirect' && selectedExpense.categoryId) {
-            const category = categoryMap.get(selectedExpense.categoryId);
-            if (!category || !category.productIds || category.productIds.length === 0) {
-                toast.error(`Aucun produit lié à cette catégorie de dépense indirecte.`);
+            else if (expenseForCalculation.type === 'indirect' && expenseForCalculation.categoryId) {
+                if (!category || !category.productIds || category.productIds.length === 0) {
+                    toast.error(`Aucun produit lié à cette catégorie de dépense indirecte.`);
+                    return;
+                }
+                periodSalesData = await calculateSalesForMultipleProducts(startTime, endTime, category.productIds, true);
+                totalSalesData = await calculateSalesForMultipleProducts(periodSalesData.adjustedStartDate || startTime, endTime, category.productIds, false);
+            }
+            else {
+                toast.error('Type de dépense non supporté pour le calcul');
                 return;
             }
-            periodSalesData = await calculateSalesForMultipleProducts(startTime, endTime, category.productIds, true);
-            totalSalesData = await calculateSalesForMultipleProducts(periodSalesData.adjustedStartDate || startTime, endTime, category.productIds, false);
-        }
-        else {
-            toast.error('Type de dépense non supporté pour le calcul');
-            return;
-        }
-        const effectiveStartDate = periodSalesData.adjustedStartDate || startTime;
-        const totalRevenue = Number(totalSalesData?.totalRevenue) || 0;
-        const periodRevenue = Number(periodSalesData.totalRevenue) || 0;
-        const totalQuantity = Number(periodSalesData.totalQuantity) || 0;
-        const purchaseAmount = Number(selectedExpense.amount) || 0;
-        const quantityBought = selectedExpense.type === 'direct' && selectedExpense.directProduct
-            ? Number(selectedExpense.directProduct.quantity) || 0
-            : 1;
-        let realMargin = periodRevenue - purchaseAmount;
-        let margin = realMargin;
-        let marginPercentage = 0;
-        let expectedRevenue: number | null = null;
-        if (typeof targetMargin === 'number') {
-            if (targetMargin >= 100) {
-                expectedRevenue = null;
-                margin = null as any;
-                marginPercentage = 0;
+            const effectiveStartDate = periodSalesData.adjustedStartDate || startTime;
+            const totalRevenue = Number(totalSalesData?.totalRevenue) || 0;
+            const periodRevenue = Number(periodSalesData.totalRevenue) || 0;
+            const totalQuantity = Number(periodSalesData.totalQuantity) || 0;
+            const purchaseAmount = Number(expenseForCalculation.amount) || 0;
+            const quantityBought = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
+                ? Number(expenseForCalculation.directProduct.quantity) || 0
+                : 1;
+            let realMargin = periodRevenue - purchaseAmount;
+            let margin = realMargin;
+            let marginPercentage = 0;
+            let expectedRevenue: number | null = null;
+            if (typeof targetMargin === 'number') {
+                if (targetMargin >= 100) {
+                    expectedRevenue = null;
+                    margin = null as any;
+                    marginPercentage = 0;
+                }
+                else {
+                    expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
+                    margin = periodRevenue - expectedRevenue;
+                    realMargin = periodRevenue - purchaseAmount;
+                    marginPercentage = expectedRevenue > 0 ? (margin / expectedRevenue) * 100 : 0;
+                }
             }
             else {
+                marginPercentage = periodRevenue > 0 ? (margin / periodRevenue) * 100 : 0;
+            }
+            const referenceProductId = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
+                ? expenseForCalculation.directProduct.productId
+                : expenseForCalculation.categoryId;
+            const marginHistory = completedSignals
+                .filter(s => s.productId === referenceProductId)
+                .map(s => s.marginPercentage);
+            let averageMargin = null;
+            if (marginHistory.length > 0)
+                averageMargin = marginHistory.reduce((a, b) => a + b, 0) / marginHistory.length;
+            let surplusMargin = null;
+            let missingMargin = null;
+            if (typeof targetMargin === 'number' && targetMargin < 100) {
                 expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
-                margin = periodRevenue - expectedRevenue;
-                realMargin = periodRevenue - purchaseAmount;
-                marginPercentage = expectedRevenue > 0 ? (margin / expectedRevenue) * 100 : 0;
+                if (periodRevenue > expectedRevenue) {
+                    surplusMargin = periodRevenue - expectedRevenue;
+                    missingMargin = 0;
+                }
+                else if (periodRevenue < expectedRevenue) {
+                    surplusMargin = 0;
+                    missingMargin = expectedRevenue - periodRevenue;
+                }
+                else {
+                    surplusMargin = 0;
+                    missingMargin = 0;
+                }
             }
+            setMarginCalculation({
+                totalRevenue,
+                periodRevenue,
+                totalQuantity,
+                margin,
+                realMargin,
+                marginPercentage,
+                purchaseAmount,
+                quantityBought,
+                effectiveStartDate,
+                duration: Math.ceil((endTime - effectiveStartDate) / (1000 * 60 * 60 * 24)),
+                averageMargin,
+                marginHistory,
+                targetMargin,
+                expectedRevenue,
+                surplusMargin,
+                missingMargin,
+                endTime
+            });
+            setShowEndDateDialog(false);
+            setShowSignalDialog(true);
         }
-        else {
-            marginPercentage = periodRevenue > 0 ? (margin / periodRevenue) * 100 : 0;
+        finally {
+            setIsComputingMargin(false);
         }
-        // Historique des marges
-        const marginHistory = completedSignals.filter(s => s.productId === (selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.productId : selectedExpense.categoryId)).map(s => s.marginPercentage);
-        let averageMargin = null;
-        if (marginHistory.length > 0)
-            averageMargin = marginHistory.reduce((a, b) => a + b, 0) / marginHistory.length;
-        // Calcul surplus/manque
-        let surplusMargin = null;
-        let missingMargin = null;
-        if (typeof targetMargin === 'number' && targetMargin < 100) {
-            expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
-            if (periodRevenue > expectedRevenue) {
-                surplusMargin = periodRevenue - expectedRevenue;
-                missingMargin = 0;
-            }
-            else if (periodRevenue < expectedRevenue) {
-                surplusMargin = 0;
-                missingMargin = expectedRevenue - periodRevenue;
-            }
-            else {
-                surplusMargin = 0;
-                missingMargin = 0;
-            }
-        }
-        setMarginCalculation({
-            totalRevenue,
-            periodRevenue,
-            totalQuantity,
-            margin,
-            realMargin,
-            marginPercentage,
-            purchaseAmount,
-            quantityBought,
-            effectiveStartDate,
-            duration: Math.ceil((endTime - effectiveStartDate) / (1000 * 60 * 60 * 24)),
-            averageMargin,
-            marginHistory,
-            targetMargin,
-            expectedRevenue,
-            surplusMargin,
-            missingMargin,
-            endTime
-        });
-        setShowEndDateDialog(false);
-        setShowSignalDialog(true);
     };
     const loadData = useCallback(async (showPageLoading: boolean = true) => {
         if (showPageLoading) {
@@ -550,13 +575,18 @@ export default function StockSignals() {
         catch (error) {
         }
     };
-    const loadExpensesAdvancedFromBackend = async (db: any) => {
+    const loadExpensesAdvancedFromBackend = async (db: any, options?: { id?: string; }) => {
         try {
             let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
             const params = new URLSearchParams();
             if (user?.storeId)
                 params.set('storeId', user.storeId);
-            params.set('limit', '10000');
+            if (options?.id) {
+                params.set('id', options.id);
+            }
+            else {
+                params.set('limit', '10000');
+            }
             url += `?${params.toString()}`;
             const response = await fetch(url);
             if (response.ok) {
@@ -573,11 +603,15 @@ export default function StockSignals() {
         catch (error) {
         }
     };
-    const loadStockSignalsFromBackend = async (db: any) => {
+    const loadStockSignalsFromBackend = async (db: any, options?: { productId?: string; }) => {
         try {
-            let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+            const params = new URLSearchParams();
             if (user?.storeId)
-                url += `?storeId=${user.storeId}`;
+                params.set('storeId', user.storeId);
+            if (options?.productId)
+                params.set('productId', options.productId);
+            const query = params.toString();
+            const url = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php${query ? `?${query}` : ''}`;
             const response = await fetch(url);
             if (response.ok) {
                 const backendSignals = normalizeBackendCollection(await response.json());
@@ -606,16 +640,22 @@ export default function StockSignals() {
         catch (error) {
         }
     };
-    const loadSalesFromBackend = async (db: any) => {
+    const loadSalesFromBackend = async (db: any, options?: { startDate?: number; endDate?: number; }) => {
         try {
             const params = new URLSearchParams();
             if (user?.storeId)
                 params.set('storeId', user.storeId);
             params.set('all', '1');
+            if (options?.startDate) {
+                params.set('startDate', String(options.startDate));
+            }
+            if (options?.endDate) {
+                params.set('endDate', String(options.endDate));
+            }
             const response = await fetch(buildBypassUrl('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', params), { cache: 'no-store' });
             if (response.ok) {
                 const backendSales = normalizeBackendCollection(await response.json());
-                await mergeBackendSalesIntoLocalDb(db, backendSales);
+                await mergeBackendSalesIntoLocalDb(db, backendSales, { restrictToBackendIds: Boolean(options?.startDate || options?.endDate) });
             }
         }
         catch (error) {
@@ -658,17 +698,14 @@ export default function StockSignals() {
         await updatePendingSyncCount();
     }, [isOnline]);
     const processData = useCallback(async (db: any) => {
-        // Charger toutes les données en une seule transaction pour optimiser les performances
-        const tx = db.transaction(['products', 'expenseCategories', 'stockSignals', 'expensesAdvanced'], 'readonly');
         const [productsData, categoriesData, signalsData, expensesData] = await Promise.all([
-            tx.objectStore('products').getAll(),
-            tx.objectStore('expenseCategories').getAll(),
-            tx.objectStore('stockSignals').getAll(),
-            tx.objectStore('expensesAdvanced').getAll()
+            db.getAll('products'),
+            getStoreScopedRecords<ExpenseCategory>(db, 'expenseCategories', 'by-store'),
+            getStoreScopedRecords<StockSignal>(db, 'stockSignals', 'by-store'),
+            getStoreScopedRecords<ExpenseAdvanced>(db, 'expensesAdvanced', 'by-store')
         ]);
         // Traiter les signaux - utiliser un Set pour des lookups O(1)
         const userSignals = signalsData
-            .filter((signal: StockSignal) => signal.storeId === user?.storeId)
             .sort((a: StockSignal, b: StockSignal) => b.createdAt - a.createdAt);
         const invalidSignals = userSignals.filter((signal: StockSignal) => isBogusStockSignal(signal));
         const validSignals = userSignals.filter((signal: StockSignal) => !isBogusStockSignal(signal));
@@ -704,42 +741,114 @@ export default function StockSignals() {
         setCompletedSignals(validSignals);
         setActiveStocks(activeExpenses);
         setAllExpenses(expensesData);
-    }, [cleanupInvalidStockSignals, user?.storeId]);
-    // Cache pour éviter de recharger les ventes et signaux à chaque calcul
-    const salesCache = useMemo(() => ({ data: null as Sale[] | null, timestamp: 0 }), []);
-    const signalsCache = useMemo(() => ({ data: null as StockSignal[] | null, timestamp: 0 }), []);
+    }, [cleanupInvalidStockSignals, getStoreScopedRecords, user?.storeId]);
     const CACHE_TTL = 30000; // 30 secondes
+    const salesCacheRef = useRef(new Map<string, { data: Sale[]; timestamp: number; }>());
+    const signalsCacheRef = useRef(new Map<string, { data: StockSignal[]; timestamp: number; }>());
     // Fonction pour invalider les caches et forcer un rechargement
     const invalidateCaches = useCallback(() => {
-        salesCache.data = null;
-        salesCache.timestamp = 0;
-        signalsCache.data = null;
-        signalsCache.timestamp = 0;
-    }, [salesCache, signalsCache]);
-    const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
-        const db = await getDB();
+        salesCacheRef.current.clear();
+        signalsCacheRef.current.clear();
+    }, []);
+    const getSalesInRange = useCallback(async (db: any, startDate: number, endDate: number): Promise<Sale[]> => {
         const now = Date.now();
-        // Utiliser le cache si disponible et récent
+        const cacheKey = `${user?.storeId || 'all'}:${startDate}:${endDate}`;
+        const cached = salesCacheRef.current.get(cacheKey);
+        if (cached && (now - cached.timestamp) < CACHE_TTL) {
+            return cached.data;
+        }
         let sales: Sale[];
-        if (salesCache.data && (now - salesCache.timestamp) < CACHE_TTL) {
-            sales = salesCache.data;
+        if (user?.storeId) {
+            try {
+                sales = await db.getAllFromIndex('sales', 'by-store-createdAt', IDBKeyRange.bound([user.storeId, startDate], [user.storeId, endDate]));
+            }
+            catch (error) {
+                const storeSales = await getStoreScopedRecords<Sale>(db, 'sales', 'by-store');
+                sales = storeSales.filter((sale) => sale.createdAt >= startDate && sale.createdAt <= endDate);
+            }
         }
         else {
-            sales = await db.getAll('sales');
-            salesCache.data = sales;
-            salesCache.timestamp = now;
+            const allSales = await db.getAll('sales');
+            sales = allSales.filter((sale: Sale) => sale.createdAt >= startDate && sale.createdAt <= endDate);
         }
+        salesCacheRef.current.set(cacheKey, { data: sales, timestamp: now });
+        return sales;
+    }, [CACHE_TTL, getStoreScopedRecords, user?.storeId]);
+    const getSignalsForProducts = useCallback(async (db: any, productIds: string[]): Promise<StockSignal[]> => {
+        const normalizedProductIds = Array.from(new Set(productIds)).sort();
+        if (normalizedProductIds.length === 0) {
+            return [];
+        }
+        const now = Date.now();
+        const cacheKey = `${user?.storeId || 'all'}:${normalizedProductIds.join('|')}`;
+        const cached = signalsCacheRef.current.get(cacheKey);
+        if (cached && (now - cached.timestamp) < CACHE_TTL) {
+            return cached.data;
+        }
+        let signals: StockSignal[];
+        if (user?.storeId) {
+            try {
+                const results = await Promise.all(normalizedProductIds.map((productId) => db.getAllFromIndex('stockSignals', 'by-store-product', [user.storeId, productId])));
+                signals = results.flat();
+            }
+            catch (error) {
+                const storeSignals = await getStoreScopedRecords<StockSignal>(db, 'stockSignals', 'by-store');
+                const productIdSet = new Set(normalizedProductIds);
+                signals = storeSignals.filter((signal) => productIdSet.has(signal.productId));
+            }
+        }
+        else {
+            const allSignals = await db.getAll('stockSignals');
+            const productIdSet = new Set(normalizedProductIds);
+            signals = allSignals.filter((signal: StockSignal) => productIdSet.has(signal.productId));
+        }
+        signalsCacheRef.current.set(cacheKey, { data: signals, timestamp: now });
+        return signals;
+    }, [CACHE_TTL, getStoreScopedRecords, user?.storeId]);
+    const refreshSignalComputationData = useCallback(async (db: any, expense: ExpenseAdvanced) => {
+        if (!isOnline || !isBackendReachable) {
+            return;
+        }
+        const now = Date.now();
+        if ((now - lastSignalDataRefreshAtRef.current) < CACHE_TTL) {
+            return;
+        }
+        if (signalRefreshPromiseRef.current) {
+            return signalRefreshPromiseRef.current;
+        }
+        const startDate = expense.type === 'direct' && expense.directProduct
+            ? expense.directProduct.startDate
+            : expense.date;
+        const signalProductId = expense.type === 'direct' && expense.directProduct
+            ? expense.directProduct.productId
+            : expense.categoryId;
+        const refreshPromise = (async () => {
+            setIsRefreshingSignalData(true);
+            try {
+                await Promise.all([
+                    loadProductsFromBackend(db),
+                    loadExpenseCategoriesFromBackend(db),
+                    loadExpensesAdvancedFromBackend(db, { id: expense.id }),
+                    loadStockSignalsFromBackend(db, signalProductId ? { productId: signalProductId } : undefined),
+                    loadSalesFromBackend(db, { startDate })
+                ]);
+                lastSignalDataRefreshAtRef.current = Date.now();
+                invalidateCaches();
+                await processData(db);
+            }
+            finally {
+                signalRefreshPromiseRef.current = null;
+                setIsRefreshingSignalData(false);
+            }
+        })();
+        signalRefreshPromiseRef.current = refreshPromise;
+        return refreshPromise;
+    }, [CACHE_TTL, invalidateCaches, isBackendReachable, isOnline, processData]);
+    const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
+        const db = await getDB();
         let adjustedStartDate = startDate;
         if (excludeAlreadySignaled) {
-            let stockSignals: StockSignal[];
-            if (signalsCache.data && (now - signalsCache.timestamp) < CACHE_TTL) {
-                stockSignals = signalsCache.data;
-            }
-            else {
-                stockSignals = await db.getAll('stockSignals');
-                signalsCache.data = stockSignals;
-                signalsCache.timestamp = now;
-            }
+            const stockSignals = await getSignalsForProducts(db, [productId]);
             // Trouver le signalement le plus récent pour ce produit
             let latestEndDate = 0;
             const storeId = user?.storeId;
@@ -754,11 +863,12 @@ export default function StockSignals() {
                 adjustedStartDate = Math.max(startDate, latestEndDate + 60000);
             }
         }
+        const sales = await getSalesInRange(db, adjustedStartDate, endDate);
         // Filtrer et calculer en une seule passe
         let totalQuantity = 0;
         let totalRevenue = 0;
         for (const sale of sales) {
-            if (sale.createdAt < adjustedStartDate || sale.createdAt > endDate || sale.draft === true)
+            if (sale.draft === true)
                 continue;
             if (sale.refunded)
                 continue; // Ignorer les ventes remboursées
@@ -778,31 +888,15 @@ export default function StockSignals() {
             }
         }
         return { totalQuantity, totalRevenue, adjustedStartDate };
-    }, [user?.storeId]);
+    }, [getSalesInRange, getSignalsForProducts, user?.storeId]);
     const calculateSalesForMultipleProducts = async (startDate: number, endDate: number, productIds: string[], excludeAlreadySignaled: boolean = true) => {
-        // Optimisation : charger toutes les ventes et signaux en une seule fois
         const db = await getDB();
-        const now = Date.now();
-        let sales: Sale[];
-        if (salesCache.data && (now - salesCache.timestamp) < CACHE_TTL) {
-            sales = salesCache.data;
-        }
-        else {
-            sales = await db.getAll('sales');
-            salesCache.data = sales;
-            salesCache.timestamp = now;
-        }
+        const sales = await getSalesInRange(db, startDate, endDate);
         let stockSignals: StockSignal[] = [];
         if (excludeAlreadySignaled) {
-            if (signalsCache.data && (now - signalsCache.timestamp) < CACHE_TTL) {
-                stockSignals = signalsCache.data;
-            }
-            else {
-                stockSignals = await db.getAll('stockSignals');
-                signalsCache.data = stockSignals;
-                signalsCache.timestamp = now;
-            }
+            stockSignals = await getSignalsForProducts(db, productIds);
         }
+        const productIdSet = new Set(productIds);
         // Pour chaque produit, trouver la date de fin de signalement la plus récente
         const storeId = user?.storeId;
         const latestEndDates: Record<string, number> = {};
@@ -829,7 +923,7 @@ export default function StockSignals() {
             if (!items)
                 continue;
             for (const item of items) {
-                if (!productIds.includes(item.productId))
+                if (!productIdSet.has(item.productId))
                     continue;
                 // Calculer la date de début effective pour ce produit
                 let productStart = startDate;
@@ -852,36 +946,148 @@ export default function StockSignals() {
         }
         return { totalQuantity, totalRevenue, adjustedStartDate: effectiveStartDate };
     };
+        const sendStockSignalEmail = useCallback(async ({ stockSignal, expense, calculation, chosenEndDate }: {
+                stockSignal: StockSignal;
+                expense: ExpenseAdvanced;
+                calculation: any;
+                chosenEndDate: number;
+        }) => {
+                try {
+                        const dbInstance = await getDB();
+                        const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
+                        const shouldSendEmail = emailSettings?.stockSignals !== false;
+                        const hasShortage = calculation.margin < 0;
+                        if (!shouldSendEmail || !hasShortage) {
+                                return;
+                        }
+                        const store = await dbInstance.get('stores', user?.storeId);
+                        const storeName = store?.name || user?.storeId || '';
+                        const productName = expense.type === 'direct' && expense.directProduct
+                                ? getProductName(expense.directProduct.productId)
+                                : (categoryMap.get(expense.categoryId || '')?.name || 'Dépense indirecte');
+                        const shouldShowQuantities = expense.type === 'direct' && expense.directProduct
+                                ? (() => {
+                                        const prod = productMap.get(expense.directProduct!.productId);
+                                        return (prod && (prod as any).trackQuantity === true) || calculation.quantityBought > 1;
+                                })()
+                                : false;
+                        const statusBadge = calculation.marginPercentage >= 35 ? '✅ Excellente' :
+                                calculation.marginPercentage >= 20 ? '⚠️ Moyenne' : '❌ Faible';
+                        const resume = `
+<div style="margin: 20px 0;">
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">👤 Informations Utilisateur</h3>
+        <div class="info-row">
+            <span class="info-label">Signalé par :&nbsp;</span>
+            <span class="info-value">${user?.username || 'Inconnu'}</span>
+        </div>
+    </div>
+
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📦 Détails du Stock</h3>
+        <div class="info-row">
+            <span class="info-label">Produit/Catégorie :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600;">${productName}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Type de dépense :&nbsp;</span>
+            <span class="info-value">${expense.type === 'direct' ? '🎯 Directe' : expense.type === 'indirect' ? '🔄 Indirecte' : '⚙️ Opérationnelle'}</span>
+        </div>
+    </div>
+
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📅 Période de Suivi</h3>
+        <div class="info-row">
+            <span class="info-label">Date début :&nbsp;</span>
+            <span class="info-value">${new Date(calculation.effectiveStartDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Date fin :&nbsp;</span>
+            <span class="info-value">${new Date(chosenEndDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
+        </div>
+    </div>
+
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💰 Résultats Financiers</h3>
+        <div class="info-row">
+            <span class="info-label">Coût d'achat :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600;">${calculation.purchaseAmount.toLocaleString('fr-FR')} F CFA</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Chiffre d'affaires :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600;">${calculation.periodRevenue.toLocaleString('fr-FR')} F CFA</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">${calculation.margin >= 0 ? 'Surplus' : 'Manque'} :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600; color: ${calculation.margin >= 0 ? '#10b981' : '#ef4444'}">${calculation.margin >= 0 ? '+' : ''}${calculation.margin.toLocaleString('fr-FR')} F CFA</span>
+        </div>
+    </div>
+
+    <div class="${calculation.marginPercentage >= 35 ? 'highlight positive' : calculation.marginPercentage >= 20 ? 'highlight' : 'highlight negative'}">
+        <div class="info-row">
+            <span class="info-label" style="font-size: 16px;">📊 Performance :&nbsp;</span>
+            <span class="info-value" style="font-size: 18px; font-weight: 700;">
+                ${statusBadge} - ${calculation.marginPercentage.toFixed(1)}%
+            </span>
+        </div>
+    </div>
+
+    ${shouldShowQuantities ? `
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📈 Statistiques de Vente</h3>
+        <div class="info-row">
+            <span class="info-label">Quantité achetée :&nbsp;</span>
+            <span class="info-value">${calculation.quantityBought.toLocaleString('fr-FR')}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Quantité vendue :&nbsp;</span>
+            <span class="info-value">${calculation.totalQuantity.toLocaleString('fr-FR')}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Taux d'écoulement :&nbsp;</span>
+            <span class="info-value">${calculation.quantityBought > 0 ? ((calculation.totalQuantity / calculation.quantityBought) * 100).toFixed(1) : '0'}%</span>
+        </div>
+    </div>
+    ` : ''}
+
+    <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
+        <strong>ID du Signalement :&nbsp;</strong>${stockSignal.id}
+    </div>
+</div>
+`;
+                        await pendingEmailService.sendToAllAdmins({
+                                message: resume,
+                                storeName,
+                                type: 'stock',
+                                relatedId: stockSignal.id,
+                                storeId: user?.storeId || '',
+                                userId: user?.id || ''
+                        });
+                }
+                catch (e) {
+                }
+        }, [categoryMap, getProductName, productMap, user]);
     const handleStockEnd = async (expense: ExpenseAdvanced) => {
         if (!isBackendReachable) {
             toast.error("Impossible de signaler un stock fini : le serveur n'est pas joignable (hors ligne ou backend down). Veuillez vérifier votre connexion et réessayer.");
             return;
         }
-        // 🔄 IMPORTANT : Recharger TOUTES les données fraîches avant de calculer
-        // Cela garantit que les ventes, dépenses et produits sont à jour
         setIsPreparingSignal(true);
         setPreparingExpenseId(expense.id);
-        toast.info('Chargement des données les plus récentes...', { duration: 2000 });
         try {
-            // Invalider les caches pour forcer le rechargement des ventes et signaux
-            invalidateCaches();
-            // Recharger toutes les données depuis le backend
-            await loadData(false);
-            // ✅ CORRECTION : Récupérer l'expense MISE À JOUR depuis IndexedDB
-            // après le rechargement pour avoir le bon montant
             const db = await getDB();
             const updatedExpense = await db.get('expensesAdvanced', expense.id);
             if (!updatedExpense) {
                 toast.error('Impossible de trouver la dépense mise à jour. Veuillez réessayer.');
                 return;
             }
-            // Show end-date picker dialog before computing margins
-            setSelectedExpense(updatedExpense); // ✅ Utilise l'expense fraîchement rechargé
-            // Compute a sensible default for the end date: prefer now, but never before the stock start
-            const startTime = updatedExpense.type === 'direct' && updatedExpense.directProduct ? updatedExpense.directProduct.startDate : updatedExpense.date;
+            invalidateCaches();
+            await refreshSignalComputationData(db, updatedExpense);
+            const refreshedExpense = await db.get('expensesAdvanced', expense.id) || updatedExpense;
+            setSelectedExpense(refreshedExpense);
+            const startTime = refreshedExpense.type === 'direct' && refreshedExpense.directProduct ? refreshedExpense.directProduct.startDate : refreshedExpense.date;
             const startIso = new Date(startTime).toISOString().slice(0, 16);
             const nowIso = new Date().toISOString().slice(0, 16);
-            // If now is before the start (clock skew or long future-dated start), default to start
             const defaultIso = nowIso < startIso ? startIso : nowIso;
             setEndDateInput(defaultIso);
             setShowEndDateDialog(true);
@@ -950,25 +1156,26 @@ export default function StockSignals() {
                 status: (selectedExpense.status as "approved" | "pending" | "rejected") ?? "approved", // ensure correct type
             };
             await db.put('expensesAdvanced', updatedExpense);
+            invalidateCaches();
             // Si en ligne, synchroniser immédiatement avec le backend
             if (isOnline) {
                 try {
-                    // Synchroniser le stockSignal
-                    const stockSignalResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(stockSignal)
-                    });
-                    // Synchroniser l'expense mise à jour
-                    const expenseResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(updatedExpense)
-                    });
+                    const [stockSignalResponse, expenseResponse] = await Promise.all([
+                        fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(stockSignal)
+                        }),
+                        fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(updatedExpense)
+                        })
+                    ]);
                     if (stockSignalResponse.ok && expenseResponse.ok) {
                         toast.success('Signalement créé et synchronisé avec succès');
                     }
@@ -1006,141 +1213,15 @@ export default function StockSignals() {
                 });
                 toast.success('Signalement créé (mode hors ligne)');
             }
-            // Envoi automatique d'un email à l'admin avec résumé du signalement de stock
-            try {
-                const dbInstance = await getDB();
-                // Vérifier les paramètres d'email pour les signalements de stock
-                const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
-                const shouldSendEmail = emailSettings?.stockSignals !== false; // Par défaut true si pas de config
-                // N'envoyer le mail que s'il y a un manque (margin < 0)
-                const hasShortage = marginCalculation.margin < 0;
-                if (!shouldSendEmail) {
-                }
-                else if (!hasShortage) {
-                }
-                else {
-                    // Récupérer l'utilisateur current
-                    const currentUser = user;
-                    // Récupérer le nom du magasin depuis la base locale
-                    const store = await dbInstance.get('stores', user?.storeId);
-                    const storeName = store?.name || user?.storeId || '';
-                    // Récupérer le nom du produit/catégorie - utilise les caches
-                    const productName = selectedExpense.type === 'direct' && selectedExpense.directProduct
-                        ? getProductName(selectedExpense.directProduct.productId)
-                        : (categoryMap.get(selectedExpense.categoryId || '')?.name || 'Dépense indirecte');
-                    // Vérifier si on doit afficher les quantités - utilise le cache
-                    const shouldShowQuantities = selectedExpense.type === 'direct' && selectedExpense.directProduct
-                        ? (() => {
-                            const prod = productMap.get(selectedExpense.directProduct.productId);
-                            return (prod && (prod as any).trackQuantity === true) || marginCalculation.quantityBought > 1;
-                        })()
-                        : false;
-                    // Construire le résumé du signalement de stock
-                    const statusBadge = marginCalculation.marginPercentage >= 35 ? '✅ Excellente' :
-                        marginCalculation.marginPercentage >= 20 ? '⚠️ Moyenne' : '❌ Faible';
-                    const resume = `
-<div style="margin: 20px 0;">
-  <div class="info-block">
-    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">👤 Informations Utilisateur</h3>
-    <div class="info-row">
-      <span class="info-label">Signalé par :&nbsp;</span>
-      <span class="info-value">${currentUser?.username || 'Inconnu'}</span>
-    </div>
-  </div>
-
-  <div class="info-block">
-    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📦 Détails du Stock</h3>
-    <div class="info-row">
-      <span class="info-label">Produit/Catégorie :&nbsp;</span>
-      <span class="info-value" style="font-weight: 600;">${productName}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Type de dépense :&nbsp;</span>
-      <span class="info-value">${selectedExpense.type === 'direct' ? '🎯 Directe' : selectedExpense.type === 'indirect' ? '🔄 Indirecte' : '⚙️ Opérationnelle'}</span>
-    </div>
-  </div>
-
-  <div class="info-block">
-    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📅 Période de Suivi</h3>
-    <div class="info-row">
-      <span class="info-label">Date début :&nbsp;</span>
-      <span class="info-value">${new Date(marginCalculation.effectiveStartDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Date fin :&nbsp;</span>
-      <span class="info-value">${new Date(chosenEndDate).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
-    </div>
-  </div>
-
-  <div class="info-block">
-    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">💰 Résultats Financiers</h3>
-    <div class="info-row">
-      <span class="info-label">Coût d'achat :&nbsp;</span>
-      <span class="info-value" style="font-weight: 600;">${marginCalculation.purchaseAmount.toLocaleString('fr-FR')} F CFA</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Chiffre d'affaires :&nbsp;</span>
-      <span class="info-value" style="font-weight: 600;">${marginCalculation.periodRevenue.toLocaleString('fr-FR')} F CFA</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">${marginCalculation.margin >= 0 ? 'Surplus' : 'Manque'} :&nbsp;</span>
-      <span class="info-value" style="font-weight: 600; color: ${marginCalculation.margin >= 0 ? '#10b981' : '#ef4444'}">${marginCalculation.margin >= 0 ? '+' : ''}${marginCalculation.margin.toLocaleString('fr-FR')} F CFA</span>
-    </div>
-  </div>
-
-  <div class="${marginCalculation.marginPercentage >= 35 ? 'highlight positive' : marginCalculation.marginPercentage >= 20 ? 'highlight' : 'highlight negative'}">
-    <div class="info-row">
-      <span class="info-label" style="font-size: 16px;">📊 Performance :&nbsp;</span>
-      <span class="info-value" style="font-size: 18px; font-weight: 700;">
-        ${statusBadge} - ${marginCalculation.marginPercentage.toFixed(1)}%
-      </span>
-    </div>
-  </div>
-
-  ${shouldShowQuantities ? `
-  <div class="info-block">
-    <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📈 Statistiques de Vente</h3>
-    <div class="info-row">
-      <span class="info-label">Quantité achetée :&nbsp;</span>
-      <span class="info-value">${marginCalculation.quantityBought.toLocaleString('fr-FR')}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Quantité vendue :&nbsp;</span>
-      <span class="info-value">${marginCalculation.totalQuantity.toLocaleString('fr-FR')}</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Taux d'écoulement :&nbsp;</span>
-      <span class="info-value">${marginCalculation.quantityBought > 0 ? ((marginCalculation.totalQuantity / marginCalculation.quantityBought) * 100).toFixed(1) : '0'}%</span>
-    </div>
-  </div>
-  ` : ''}
-
-  <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
-    <strong>ID du Signalement :&nbsp;</strong>${stockSignal.id}
-  </div>
-</div>
-`;
-                    // Utiliser le service d'emails en attente
-                    try {
-                        const result = await pendingEmailService.sendToAllAdmins({
-                            message: resume,
-                            storeName: storeName,
-                            type: 'stock',
-                            relatedId: stockSignal.id,
-                            storeId: user?.storeId || '',
-                            userId: user?.id || ''
+                        lastSignalDataRefreshAtRef.current = Date.now();
+                        await processData(db);
+                        await updatePendingSyncCount();
+                        void sendStockSignalEmail({
+                                stockSignal,
+                                expense: selectedExpense,
+                                calculation: marginCalculation,
+                                chosenEndDate,
                         });
-                        if (result.sent > 0) {
-                        }
-                        if (result.queued > 0) {
-                        }
-                    }
-                    catch (e) {
-                    }
-                }
-            }
-            catch (e) {
-            }
             // Afficher le résultat
             if (marginCalculation.marginPercentage < 20) {
                 toast.error(`⚠️ Marge faible: ${marginCalculation.marginPercentage.toFixed(1)}%`);
@@ -1154,7 +1235,6 @@ export default function StockSignals() {
             setShowSignalDialog(false);
             setSelectedExpense(null);
             setMarginCalculation(null);
-            loadData();
         }
         catch (error) {
             toast.error('Erreur lors du signalement');
@@ -1251,10 +1331,11 @@ export default function StockSignals() {
             }
             // Mettre à jour l'état local pour rafraîchir l'UI
             setCompletedSignals(prev => prev.filter(s => s.id !== signal.id));
+            invalidateCaches();
+            lastSignalDataRefreshAtRef.current = 0;
+            await processData(db);
             await updatePendingSyncCount();
             toast.success('Signalement annulé - Le stock est de nouveau actif');
-            // Recharger les données pour mettre à jour la liste des stocks actifs
-            await loadData();
         }
         catch (error) {
             toast.error('Erreur lors de l\'annulation du signalement');
@@ -1262,7 +1343,7 @@ export default function StockSignals() {
         finally {
             setLoading(false);
         }
-    }, [categoryMap, getProductName, isOnline, loadData]);
+    }, [categoryMap, getProductName, invalidateCaches, isOnline, processData]);
     useEffect(() => {
         if (!user?.storeId)
             return;
@@ -1478,20 +1559,20 @@ export default function StockSignals() {
             .filter(exp => expenseTypeFilter === 'all' || exp.type === expenseTypeFilter)
             .sort((a, b) => getStartDate(a) - getStartDate(b));
     }, [filteredActiveStocks, expenseTypeFilter]);
-    return (<div className="relative p-6 space-y-6">
-      {isPreparingSignal && (<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-md shadow-xl border-primary/20">
-            <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
-              <Loader2 className="w-10 h-10 animate-spin text-primary"/>
-              <div className="space-y-1">
-                <p className="text-lg font-semibold">Chargement des données les plus récentes...</p>
-                <p className="text-sm text-muted-foreground">
-                  Vérification des ventes et du stock avant d'ouvrir le signalement.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>)}
+        return (<div className="relative p-6 space-y-6">
+            {isPreparingSignal && (<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm p-4">
+                    <Card className="w-full max-w-md shadow-xl border-primary/20">
+                        <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
+                            <Loader2 className="w-10 h-10 animate-spin text-primary"/>
+                            <div className="space-y-1">
+                                <p className="text-lg font-semibold">Chargement des données les plus récentes...</p>
+                                <p className="text-sm text-muted-foreground">
+                                    Vérification des ventes, du stock et de la dépense avant d'ouvrir le signalement.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>)}
       <div className="flex justify-between items-start gap-4">
         <div>
           <h1 className="text-3xl font-bold">Signalement des Stocks</h1>
@@ -1689,11 +1770,11 @@ export default function StockSignals() {
                                   Veuillez signaler les stocks dans l'ordre chronologique.
                                 </div>)}
                             </div>
-                            <Button onClick={() => handleStockEnd(expense)} variant={isOld ? "destructive" : "default"} size="lg" disabled={disableSignal || isPreparingSignal} className={disableSignal ? "opacity-50" : ""}>
-                              {preparingExpenseId === expense.id ? (<Loader2 className="w-4 h-4 mr-2 animate-spin"/>) : (<Package className="w-4 h-4 mr-2"/>)}
-                              {preparingExpenseId === expense.id
-                            ? "Chargement..."
-                            : disableSignal
+                                                        <Button onClick={() => handleStockEnd(expense)} variant={isOld ? "destructive" : "default"} size="lg" disabled={disableSignal || loading || isPreparingSignal} className={disableSignal ? "opacity-50" : ""}>
+                                                            {preparingExpenseId === expense.id ? (<Loader2 className="w-4 h-4 mr-2 animate-spin"/>) : (<Package className="w-4 h-4 mr-2"/>)}
+                                                            {preparingExpenseId === expense.id
+                                ? "Chargement..."
+                                : disableSignal
                                 ? "Signaler l'ancien d'abord"
                                 : expense.type === 'direct'
                                     ? "Stock Fini"
@@ -1928,7 +2009,7 @@ export default function StockSignals() {
                       <div className="text-right">
                         <div className="flex flex-col items-end gap-2">
                           <Button variant="outline" size="sm" onClick={() => cancelSignal(signal)} disabled={loading}>
-                            Annuler signalement
+                            Annuler
                           </Button>
                           {signal.margin < 0 ? (<TrendingDown className="w-8 h-8 text-red-500"/>) : (<TrendingUp className="w-8 h-8 text-green-500"/>)}
                         </div>
@@ -1949,6 +2030,10 @@ export default function StockSignals() {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">Veuillez choisir la date et l'heure de fin pour calculer les ventes et la marge.</p>
+                            {isRefreshingSignalData && (<p className="text-xs text-blue-600 flex items-center gap-2">
+                                    <Loader2 className="w-3 h-3 animate-spin"/>
+                                    Synchronisation ciblée des ventes, du stock et de la dépense en cours.
+                                </p>)}
               <div>
                 <Label>Date et heure de fin</Label>
                 {/* compute startIso for min attribute so user cannot pick earlier times */}
@@ -1960,11 +2045,11 @@ export default function StockSignals() {
               </div>
             <div className="flex gap-2 justify-end pt-2">
               <Button variant="outline" onClick={() => setShowEndDateDialog(false)}>Annuler</Button>
-              <Button onClick={async () => {
+                            <Button disabled={isComputingMargin} onClick={async () => {
             // compute and open confirmation
             await computeMarginForEnd(endDateInput);
         }}>
-                Calculer et continuer
+                                {isComputingMargin ? 'Actualisation et calcul...' : 'Calculer et continuer'}
               </Button>
             </div>
           </div>
