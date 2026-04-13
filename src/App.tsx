@@ -32,7 +32,10 @@ import StockAdjustmentHistory from './pages/StockAdjustmentHistory';
 import useAndroidBackButton from './hooks/useAndroidBackButton';
 import SubscriptionPayments from './pages/SubscriptionPayments';
 import Notifications from './pages/Notifications';
+import { isActiveFlag } from './lib/status';
 const queryClient = new QueryClient();
+const STORES_STATUS_URL = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1';
+
 function ProtectedRoute({ children }: {
     children: React.ReactNode;
 }) {
@@ -114,60 +117,115 @@ function StoreStatusChecker({ children }: {
     });
     const [checkKey, setCheckKey] = useState(0);
     useEffect(() => {
+        let cancelled = false;
+        let intervalId: number | undefined;
+
         const checkStoreStatus = async () => {
             // Skip si pas de user ou si c'est le super admin (accès illimité)
             if (!user || user.role === 'super_admin' || isLoading) {
-                setStoreStatus({ active: true, name: '', loading: false });
+                if (!cancelled) {
+                    setStoreStatus({ active: true, name: '', loading: false });
+                }
                 return;
             }
+
             try {
                 const db = await getDB();
-                // Récupérer le magasin de l'utilisateur
-                const store = await db.get('stores', user.storeId);
-                if (store) {
+                const localStore = user.storeId ? await db.get('stores', user.storeId) : null;
+                const fallbackName = localStore?.name || 'Votre magasin';
+
+                if (localStore && !cancelled) {
                     setStoreStatus({
-                        active: store.active !== false, // Par défaut true si undefined
-                        name: store.name || 'Votre magasin',
+                        active: isActiveFlag(localStore.active),
+                        name: fallbackName,
                         loading: false
                     });
                 }
-                else {
-                    // Si le store n'existe pas localement, essayer de le récupérer du backend
-                    try {
-                        const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
-                        if (response.ok) {
-                            const stores = await response.json();
-                            const userStore = stores.find((s: any) => s.id === user.storeId);
-                            if (userStore) {
-                                // Mettre à jour le store en local
-                                await db.put('stores', userStore);
-                                setStoreStatus({
-                                    active: userStore.active !== false,
-                                    name: userStore.name || 'Votre magasin',
-                                    loading: false
-                                });
-                            }
-                            else {
-                                // Store non trouvé, considérer comme actif par défaut
-                                setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
-                            }
-                        }
-                        else {
-                            // Erreur backend, on laisse passer par défaut
-                            setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
-                        }
+
+                if (!navigator.onLine) {
+                    if (!localStore && !cancelled) {
+                        setStoreStatus({ active: true, name: fallbackName, loading: false });
                     }
-                    catch (error) {
-                        // En cas d'erreur réseau, on laisse passer
-                        setStoreStatus({ active: true, name: 'Votre magasin', loading: false });
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`${STORES_STATUS_URL}&_ts=${Date.now()}`, { cache: 'no-store' });
+                    if (!response.ok) {
+                        if (!localStore && !cancelled) {
+                            setStoreStatus({ active: true, name: fallbackName, loading: false });
+                        }
+                        return;
+                    }
+
+                    const stores = await response.json();
+                    const userStore = Array.isArray(stores)
+                        ? stores.find((store: any) => String(store?.id) === String(user.storeId))
+                        : null;
+
+                    if (userStore) {
+                        await db.put('stores', userStore);
+                        if (!cancelled) {
+                            setStoreStatus({
+                                active: isActiveFlag(userStore.active),
+                                name: userStore.name || fallbackName,
+                                loading: false
+                            });
+                        }
+                        return;
+                    }
+
+                    if (!cancelled) {
+                        setStoreStatus({
+                            active: false,
+                            name: fallbackName,
+                            loading: false
+                        });
+                    }
+                }
+                catch (error) {
+                    if (!localStore && !cancelled) {
+                        setStoreStatus({ active: true, name: fallbackName, loading: false });
                     }
                 }
             }
             catch (error) {
-                setStoreStatus({ active: true, name: '', loading: false });
+                if (!cancelled) {
+                    setStoreStatus({ active: true, name: '', loading: false });
+                }
             }
         };
+
         checkStoreStatus();
+
+        if (user && user.role !== 'super_admin' && !isLoading) {
+            intervalId = window.setInterval(checkStoreStatus, 30000);
+
+            const handleVisibility = () => {
+                if (document.visibilityState === 'visible') {
+                    checkStoreStatus();
+                }
+            };
+
+            window.addEventListener('focus', checkStoreStatus);
+            document.addEventListener('visibilitychange', handleVisibility);
+
+            return () => {
+                cancelled = true;
+                if (intervalId) {
+                    window.clearInterval(intervalId);
+                }
+                window.removeEventListener('focus', checkStoreStatus);
+                document.removeEventListener('visibilitychange', handleVisibility);
+            };
+        }
+
+        return () => {
+            cancelled = true;
+            if (intervalId) {
+                window.clearInterval(intervalId);
+            }
+        };
     }, [user, isLoading, checkKey]);
     // Affichage du loader pendant la vérification
     if (storeStatus.loading) {

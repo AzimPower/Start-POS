@@ -5,6 +5,7 @@ import * as secureStorage from '@/lib/secureStorage';
 import { refreshAllFromBackend } from '@/lib/sync';
 import { backendAvailable } from '@/lib/backend';
 import { pendingEmailService } from '@/lib/pendingEmailService';
+import { isActiveFlag } from '@/lib/status';
 function resolvePrimaryStoreId(storeId?: string | null, storeIds?: Array<string | null | undefined>): string {
     const candidates = [storeId, ...(storeIds || [])];
     for (const candidate of candidates) {
@@ -486,6 +487,32 @@ export function AuthProvider({ children }: {
                         remoteUser = remoteUsers.find((u) => candidatePhones.includes(String(u.phone || '')) && u.password === password);
                         if (remoteUser) {
                             const primaryStoreId = resolvePrimaryStoreId(remoteUser.storeId, (remoteUser as any).storeIds);
+                            let remoteStoreIsInactive = false;
+                            if (remoteUser.role !== 'super_admin' && primaryStoreId) {
+                                try {
+                                    const storesRes = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1&_ts=' + Date.now(), { cache: 'no-store' });
+                                    if (storesRes.ok) {
+                                        const remoteStores = await storesRes.json();
+                                        const currentStore = Array.isArray(remoteStores)
+                                            ? remoteStores.find((store: any) => String(store?.id) === String(primaryStoreId))
+                                            : null;
+                                        if (currentStore) {
+                                            try {
+                                                await db.put('stores', currentStore);
+                                            }
+                                            catch (e) {
+                                            }
+                                            remoteStoreIsInactive = !isActiveFlag(currentStore.active);
+                                        }
+                                    }
+                                }
+                                catch (e) {
+                                }
+                            }
+                            if (!isActiveFlag(remoteUser.active) && !remoteStoreIsInactive) {
+                                localStorage.setItem('pos-login-last-error', 'Votre compte est désactivé.');
+                                return false;
+                            }
                             // persist into local DB for future offline login
                             try {
                                 const toSave = {
@@ -571,10 +598,21 @@ export function AuthProvider({ children }: {
                 try {
                     localUser = (await db.getFromIndex('users', 'by-phone', p)) as UserRecord | undefined;
                     if (localUser && localUser.password === password) {
-                        if (localUser.active === false) {
+                        const primaryStoreId = resolvePrimaryStoreId(localUser.storeId, (localUser as any).storeIds);
+                        let localStoreIsInactive = false;
+                        if (localUser.role !== 'super_admin' && primaryStoreId) {
+                            try {
+                                const localStore = await db.get('stores', primaryStoreId);
+                                if (localStore) {
+                                    localStoreIsInactive = !isActiveFlag(localStore.active);
+                                }
+                            }
+                            catch (e) {
+                            }
+                        }
+                        if (!isActiveFlag(localUser.active) && !localStoreIsInactive) {
                             return false; // Utilisateur désactivé
                         }
-                        const primaryStoreId = resolvePrimaryStoreId(localUser.storeId, (localUser as any).storeIds);
                         // login local (hors-ligne)
                         const userData = {
                             id: localUser.id,

@@ -26,6 +26,7 @@ export interface AppNotification {
     createdAt: number;
     expiresAt?: number | null;
     readAt?: number | null;
+    dismissedAt?: number | null;
     isRead: boolean;
     readCount?: number;
 }
@@ -86,6 +87,7 @@ function normalizeNotification(raw: any): AppNotification {
         createdAt: Number(raw.createdAt || 0),
         expiresAt: raw.expiresAt == null ? null : Number(raw.expiresAt),
         readAt: raw.readAt == null ? null : Number(raw.readAt),
+        dismissedAt: raw.dismissedAt == null ? null : Number(raw.dismissedAt),
         readCount: raw.readCount == null ? undefined : Number(raw.readCount),
         isRead: Boolean(raw.isRead || raw.readAt),
     };
@@ -148,6 +150,9 @@ function isQueuedDelete(entry: NotificationSyncQueueEntry) {
 function isQueuedRead(entry: NotificationSyncQueueEntry) {
     return mapQueueMethod(entry) === 'PUT' && entry.data?.action === 'mark_read';
 }
+function isQueuedDismiss(entry: NotificationSyncQueueEntry) {
+    return mapQueueMethod(entry) === 'PUT' && entry.data?.action === 'dismiss';
+}
 function notificationFromCreatePayload(payload: CreateNotificationPayload): AppNotification {
     return normalizeNotification({
         ...payload,
@@ -200,6 +205,10 @@ async function addNotificationQueueEntry(entry: Omit<NotificationSyncQueueEntry,
                 String(queuedEntry.data?.notificationId || '') === String(entry.data?.notificationId || ''));
         }
         if (isQueuedRead(queuedEntry) && isQueuedRead(entry as NotificationSyncQueueEntry)) {
+            return (String(queuedEntry.data?.userId || '') === String(entry.data?.userId || '') &&
+                String(queuedEntry.data?.notificationId || '') === String(entry.data?.notificationId || ''));
+        }
+        if (isQueuedDismiss(queuedEntry) && isQueuedDismiss(entry as NotificationSyncQueueEntry)) {
             return (String(queuedEntry.data?.userId || '') === String(entry.data?.userId || '') &&
                 String(queuedEntry.data?.notificationId || '') === String(entry.data?.notificationId || ''));
         }
@@ -363,6 +372,10 @@ function buildProjectedInboxNotifications(baseItems: AppNotification[], cachedIt
     const now = Date.now();
     const cachedById = new Map(cachedItems.map((notification) => [String(notification.id), notification]));
     const pendingDeleteIds = new Set(queueEntries.filter(isQueuedDelete).map((entry) => String(entry.data?.notificationId || '')).filter(Boolean));
+    const pendingDismissIds = new Set(queueEntries
+        .filter((entry) => isQueuedDismiss(entry) && String(entry.data?.userId || '') === String(viewer.id))
+        .map((entry) => String(entry.data?.notificationId || ''))
+        .filter(Boolean));
     const pendingReadIds = new Set(queueEntries
         .filter((entry) => isQueuedRead(entry) && String(entry.data?.userId || '') === String(viewer.id))
         .map((entry) => String(entry.data?.notificationId || ''))
@@ -370,13 +383,13 @@ function buildProjectedInboxNotifications(baseItems: AppNotification[], cachedIt
     const projected = new Map<string, AppNotification>();
     for (const notification of baseItems) {
         const normalized = normalizeNotification(notification);
-        if (!pendingDeleteIds.has(normalized.id) && isNotificationVisibleToViewer(normalized, viewer, now)) {
+        if (!pendingDeleteIds.has(normalized.id) && !pendingDismissIds.has(normalized.id) && isNotificationVisibleToViewer(normalized, viewer, now)) {
             projected.set(normalized.id, normalized);
         }
     }
     for (const entry of queueEntries.filter(isQueuedCreate)) {
         const queuedNotification = notificationFromCreatePayload(entry.data || {});
-        if (pendingDeleteIds.has(queuedNotification.id) || !isNotificationVisibleToViewer(queuedNotification, viewer, now)) {
+        if (pendingDeleteIds.has(queuedNotification.id) || pendingDismissIds.has(queuedNotification.id) || !isNotificationVisibleToViewer(queuedNotification, viewer, now)) {
             continue;
         }
         projected.set(queuedNotification.id, cachedById.get(queuedNotification.id) || queuedNotification);
@@ -530,6 +543,9 @@ export async function deleteNotification(senderUserId: string, notificationId: s
             if (isQueuedRead(entry) && String(entry.data?.notificationId || '') === String(notificationId)) {
                 return true;
             }
+            if (isQueuedDismiss(entry) && String(entry.data?.notificationId || '') === String(notificationId)) {
+                return true;
+            }
             return false;
         });
         return { queued: false };
@@ -553,6 +569,19 @@ export async function markNotificationRead(userId: string, notificationId: strin
         });
     }
     const data = { action: 'mark_read', userId, notificationId };
+    const result = await executeOrQueueMutation('PUT', data, {
+        method: 'PUT',
+        operation: 'update',
+        data,
+    });
+    return { queued: result.queued };
+}
+export async function dismissNotificationForUser(userId: string, notificationId: string): Promise<NotificationMutationResult> {
+    await removeInboxNotificationForViewer(userId, notificationId);
+    await removeQueuedNotificationEntries((entry) => isQueuedRead(entry)
+        && String(entry.data?.userId || '') === String(userId)
+        && String(entry.data?.notificationId || '') === String(notificationId));
+    const data = { action: 'dismiss', userId, notificationId };
     const result = await executeOrQueueMutation('PUT', data, {
         method: 'PUT',
         operation: 'update',

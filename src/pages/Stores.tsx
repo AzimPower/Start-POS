@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { isActiveFlag } from '@/lib/status';
 interface StoreData {
     id: string;
     name: string;
@@ -22,6 +23,28 @@ interface StoreData {
     subscriptionStart?: number; // Date de début d'abonnement
     subscriptionEnd?: number; // Date de fin d'abonnement
     lastPayment?: number; // Date du dernier paiement
+}
+function StoreSummaryCard({ title, value, subtitle, icon: Icon, color }: {
+    title: string;
+    value: string | number;
+    subtitle: string;
+    icon: React.ElementType;
+    color: string;
+}) {
+    return (<Card className="border-border/60 shadow-sm">
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-muted-foreground">{title}</p>
+            <p className="mt-1 text-xl font-bold leading-tight sm:text-2xl">{value}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+          </div>
+          <div className={`shrink-0 rounded-xl p-2.5 ${color}`}>
+            <Icon className="h-5 w-5 text-white" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>);
 }
 export default function Stores() {
     const { user, setActiveStore } = useAuth();
@@ -34,6 +57,7 @@ export default function Stores() {
     const { isOnline } = useNetwork();
     const [stores, setStores] = useState<StoreData[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [lastRefresh, setLastRefresh] = useState(new Date());
     const [showDialog, setShowDialog] = useState(false);
     const [editingStore, setEditingStore] = useState<StoreData | null>(null);
     const [formData, setFormData] = useState({ name: '', address: '' });
@@ -57,25 +81,24 @@ export default function Stores() {
         open: false, store: null, months: 1
     });
     useEffect(() => {
-        (async () => {
-            setIsLoading(true);
-            try {
-                await loadData();
-            }
-            finally {
-                setIsLoading(false);
-            }
-        })();
+      loadData();
     }, []);
     const loadData = async () => {
+      setIsLoading(true);
+      try {
         await loadStores();
+      }
+      finally {
+        setIsLoading(false);
+        setLastRefresh(new Date());
+      }
     };
     const loadStores = async () => {
         const db = await getDB();
         // If online, try to fetch latest stores from backend and persist locally
         if (isOnline) {
             try {
-                const resp = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
+                const resp = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1');
                 if (resp.ok) {
                     let backendStores: any = await resp.json();
                     // Accept common wrapper shapes
@@ -108,7 +131,7 @@ export default function Stores() {
                         id: s.id,
                         name: s.name || s.title || 'Magasin',
                         address: s.address || s.location || '',
-                        active: s.active !== undefined ? !!s.active : true,
+                      active: isActiveFlag(s.active),
                         createdAt: s.createdAt ? Number(s.createdAt) : Date.now(),
                         subscriptionStart: s.subscriptionStart ? Number(s.subscriptionStart) : undefined,
                         subscriptionEnd: s.subscriptionEnd ? Number(s.subscriptionEnd) : undefined,
@@ -159,14 +182,8 @@ export default function Stores() {
         // Vérifier et désactiver les abonnements expirés
         const now = Date.now();
         for (const store of storesData) {
-            if (store.subscriptionEnd && store.subscriptionEnd <= now && store.active) {
+          if (store.subscriptionEnd && store.subscriptionEnd <= now && isActiveFlag(store.active)) {
                 await db.put('stores', { ...store, active: false });
-                // Désactiver aussi tous les utilisateurs du magasin
-                const allUsers = await db.getAll('users');
-                const storeUsers = allUsers.filter(u => u.storeId === store.id);
-                for (const storeUser of storeUsers) {
-                    await db.put('users', { ...storeUser, active: false });
-                }
             }
         }
         // Recharger les données après mise à jour
@@ -174,7 +191,7 @@ export default function Stores() {
         // Ajouter les propriétés d'abonnement et active si elles n'existent pas (compatibilité)
         storesData = storesData.map(store => ({
             ...store,
-            active: store.active !== undefined ? store.active : true,
+          active: isActiveFlag(store.active),
             subscriptionStart: (store as any).subscriptionStart || store.createdAt,
             subscriptionEnd: (store as any).subscriptionEnd || (store.createdAt + (30 * 24 * 60 * 60 * 1000)),
             lastPayment: (store as any).lastPayment || store.createdAt
@@ -194,14 +211,15 @@ export default function Stores() {
             const allUsers = await db.getAll('users');
             const adminsOnly = allUsers.filter(u => u.role === 'admin');
             setAdmins(adminsOnly);
-            setAdminLookup('');
-            setIsCreatingAdmin(false);
-            setSelectedAdminId(null);
         }
         catch (e) {
         }
     };
     const handleSubmit = async () => {
+      if (!editingStore && user?.role !== 'super_admin') {
+        toast.error('Seul le super admin peut créer des magasins');
+        return;
+      }
         if (!formData.name.trim()) {
             toast.error('Le nom du magasin est requis');
             return;
@@ -428,18 +446,86 @@ export default function Stores() {
                 method: 'DELETE',
                 data: { id },
             });
-            // Supprimer toutes les données locales liées au magasin
-            const tables: Array<'users' | 'userStores' | 'customers' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals' | 'hiddenCategories' | 'emailSettings' | 'pendingEmails'> = [
-                'users', 'userStores', 'customers', 'sales', 'products', 'categories', 'expenses', 'expensesAdvanced', 'expenseCategories', 'shifts', 'stockSignals', 'hiddenCategories', 'emailSettings', 'pendingEmails'
-            ];
-            for (const table of tables) {
-                const all = await db.getAll(table);
-                // On ne filtre que si l'item a un champ storeId
-                const toDelete = all.filter(item => 'storeId' in item && item.storeId === id);
-                for (const item of toDelete) {
-                    await db.delete(table, item.id);
-                }
+          const users = await db.getAll('users');
+          const deletedUserIds = new Set<string>();
+          for (const existingUser of users) {
+            const primaryStoreId = String((existingUser as any).storeId || '');
+            const currentStoreIds = Array.isArray((existingUser as any).storeIds)
+              ? (existingUser as any).storeIds.filter(Boolean)
+              : (primaryStoreId ? [primaryStoreId] : []);
+            const isLinkedToDeletedStore = primaryStoreId === id || currentStoreIds.includes(id);
+            if (!isLinkedToDeletedStore) {
+              continue;
             }
+            const remainingStoreIds = currentStoreIds.filter((storeId: string) => storeId !== id);
+            if (remainingStoreIds.length === 0 && (existingUser as any).role !== 'super_admin') {
+              deletedUserIds.add(existingUser.id);
+              await db.delete('users', existingUser.id);
+              continue;
+            }
+            const nextPrimaryStoreId = primaryStoreId === id ? (remainingStoreIds[0] || '') : primaryStoreId;
+            await db.put('users', {
+              ...existingUser,
+              storeIds: remainingStoreIds,
+              storeId: nextPrimaryStoreId,
+            });
+          }
+
+          const userStoreMappings = await db.getAll('userStores');
+          for (const mapping of userStoreMappings.filter((mapping: any) => mapping.storeId === id || deletedUserIds.has(String(mapping.userId || '')))) {
+            await db.delete('userStores', mapping.id);
+          }
+
+          const storeScopedTables: Array<'customers' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals' | 'hiddenCategories' | 'emailSettings' | 'pendingEmails'> = [
+            'customers',
+            'sales',
+            'products',
+            'categories',
+            'expenses',
+            'expensesAdvanced',
+            'expenseCategories',
+            'shifts',
+            'stockSignals',
+            'hiddenCategories',
+            'emailSettings',
+            'pendingEmails',
+          ];
+          for (const table of storeScopedTables) {
+            const all = await db.getAll(table);
+            const toDelete = all.filter((item: any) => item.storeId === id || deletedUserIds.has(String(item.userId || '')));
+            for (const item of toDelete) {
+              await db.delete(table, item.id);
+            }
+          }
+
+          const adminCaches = await db.getAll('adminCache');
+          for (const cache of adminCaches.filter((cache: any) => cache.id === id || cache.storeId === id)) {
+            await db.delete('adminCache', cache.id);
+          }
+
+          const inboxEntries = await db.getAll('notificationInbox');
+          for (const entry of inboxEntries.filter((entry: any) => entry.notification?.targetStoreId === id || deletedUserIds.has(String(entry.viewerId || '')) || deletedUserIds.has(String(entry.notification?.senderUserId || '')))) {
+            await db.delete('notificationInbox', entry.cacheKey);
+          }
+
+          const sentEntries = await db.getAll('notificationSent');
+          for (const entry of sentEntries.filter((entry: any) => entry.notification?.targetStoreId === id || deletedUserIds.has(String(entry.senderUserId || '')))) {
+            await db.delete('notificationSent', entry.cacheKey);
+          }
+
+          const syncOps = await db.getAll('syncQueue');
+          for (const op of syncOps) {
+            const method = String((op as any).method || (op as any).operation || '').toUpperCase();
+            const url = String((op as any).url || '');
+            const data = (op as any).data || {};
+            const touchesDeletedStore = String(data.storeId || data.targetStoreId || '') === id || (url.includes('/stores.php') && String(data.id || '') === id);
+            const touchesDeletedUser = deletedUserIds.has(String(data.userId || data.id || ''));
+            const isCurrentStoreDeleteOp = method === 'DELETE' && url.includes('/stores.php') && String(data.id || '') === id;
+            if ((touchesDeletedStore || touchesDeletedUser) && !isCurrentStoreDeleteOp) {
+              await db.delete('syncQueue', (op as any).id);
+            }
+          }
+
             await db.delete('stores', id);
             toast.success('Magasin supprimé');
             loadStores();
@@ -479,12 +565,6 @@ export default function Stores() {
                 });
                 // Puis mettre à jour localement
                 await db.put('stores', updatedStore);
-                // Réactiver tous les utilisateurs du magasin
-                const allUsers = await db.getAll('users');
-                const storeUsers = allUsers.filter(u => u.storeId === storeId);
-                for (const storeUser of storeUsers) {
-                    await db.put('users', { ...storeUser, active: true });
-                }
                 const total = months * PRICE_PER_MONTH;
                 // Enregistrer l'encaissement
                 try {
@@ -528,12 +608,6 @@ export default function Stores() {
                 });
                 // Puis mettre à jour localement
                 await db.put('stores', updatedStore);
-                // Mettre à jour tous les utilisateurs liés à ce magasin
-                const allUsers = await db.getAll('users');
-                const storeUsers = allUsers.filter(u => u.storeId === storeId);
-                for (const storeUser of storeUsers) {
-                    await db.put('users', { ...storeUser, active: !currentStatus });
-                }
                 toast.success(`Magasin ${!currentStatus ? 'activé' : 'désactivé'} avec succès`);
                 loadStores();
             }
@@ -543,6 +617,10 @@ export default function Stores() {
         }
     };
     const openNewDialog = () => {
+      if (user?.role !== 'super_admin') {
+        toast.error('Seul le super admin peut créer des magasins');
+        return;
+      }
         setEditingStore(null);
         setFormData({ name: '', address: '' });
         setAdminForm({ username: '', phone: '', password: '' });
@@ -559,8 +637,8 @@ export default function Stores() {
             (store.address && store.address.toLowerCase().includes(searchQuery.toLowerCase()));
         // Filtre par statut
         const matchesStatus = statusFilter === 'all' ||
-            (statusFilter === 'active' && store.active !== false) ||
-            (statusFilter === 'inactive' && store.active === false);
+          (statusFilter === 'active' && isActiveFlag(store.active)) ||
+          (statusFilter === 'inactive' && !isActiveFlag(store.active));
         // Filtre par état d'abonnement
         const matchesSubscription = subscriptionFilter === 'all' || (() => {
             const now = Date.now();
@@ -573,14 +651,15 @@ export default function Stores() {
         })();
         return matchesSearch && matchesStatus && matchesSubscription;
     });
-    return (<div className="p-4 sm:p-6 space-y-6 lg:max-w-7xl lg:mx-auto">
+    if (user?.role !== 'super_admin') {
+        return (<div className="p-4 space-y-6 sm:p-6 lg:mx-auto lg:max-w-7xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Magasins</h1>
-          <p className="text-muted-foreground mt-1 text-sm sm:text-base">Gérez vos points de vente</p>
+          <h1 className="text-2xl font-bold sm:text-3xl">Magasins</h1>
+          <p className="mt-1 text-sm text-muted-foreground sm:text-base">Gérez vos points de vente</p>
           {user?.role === 'admin' && (<div className="mt-3 flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Magasin actif :</span>
-              <span className="inline-block px-2 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+              <span className="inline-block rounded-full bg-blue-100 px-2 py-1 text-sm font-medium text-blue-800">
                 {stores.find(s => s.id === user.storeId)?.name || 'Aucun'}
               </span>
               <Badge variant="outline" className="px-2 py-0.5 text-xs">
@@ -588,14 +667,311 @@ export default function Stores() {
               </Badge>
             </div>)}
         </div>
-        {/* Dialog présent pour l'édition et la création. Le trigger (Nouveau magasin) reste réservé au super_admin. */}
         <Dialog open={showDialog} onOpenChange={setShowDialog}>
-          {user?.role === 'super_admin' && (<DialogTrigger asChild>
-              <Button className="w-full sm:w-auto" onClick={openNewDialog}>
-                <Plus className="w-4 h-4 mr-2"/>
-                Nouveau magasin
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                {editingStore ? 'Modifier le magasin' : 'Nouveau magasin'}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Nom du magasin *</Label>
+                <Input id="name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Ex: Magasin Central"/>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="address">Adresse</Label>
+                <Textarea id="address" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Adresse complète du magasin" rows={3}/>
+              </div>
+              <Button onClick={handleSubmit} className="w-full">
+                {editingStore ? 'Modifier' : 'Créer'}
               </Button>
-            </DialogTrigger>)}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"/>
+              <Input placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+            </div>
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex-1">
+                <Label className="mb-2 block text-sm">Statut</Label>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les statuts"/>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les statuts</SelectItem>
+                    <SelectItem value="active">Actif</SelectItem>
+                    <SelectItem value="inactive">Inactif</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1">
+                <Label className="mb-2 block text-sm">Abonnement</Label>
+                <Select value={subscriptionFilter} onValueChange={setSubscriptionFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tous les abonnements"/>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tous les états</SelectItem>
+                    <SelectItem value="active">Abonnement actif</SelectItem>
+                    <SelectItem value="expired">Abonnement expiré</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 lg:items-stretch lg:gap-6">
+        {isLoading ? (Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-md">
+              <div className="border-b p-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 rounded bg-gray-200"/>
+                  <div className="h-5 w-40 animate-pulse rounded bg-gray-200"/>
+                </div>
+              </div>
+              <CardContent>
+                <div className="mb-3 space-y-1">
+                  <div className="mb-2 h-3 w-28 animate-pulse rounded bg-gray-200"/>
+                  <div className="flex flex-wrap gap-2">
+                    <div className="h-6 w-24 animate-pulse rounded bg-gray-200"/>
+                    <div className="h-6 w-20 animate-pulse rounded bg-gray-200"/>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="h-9 flex-1 animate-pulse rounded bg-gray-200"/>
+                  <div className="h-9 w-12 animate-pulse rounded bg-gray-200"/>
+                </div>
+              </CardContent>
+            </Card>))) : (filteredStores.map(store => (<Card key={store.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition hover:shadow-md lg:flex lg:h-full lg:flex-col lg:justify-between">
+            <div className="flex min-h-[190px] flex-col md:min-h-[220px] lg:h-full">
+              <div className="flex items-start justify-between border-b border-border/60 bg-gradient-to-r from-slate-50 to-white p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Store className="h-5 w-5"/>
+                  </div>
+                  <div>
+                    <div className="text-base font-semibold sm:text-lg">{store.name}</div>
+                    <div className="text-xs text-muted-foreground">{store.address || 'Pas d\'adresse'}</div>
+                  </div>
+                </div>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${isActiveFlag(store.active) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${isActiveFlag(store.active) ? 'bg-green-600' : 'bg-red-600'}`}/>
+                  {isActiveFlag(store.active) ? 'Actif' : 'Inactif'}
+                </span>
+              </div>
+              <CardContent className="flex-1 p-4">
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground">Créé le</p>
+                    <p className="font-medium">{new Date(store.createdAt).toLocaleDateString('fr-FR')}</p>
+                  </div>
+                  {(store as any).subscriptionStart && (<div className="space-y-1">
+                      <p className="text-muted-foreground">Abonnement depuis</p>
+                      <p className="font-medium">{new Date((store as any).subscriptionStart).toLocaleDateString('fr-FR')}</p>
+                    </div>)}
+                  {(store as any).subscriptionEnd && (<div className="col-span-2 space-y-1">
+                      <p className="text-muted-foreground">Expiration</p>
+                      <p className={`font-medium ${(store as any).subscriptionEnd > Date.now() ? 'text-green-600' : 'text-red-600'}`}>
+                        {new Date((store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
+                        {(store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
+                      </p>
+                    </div>)}
+                  <div className="col-span-2 flex items-center justify-between gap-2">
+                    {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() ? (<span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                        Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
+                      </span>) : <span />}
+                    <div className="ml-auto flex items-center gap-1">
+                      <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleEdit(store)} title="Modifier" aria-label="Modifier">
+                        <Edit className="h-3.5 w-3.5"/>
+                      </Button>
+                      {user?.role === 'admin' && (<Button variant="default" size="icon" className="h-7 w-7" onClick={() => setSwitchingStore({ id: store.id, name: store.name || store.id })} title="Basculer" aria-label="Basculer">
+                          <ArrowLeftRight className="h-3.5 w-3.5"/>
+                        </Button>)}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+              <div className="p-4 pt-2 lg:flex lg:items-center lg:justify-between lg:pt-4">
+                <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex w-full flex-row flex-wrap items-center gap-2 sm:w-1/2 lg:w-1/2">
+                    {user?.role === 'super_admin' && (<Button variant="default" size="icon" onClick={() => setRenewalDialog({ open: true, store: store, months: 1 })} className="h-9 w-9 bg-blue-600 hover:bg-blue-700" title="Renouveler l'abonnement" aria-label="Renouveler l'abonnement">
+                        <RefreshCw className="h-4 w-4"/>
+                      </Button>)}
+                  </div>
+                  <div className="flex w-full flex-row flex-wrap items-center justify-end gap-2 sm:w-1/2 lg:w-auto">
+                    {user?.role === 'admin' && (<>
+                        <Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching)
+                setSwitchingStore(null); }}>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Confirmer le basculement</DialogTitle>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <p>Vous vous apprêtez à basculer sur le magasin <strong>{switchingStore?.name}</strong>. Voulez-vous continuer ?</p>
+                              <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setSwitchingStore(null)} disabled={isSwitching} className="flex-1">
+                                  Annuler
+                                </Button>
+                                <Button onClick={async () => {
+                    if (!switchingStore)
+                        return;
+                    setIsSwitching(true);
+                    try {
+                        await setActiveStore(switchingStore.id);
+                        const name = switchingStore.name || switchingStore.id;
+                        toast.success(`Vous êtes maintenant connecté sur : ${name}`);
+                        await loadStores();
+                        setTimeout(() => {
+                            setIsSwitching(false);
+                            setSwitchingStore(null);
+                            navigate('/dashboard');
+                        }, 700);
+                    }
+                    catch (e) {
+                        setIsSwitching(false);
+                        toast.error('Impossible de basculer sur ce magasin');
+                    }
+                }} disabled={isSwitching} className="flex-1">
+                                  {isSwitching ? <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-white"/> : null}
+                                  Confirmer
+                                </Button>
+                              </div>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      </>)}
+                    {user?.role === 'super_admin' && (<Button variant={isActiveFlag(store.active) ? 'destructive' : 'default'} size="icon" onClick={() => toggleStoreStatus(store.id, isActiveFlag(store.active))} className="h-9 w-9" title={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'} aria-label={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'}>
+                        <Power className="h-4 w-4"/>
+                      </Button>)}
+                    {user?.role === 'super_admin' && (<Button variant="outline" size="icon" onClick={() => handleDelete(store.id)} className="h-9 w-9" title="Supprimer" aria-label="Supprimer">
+                        <Trash2 className="h-4 w-4"/>
+                      </Button>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>)))}
+      </div>
+
+      <Dialog open={renewalDialog.open} onOpenChange={(open) => { if (!open)
+        setRenewalDialog({ open: false, store: null, months: 1 }); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Renouveler l'abonnement</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Magasin : <strong>{renewalDialog.store?.name}</strong>
+            </p>
+            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-sm text-muted-foreground">
+                Expiration actuelle :{' '}
+                <span className={(renewalDialog.store as any).subscriptionEnd <= Date.now() ? 'font-semibold text-red-600' : 'font-semibold text-green-600'}>
+                  {new Date((renewalDialog.store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
+                  {(renewalDialog.store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
+                </span>
+              </p>)}
+            <div className="space-y-2">
+              <Label htmlFor="renewal-months">Nombre de mois</Label>
+              <Select value={String(renewalDialog.months)} onValueChange={(v) => setRenewalDialog(d => ({ ...d, months: Number(v) }))}>
+                <SelectTrigger id="renewal-months">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => (<SelectItem key={m} value={String(m)}>
+                      {m} mois — {(m * PRICE_PER_MONTH).toLocaleString('fr-FR')} F
+                    </SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1 rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <div className="flex justify-between text-sm">
+                <span>Prix par mois</span>
+                <span className="font-medium">{PRICE_PER_MONTH.toLocaleString('fr-FR')} F</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Durée</span>
+                <span className="font-medium">{renewalDialog.months} mois ({renewalDialog.months * 30} jours)</span>
+              </div>
+              <div className="mt-2 flex justify-between border-t border-blue-200 pt-2 text-base font-bold">
+                <span>Total à payer</span>
+                <span className="text-blue-700">{(renewalDialog.months * PRICE_PER_MONTH).toLocaleString('fr-FR')} F</span>
+              </div>
+            </div>
+            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-xs text-muted-foreground">
+                Nouvelle expiration :{' '}
+                <strong>
+                  {new Date(Math.max((renewalDialog.store as any).subscriptionEnd, Date.now()) +
+                renewalDialog.months * 30 * 24 * 60 * 60 * 1000).toLocaleDateString('fr-FR')}
+                </strong>
+              </p>)}
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setRenewalDialog({ open: false, store: null, months: 1 })}>
+                Annuler
+              </Button>
+              <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={() => renewalDialog.store && renewSubscription(renewalDialog.store.id, renewalDialog.months)}>
+                Confirmer — {(renewalDialog.months * PRICE_PER_MONTH).toLocaleString('fr-FR')} F
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {!isLoading && stores.length === 0 && (<Card className="p-12 text-center">
+          <Store className="mx-auto mb-4 h-12 w-12 text-muted-foreground"/>
+          <p className="text-muted-foreground">Aucun magasin. Créez-en un pour commencer.</p>
+        </Card>)}
+
+      {!isLoading && stores.length > 0 && filteredStores.length === 0 && (<Card className="p-12 text-center">
+          <Search className="mx-auto mb-4 h-12 w-12 text-muted-foreground"/>
+          <p className="text-muted-foreground">Aucun magasin ne correspond à votre recherche.</p>
+          <Button variant="link" className="mt-2" onClick={() => {
+                setSearchQuery('');
+                setStatusFilter('all');
+                setSubscriptionFilter('all');
+            }}>
+            Réinitialiser les filtres
+          </Button>
+        </Card>)}
+    </div>);
+    }
+    const now = Date.now();
+    const activeStoreCount = stores.filter(store => isActiveFlag(store.active)).length;
+    const inactiveStoreCount = stores.length - activeStoreCount;
+    const expiredSubscriptionCount = stores.filter(store => (store as any).subscriptionEnd && (store as any).subscriptionEnd <= now).length;
+    const expiringSoonCount = stores.filter(store => {
+        const subscriptionEnd = (store as any).subscriptionEnd;
+        return subscriptionEnd && subscriptionEnd > now && subscriptionEnd <= now + (30 * 24 * 60 * 60 * 1000);
+    }).length;
+    return (<div className="min-h-screen bg-background">
+      <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-800 px-4 pb-8 pt-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl font-bold text-white sm:text-3xl">Magasins</h1>
+              <p className="mt-1 hidden text-sm text-blue-100 sm:block sm:text-base">Pilotez les points de vente, abonnements et affectations admin depuis une vue unique.</p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+              <div className="flex w-full gap-2 sm:w-auto">
+                <Button variant="secondary" size="sm" onClick={loadData} className="flex-1 bg-white/10 text-white hover:bg-white/20 sm:flex-none">
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  Actualiser
+                </Button>
+                <Dialog open={showDialog} onOpenChange={setShowDialog}>
+                  {user?.role === 'super_admin' && (<DialogTrigger asChild>
+                      <Button className="flex-1 bg-white text-slate-900 hover:bg-slate-100 sm:flex-none" onClick={openNewDialog}>
+                        <Plus className="mr-2 h-4 w-4"/>
+                        Nouveau magasin
+                      </Button>
+                    </DialogTrigger>)}
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
@@ -675,17 +1051,32 @@ export default function Stores() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+                </Dialog>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
+      <div className="mx-auto -mt-4 max-w-7xl space-y-6 px-4 pb-10">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StoreSummaryCard title="Magasins" value={stores.length} subtitle={`${filteredStores.length} visibles`} icon={Store} color="bg-slate-800" />
+          <StoreSummaryCard title="Actifs" value={activeStoreCount} subtitle={`${inactiveStoreCount} inactifs`} icon={Power} color="bg-emerald-500" />
+          <StoreSummaryCard title="Expirent bientot" value={expiringSoonCount} subtitle="Sous 30 jours" icon={RefreshCw} color="bg-amber-500" />
+          <StoreSummaryCard title="Abonnements expires" value={expiredSubscriptionCount} subtitle="Necessitent une action" icon={Trash2} color="bg-rose-500" />
+        </div>
+
       {/* Barre de recherche et filtres */}
-      <Card>
-        <CardContent className="pt-6">
+      <Card className="border-border/60 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold">Recherche et filtres</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
           <div className="flex flex-col gap-4">
             {/* Barre de recherche */}
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4"/>
-              <Input placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+              <Input placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 pl-10"/>
             </div>
             
             {/* Filtres */}
@@ -757,9 +1148,9 @@ export default function Stores() {
                     <div className="text-xs text-muted-foreground">{store.address || 'Pas d\'adresse'}</div>
                   </div>
                 </div>
-                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${(store.active !== false) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${(store.active !== false) ? 'bg-green-600' : 'bg-red-600'}`}/>
-                  {(store.active !== false) ? 'Actif' : 'Inactif'}
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${isActiveFlag(store.active) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isActiveFlag(store.active) ? 'bg-green-600' : 'bg-red-600'}`}/>
+                  {isActiveFlag(store.active) ? 'Actif' : 'Inactif'}
                 </span>
               </div>
               <CardContent className="flex-1 p-4">
@@ -852,7 +1243,7 @@ export default function Stores() {
                           </DialogContent>
                         </Dialog>
                       </>)}
-                    {user?.role === 'super_admin' && (<Button variant={(store.active !== false) ? 'destructive' : 'default'} size="icon" onClick={() => toggleStoreStatus(store.id, store.active !== false)} className="h-9 w-9" title={(store.active !== false) ? 'Désactiver' : 'Activer'} aria-label={(store.active !== false) ? 'Désactiver' : 'Activer'}>
+                    {user?.role === 'super_admin' && (<Button variant={isActiveFlag(store.active) ? 'destructive' : 'default'} size="icon" onClick={() => toggleStoreStatus(store.id, isActiveFlag(store.active))} className="h-9 w-9" title={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'} aria-label={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'}>
                         <Power className="w-4 h-4"/>
                       </Button>)}
                     {user?.role === 'super_admin' && (<Button variant="outline" size="icon" onClick={() => handleDelete(store.id)} className="h-9 w-9" title="Supprimer" aria-label="Supprimer">
@@ -945,5 +1336,6 @@ export default function Stores() {
             Réinitialiser les filtres
           </Button>
         </Card>)}
+      </div>
     </div>);
 }

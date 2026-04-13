@@ -200,6 +200,19 @@ export default function StockSignals() {
         allExpenses.forEach(exp => map.set(exp.id, exp.type));
         return map;
     }, [allExpenses]);
+    const isIndirectExpenseEligible = useCallback((expense: ExpenseAdvanced) => {
+        if (expense.type !== 'indirect') {
+            return true;
+        }
+        if (!trackIndirectExpenses) {
+            return false;
+        }
+        if (!trackIndirectExpensesEnabledAt) {
+            return true;
+        }
+        const expenseStart = toSafeNumber(expense.date || expense.createdAt);
+        return expenseStart >= trackIndirectExpensesEnabledAt;
+    }, [trackIndirectExpenses, trackIndirectExpensesEnabledAt]);
     // Cache des stocks par produit pour éviter les filtres répétés
     const stocksByProduct = useMemo(() => {
         const map = new Map<string, ExpenseAdvanced[]>();
@@ -220,7 +233,7 @@ export default function StockSignals() {
     const stocksByCategory = useMemo(() => {
         const map = new Map<string, ExpenseAdvanced[]>();
         activeStocks.forEach(stock => {
-            if (stock.type === 'indirect' && stock.categoryId) {
+            if (stock.type === 'indirect' && stock.categoryId && isIndirectExpenseEligible(stock)) {
                 const existing = map.get(stock.categoryId) || [];
                 existing.push(stock);
                 map.set(stock.categoryId, existing);
@@ -231,7 +244,7 @@ export default function StockSignals() {
             stocks.sort((a, b) => (a.date || 0) - (b.date || 0));
         });
         return map;
-    }, [activeStocks]);
+    }, [activeStocks, isIndirectExpenseEligible]);
     // Fonctions de lookup optimisées
     const getProductStockCount = useCallback((productId: string) => {
         return stocksByProduct.get(productId)?.length || 0;
@@ -1449,17 +1462,10 @@ export default function StockSignals() {
     }, [completedSignals, trackIndirectExpenses, resolveSignalExpenseType]);
     const visibleActiveStocks = useMemo(() => {
         if (trackIndirectExpenses) {
-            return activeStocks.filter((expense) => {
-                if (expense.type !== 'indirect')
-                    return true;
-                if (!trackIndirectExpensesEnabledAt)
-                    return true;
-                const expenseStart = toSafeNumber(expense.date || expense.createdAt);
-                return expenseStart >= trackIndirectExpensesEnabledAt;
-            });
+            return activeStocks.filter((expense) => expense.type !== 'indirect' || isIndirectExpenseEligible(expense));
         }
         return activeStocks.filter((exp) => exp.type === 'direct');
-    }, [activeStocks, trackIndirectExpenses, trackIndirectExpensesEnabledAt]);
+    }, [activeStocks, trackIndirectExpenses, isIndirectExpenseEligible]);
     // Fonction pour filtrer les signaux - optimisée avec useMemo
     const filteredSignals = useMemo(() => {
         const now = nowTimestamp;
@@ -1766,7 +1772,7 @@ export default function StockSignals() {
                                 </div>)}
                               {expense.type === 'indirect' && hasMultipleCategoryStocks && !isOldestForCategory && (<div className="text-sm text-amber-600 bg-amber-50 p-2 rounded border border-amber-200 mt-2">
                                   <AlertTriangle className="w-4 h-4 inline mr-1"/>
-                                  Ce stock ne peut pas être signalé car il y a un stock plus ancien du même produit. 
+                                                                    Cette dépense indirecte ne peut pas être signalée car il y a une dépense plus ancienne dans la même catégorie. 
                                   Veuillez signaler les stocks dans l'ordre chronologique.
                                 </div>)}
                             </div>

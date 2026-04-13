@@ -75,8 +75,9 @@ switch ($groupBy) {
         break;
 }
 
-// Aggregate ventes by group
-$sql = "SELECT $groupExpr as period_key, $labelExpr as label, SUM(CAST(total AS DECIMAL(20,2))) as ventes FROM sales" . $where . " GROUP BY period_key ORDER BY period_key";
+// Aggregate ventes by group, excluding refunded sales
+$salesWhere = $where . ' AND refunded = 0';
+$sql = "SELECT $groupExpr as period_key, $labelExpr as label, SUM(CAST(total AS DECIMAL(20,2))) as ventes FROM sales" . $salesWhere . " GROUP BY period_key ORDER BY period_key";
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -85,8 +86,8 @@ $chartData = array_map(function($r) {
     return ['date' => $r['label'], 'ventes' => (float)$r['ventes']];
 }, $rows);
 
-// Totals: ventes brutes, remboursements
-$totalsSql = 'SELECT SUM(CAST(total AS DECIMAL(20,2))) as ventesBrutes FROM sales' . $where;
+// Totals: ventes brutes hors remboursements, remboursements séparés
+$totalsSql = 'SELECT SUM(CAST(total AS DECIMAL(20,2))) as ventesBrutes FROM sales' . $salesWhere;
 $totalsStmt = $pdo->prepare($totalsSql);
 $totalsStmt->execute($params);
 $totalsRow = $totalsStmt->fetch(PDO::FETCH_ASSOC);
@@ -194,8 +195,8 @@ if ($startHour && $endHour) {
 if ($userId) $prevParams[] = $userId;
 elseif ($storeId) $prevParams[] = $storeId;
 
-// Build previous period query with hour filtering
-$prevTotalsSql = 'SELECT SUM(CAST(total AS DECIMAL(20,2))) as ventesBrutes FROM sales WHERE createdAt >= ? AND createdAt <= ?';
+// Build previous period query with hour filtering, excluding refunded sales
+$prevTotalsSql = 'SELECT SUM(CAST(total AS DECIMAL(20,2))) as ventesBrutes FROM sales WHERE createdAt >= ? AND createdAt <= ? AND refunded = 0';
 if ($startHour && $endHour) {
     $prevTotalsSql .= ' AND (HOUR(FROM_UNIXTIME(createdAt/1000)) * 60 + MINUTE(FROM_UNIXTIME(createdAt/1000))) >= ? AND (HOUR(FROM_UNIXTIME(createdAt/1000)) * 60 + MINUTE(FROM_UNIXTIME(createdAt/1000))) <= ?';
 }
@@ -266,7 +267,7 @@ $recapStats = [
     'remboursements' => $remboursements,
     'surplus' => $surplus,
     'manque' => $manque,
-    'ventesNettes' => $ventesBrutes - $remboursements,
+    'ventesNettes' => $ventesBrutes,
     'margeBrute' => $margeBrute,
     'margeBrutePourcent' => $margeBrutePourcent,
     'evolVentes' => $evolVentes,
@@ -277,7 +278,7 @@ $recapStats = [
     'evolSurplusPercent' => percent_change($evolSurplus, $prevSurplus),
     'evolManque' => $evolManque,
     'evolManquePercent' => percent_change($evolManque, $prevManque),
-    'evolNettes' => ($ventesBrutes - $remboursements) - (($prevVentesBrutes) - ($prevRemboursements)),
+    'evolNettes' => $evolVentes,
     'evolMarge' => $evolMarge,
     'evolMargePercent' => $evolMargePercent,
 ];

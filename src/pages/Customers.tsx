@@ -4,11 +4,11 @@ import { useNetwork } from '@/hooks/useNetwork';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Edit, Trash2, Users, Phone, Eye, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Plus, Edit, Trash2, Users, Phone, Eye, Loader2, Mail, MapPin, CalendarDays, ReceiptText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
@@ -25,6 +25,21 @@ interface Customer {
     createdAt: number;
     storeId: string;
 }
+
+const formatVisitDate = (date: Date | null) => {
+    if (!date) {
+        return 'Aucune visite';
+    }
+
+    return date.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+};
+
 export default function Customers() {
     const { user } = useAuth();
     const { isBackendReachable, manualSync } = useNetwork();
@@ -433,7 +448,7 @@ export default function Customers() {
     };
     // ...existing code...
     // Place return at the root of the component
-    return (<div className="p-4 sm:p-6 space-y-6">
+        return (<div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
@@ -515,15 +530,101 @@ export default function Customers() {
 
       <Card>
         <CardContent className="p-4">
-          <div className="mb-4">
+                    <div className="mb-4">
             <Input placeholder="Rechercher par nom, téléphone, email ou adresse..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full"/>
           </div>
+
+                    {isMobile && (<div className="grid grid-cols-2 gap-3">
+                            <div className="rounded-xl border bg-muted/30 p-3">
+                                <div className="text-xs text-muted-foreground">Clients affichés</div>
+                                <div className="mt-1 text-xl font-semibold">{filteredCustomers.length}</div>
+                            </div>
+                            <div className="rounded-xl border bg-muted/30 p-3">
+                                <div className="text-xs text-muted-foreground">En attente de sync</div>
+                                <div className="mt-1 text-xl font-semibold">{pendingSyncCount}</div>
+                            </div>
+                        </div>)}
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="p-0">
-    <div className="overflow-x-auto" ref={listScrollRef} onScroll={handleListScroll}>
+                    {isMobile ? (<div className="space-y-3 p-3">
+                            {loading ? (Array.from({ length: 6 }).map((_, i) => (<div key={`mobile-skeleton-${i}`} className="rounded-2xl border p-4">
+                                        <div className="animate-pulse space-y-3">
+                                            <div className="h-5 w-32 rounded bg-gray-200"/>
+                                            <div className="h-4 w-24 rounded bg-gray-200"/>
+                                            <div className="h-4 w-40 rounded bg-gray-200"/>
+                                            <div className="grid grid-cols-3 gap-2 pt-1">
+                                                <div className="h-10 rounded bg-gray-200"/>
+                                                <div className="h-10 rounded bg-gray-200"/>
+                                                <div className="h-10 rounded bg-gray-200"/>
+                                            </div>
+                                        </div>
+                                    </div>))) : filteredCustomers.length === 0 ? (<div className="py-10 text-center text-muted-foreground">
+                                    <Users className="w-12 h-12 mx-auto mb-2 opacity-50"/>
+                                    <p>{searchTerm ? 'Aucun client trouvé' : 'Aucun client enregistré'}</p>
+                                </div>) : (filteredCustomers.map((customer) => {
+                                const sales = salesByCustomer[customer.id] || [];
+                                const lastVisit = sales.length > 0 ? new Date(Math.max(...sales.map(s => s.createdAt))) : null;
+                                return (<Card key={customer.id} className="overflow-hidden rounded-2xl border shadow-sm">
+                                            <CardHeader className="space-y-3 p-4 pb-3">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <CardTitle className="truncate text-base">{customer.name}</CardTitle>
+                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                            <Badge variant="secondary">{sales.length} visite{sales.length > 1 ? 's' : ''}</Badge>
+                                                            <Badge variant="outline">{lastVisit ? 'Actif' : 'Nouveau'}</Badge>
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                                                        Client
+                                                    </div>
+                                                </div>
+                                            </CardHeader>
+                                            <CardContent className="space-y-3 p-4 pt-0">
+                                                <div className="space-y-2 text-sm text-muted-foreground">
+                                                    <div className="flex items-center gap-2">
+                                                        <Phone className="h-4 w-4 shrink-0"/>
+                                                        <span className="truncate">{customer.phone || 'Téléphone non renseigné'}</span>
+                                                    </div>
+                                                    {customer.email && (<div className="flex items-center gap-2">
+                                                            <Mail className="h-4 w-4 shrink-0"/>
+                                                            <span className="truncate">{customer.email}</span>
+                                                        </div>)}
+                                                    {customer.address && (<div className="flex items-center gap-2">
+                                                            <MapPin className="h-4 w-4 shrink-0"/>
+                                                            <span className="line-clamp-2">{customer.address}</span>
+                                                        </div>)}
+                                                    <div className="flex items-center gap-2">
+                                                        <CalendarDays className="h-4 w-4 shrink-0"/>
+                                                        <span className="truncate">{formatVisitDate(lastVisit)}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <ReceiptText className="h-4 w-4 shrink-0"/>
+                                                        <span>{sales.length} passage{sales.length > 1 ? 's' : ''} en caisse</span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-3 gap-2 pt-1">
+                                                    <Button variant="ghost" className="h-10" onClick={() => handleEdit(customer)} title="Modifier" disabled={loading}>
+                                                        <Edit className="w-4 h-4"/>
+                                                    </Button>
+                                                    <Button variant="ghost" className="h-10" onClick={() => handleDelete(customer.id)} title="Supprimer" disabled={loading}>
+                                                        <Trash2 className="w-4 h-4"/>
+                                                    </Button>
+                                                    <Button variant="outline" className="h-10" title="Voir les reçus du client" onClick={() => navigate(`/customer-receipts/${customer.id}`)}>
+                                                        <Eye className="w-4 h-4"/>
+                                                    </Button>
+                                                </div>
+                                            </CardContent>
+                                        </Card>);
+                        }))}
+
+                            {loadingMore && (<div className="py-4 text-center text-sm text-muted-foreground">
+                                    Chargement...
+                                </div>)}
+                        </div>) : (<div className="overflow-x-auto" ref={listScrollRef} onScroll={handleListScroll}>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -603,8 +704,8 @@ export default function Customers() {
                     </TableCell>
                   </TableRow>)}
               </TableBody>
-            </Table>
-          </div>
+                        </Table>
+                    </div>)}
         </CardContent>
       </Card>
     </div>);

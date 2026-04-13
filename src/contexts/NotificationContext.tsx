@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { AppNotification, fetchInboxNotifications, markNotificationRead } from '@/lib/notifications';
+import { AppNotification, dismissNotificationForUser, fetchInboxNotifications, markNotificationRead } from '@/lib/notifications';
 import { onConnectionStateChange } from '@/lib/sync';
 interface NotificationContextType {
     notifications: AppNotification[];
@@ -8,6 +8,7 @@ interface NotificationContextType {
     isLoading: boolean;
     refresh: () => Promise<void>;
     markAsRead: (notificationId: string) => Promise<void>;
+    dismissNotification: (notificationId: string) => Promise<void>;
 }
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 export function NotificationProvider({ children }: {
@@ -49,6 +50,20 @@ export function NotificationProvider({ children }: {
             await markNotificationRead(user.id, notificationId);
         }
         catch (error) {
+            await refresh();
+        }
+    };
+    const dismissNotification = async (notificationId: string) => {
+        if (!user) {
+            return;
+        }
+        const previous = notifications;
+        setNotifications((current) => current.filter((notification) => notification.id !== notificationId));
+        try {
+            await dismissNotificationForUser(user.id, notificationId);
+        }
+        catch (error) {
+            setNotifications(previous);
             await refresh();
         }
     };
@@ -113,6 +128,7 @@ export function NotificationProvider({ children }: {
             isLoading,
             refresh,
             markAsRead,
+            dismissNotification,
         }}>
       {children}
     </NotificationContext.Provider>);

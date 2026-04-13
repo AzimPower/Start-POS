@@ -166,6 +166,19 @@ CREATE TABLE `notification_reads` (
 -- --------------------------------------------------------
 
 --
+-- Structure de la table `notification_dismissals`
+--
+
+CREATE TABLE `notification_dismissals` (
+  `id` varchar(36) NOT NULL,
+  `notificationId` varchar(36) NOT NULL,
+  `userId` varchar(36) NOT NULL,
+  `dismissedAt` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Structure de la table `payments`
 --
 
@@ -550,6 +563,15 @@ ALTER TABLE `notification_reads`
   ADD UNIQUE KEY `uniq_notification_user` (`notificationId`,`userId`),
   ADD KEY `idx_notification_reads_userId` (`userId`),
   ADD KEY `idx_notification_reads_notificationId` (`notificationId`);
+
+--
+-- Index pour la table `notification_dismissals`
+--
+ALTER TABLE `notification_dismissals`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_notification_dismissal_user` (`notificationId`,`userId`),
+  ADD KEY `idx_notification_dismissals_userId` (`userId`),
+  ADD KEY `idx_notification_dismissals_notificationId` (`notificationId`);
 
 --
 -- Index pour la table `payments`

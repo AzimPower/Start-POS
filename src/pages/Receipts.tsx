@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { pendingEmailService } from '@/lib/pendingEmailService';
@@ -43,6 +44,8 @@ interface Sale {
     createdAt: number;
     refunded?: boolean;
     refundedAt?: number;
+    receiptSequence?: number;
+    receiptNumber?: string;
 }
 export default function Receipts() {
     const [shifts, setShifts] = useState<any[]>([]);
@@ -69,6 +72,11 @@ export default function Receipts() {
     const [saleToRefund, setSaleToRefund] = useState<Sale | null>(null);
     const [refundComment, setRefundComment] = useState('');
     const [pendingRefundIds, setPendingRefundIds] = useState<Set<string>>(new Set());
+    const salesRef = useRef<Sale[]>([]);
+    const loadMoreArmedRef = useRef(true);
+    useEffect(() => {
+      salesRef.current = sales;
+    }, [sales]);
     useEffect(() => {
         // Check if the user has an active (open) shift, but load data regardless
         let cancelled = false;
@@ -112,7 +120,10 @@ export default function Receipts() {
         }
     };
     const loadData = async (offset = 0, limit = pageSize, reset = true) => {
+      if (reset) {
         setLoading(true);
+        loadMoreArmedRef.current = true;
+      }
         try {
             const db = await getDB();
             // Si en ligne, charger depuis le backend et synchroniser
@@ -130,25 +141,20 @@ export default function Receipts() {
                         // backendResult: { data: Sale[], total, offset, limit }
                         const backendSales = Array.isArray(backendResult) ? backendResult : (backendResult.data || []);
                         const mergedBackendSales = await mergeBackendSalesIntoLocalDb(db, backendSales);
-                        // Charger la page demandée depuis le backend (et non tout)
-                        if (reset) {
-                            setSales(mergedBackendSales);
-                            setLoadedCount(mergedBackendSales.length);
-                        }
-                        else {
-                            setSales(prev => [...prev, ...mergedBackendSales]);
-                            setLoadedCount(prev => prev + mergedBackendSales.length);
-                        }
+                      const nextSales = reset ? mergedBackendSales : [...salesRef.current, ...mergedBackendSales];
+                      const processedSales = await processSales(nextSales, db);
+                      setSales(processedSales);
+                      setLoadedCount(processedSales.length);
                         // Il y a plus de données si on a reçu exactement le nombre demandé
                         const stillHasMore = backendSales.length === limit;
                         setHasMore(stillHasMore);
-                        await processSales(reset ? mergedBackendSales : [...sales, ...mergedBackendSales], db);
+                      await updatePendingSyncCount();
                         return;
                     }
                 }
                 catch (error) {
-                    // En cas d'erreur, charger depuis la base locale
-                    await loadFromLocal(db);
+                  // En cas d'erreur, charger la meme page depuis la base locale
+                  await loadSalesPage(db, offset, limit, reset);
                 }
             }
             else {
@@ -162,7 +168,9 @@ export default function Receipts() {
             toast.error('Erreur lors du chargement des données');
         }
         finally {
+          if (reset) {
             setLoading(false);
+          }
         }
     };
     const loadFromLocal = async (db: any) => {
@@ -205,52 +213,45 @@ export default function Receipts() {
                 const slice = all.slice(offset, offset + limit);
                 results.push(...slice);
             }
-            // If we reset, replace state; otherwise append
-            if (reset) {
-                setSales(results);
-                setLoadedCount(results.length);
-            }
-            else {
-                setSales(prev => [...prev, ...results]);
-                setLoadedCount(prev => prev + results.length);
-            }
+            const nextSales = reset ? results : [...salesRef.current, ...results];
             setHasMore(results.length === limit);
-            // Process the newly loaded page (this will set filteredSales and other derived data)
-            await processSales(reset ? results : [...sales, ...results], db);
-            return results;
+            const processedSales = await processSales(nextSales, db);
+            setSales(processedSales);
+            setLoadedCount(processedSales.length);
+            return processedSales;
         }
         catch (e) {
             // Fallback to loading everything
             const all = await db.getAll('sales');
             all.sort((a: any, b: any) => b.createdAt - a.createdAt);
             const page = all.slice(offset, offset + limit);
-            if (reset) {
-                setSales(page);
-                // Charger les utilisateurs
-                const usersData = await db.getAll('users');
-                setUsers(usersData);
-                setLoadedCount(page.length);
-            }
-            else {
-                setSales(prev => [...prev, ...page]);
-                setLoadedCount(prev => prev + page.length);
-            }
+            const nextSales = reset ? page : [...salesRef.current, ...page];
             setHasMore(page.length === limit);
-            await processSales(reset ? page : [...sales, ...page], db);
-            return page;
+            const processedSales = await processSales(nextSales, db);
+            setSales(processedSales);
+            setLoadedCount(processedSales.length);
+            return processedSales;
         }
     };
     // Scroll container ref for infinite loading
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const handleScroll = async () => {
         const el = scrollRef.current;
-        if (!el || loadingMore || !hasMore) {
+      if (!el || loading || loadingMore || !hasMore) {
             return;
         }
         const { scrollTop, scrollHeight, clientHeight } = el;
         const threshold = 100; // px from bottom
         const isNearBottom = scrollTop + clientHeight >= scrollHeight - threshold;
+      if (!isNearBottom) {
+        loadMoreArmedRef.current = true;
+        return;
+      }
+      if (!loadMoreArmedRef.current) {
+        return;
+      }
         if (isNearBottom) {
+        loadMoreArmedRef.current = false;
             setLoadingMore(true);
             try {
                 await loadData(loadedCount, pageSize, false);
@@ -306,8 +307,8 @@ export default function Receipts() {
             salesData = salesData.filter(s => s.storeId === user.storeId);
         }
         salesData.sort((a, b) => b.createdAt - a.createdAt);
-        setSales(salesData);
         setFilteredSales(salesData);
+        return salesData;
     };
     useEffect(() => {
         let filtered = sales;
@@ -315,7 +316,7 @@ export default function Receipts() {
         if (search) {
             filtered = filtered.filter(sale => {
                 const store = stores.find(s => s.id === sale.storeId);
-                const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
+            const receiptNumber = formatReceiptNumber(sale, sales);
                 return (receiptNumber.toLowerCase().includes(search.toLowerCase()) ||
                     store?.name.toLowerCase().includes(search.toLowerCase()) ||
                     (sale.items && sale.items.some(item => item.name.toLowerCase().includes(search.toLowerCase()))));
@@ -339,7 +340,7 @@ export default function Receipts() {
                 toast.error('Magasin introuvable pour ce reçu');
                 return;
             }
-            const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
+            const receiptNumber = formatReceiptNumber(sale, sales);
             const date = new Date(sale.createdAt);
             // Build plain-text lines for ESC/POS
             const lines: string[] = [];
@@ -665,7 +666,7 @@ export default function Receipts() {
                   </TableRow>) : (filteredSales.map((sale) => {
             const store = stores.find(s => s.id === sale.storeId);
             const cashier = users.find(u => u.id === sale.userId);
-            const receiptNumber = `REC${sale.id.slice(-6).toUpperCase()}`;
+            const receiptNumber = formatReceiptNumber(sale, sales);
             // ...existing code for receipt row...
             return (<TableRow key={sale.id} className={sale.refunded || pendingRefundIds.has(sale.id) ? 'opacity-50' : ''}>
                         <TableCell className="font-medium">
@@ -770,7 +771,7 @@ export default function Receipts() {
                     return totalPaid - selectedSale.total;
                 }
                 return undefined;
-            })()} receiptNumber={`REC${selectedSale.id.slice(-6).toUpperCase()}`} date={new Date(selectedSale.createdAt)}/>)}
+            })()} receiptNumber={formatReceiptNumber(selectedSale, sales)} date={new Date(selectedSale.createdAt)}/>)}
 
       <AlertDialog open={showRefundDialog} onOpenChange={setShowRefundDialog}>
         <AlertDialogContent>

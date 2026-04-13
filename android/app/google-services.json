@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "915905028514",
+    "project_id": "start-pos-a6f60",
+    "storage_bucket": "start-pos-a6f60.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:915905028514:android:bffc06781d692e108812fb",
+        "android_client_info": {
+          "package_name": "com.startpos.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAgIM4SGgJ3r3rihUvy0gdDELjY-Lp5l8I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

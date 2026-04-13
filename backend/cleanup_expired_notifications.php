@@ -26,6 +26,9 @@ try {
     $deleteReads = $pdo->prepare("DELETE FROM notification_reads WHERE notificationId IN ($placeholders)");
     $deleteReads->execute($expiredIds);
 
+    $deleteDismissals = $pdo->prepare("DELETE FROM notification_dismissals WHERE notificationId IN ($placeholders)");
+    $deleteDismissals->execute($expiredIds);
+
     $deleteNotifications = $pdo->prepare("DELETE FROM notifications WHERE id IN ($placeholders)");
     $deleteNotifications->execute($expiredIds);
 

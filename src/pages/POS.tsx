@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { assignReceiptMetadata, formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
 interface Product {
@@ -688,7 +689,7 @@ export default function POS() {
         const db = await getDB();
         try {
             // 1. Création de la vente locale
-            const sale = {
+            let sale = {
                 id: opts?.draftId || generateId(),
                 shiftId: activeShift.id,
                 userId: user!.id,
@@ -722,6 +723,9 @@ export default function POS() {
                 completedAt: !opts?.draft ? Date.now() : undefined,
                 draftComment: opts?.comment || '',
             };
+            if (!opts?.draft) {
+                sale = await assignReceiptMetadata(db, sale);
+            }
             // 2. Mise à jour du stock local AVANT affichage du reçu (seulement si ce n'est pas un brouillon)
             const productsToUpdate = [];
             if (!opts?.draft) {
@@ -766,7 +770,7 @@ export default function POS() {
             }
             const receiptData = {
                 ...sale,
-                receiptNumber: sale.id.substring(0, 8).toUpperCase(),
+                receiptNumber: formatReceiptNumber(sale),
                 storeName: currentStore?.name || 'Magasin',
                 storeAddress: currentStore?.address || '',
                 items: sale.items.map((item: any) => ({

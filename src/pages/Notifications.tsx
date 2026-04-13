@@ -43,7 +43,7 @@ function mergeUsersById(currentUsers: UserOption[], incomingUsers: UserOption[])
     }
     return Array.from(usersById.values());
 }
-function NotificationList({ title, description, notifications, emptyState, onMarkAsRead, storesById, usersById, showReadCount = false, canDelete = false, onDelete, paginate = false, pageSize = 5, }: {
+function NotificationList({ title, description, notifications, emptyState, onMarkAsRead, storesById, usersById, showReadCount = false, canDelete = false, onDelete, deleteLabel = 'Supprimer', paginate = false, pageSize = 5, }: {
     title: string;
     description: string;
     notifications: AppNotification[];
@@ -54,6 +54,7 @@ function NotificationList({ title, description, notifications, emptyState, onMar
     showReadCount?: boolean;
     canDelete?: boolean;
     onDelete?: (notificationId: string) => void;
+    deleteLabel?: string;
   paginate?: boolean;
   pageSize?: number;
 }) {
@@ -108,7 +109,7 @@ function NotificationList({ title, description, notifications, emptyState, onMar
               {(onMarkAsRead && !notification.isRead) || (canDelete && onDelete) ? (<div className="mt-3 flex flex-wrap justify-end gap-2">
                   {canDelete && onDelete && (<Button variant="destructive" size="sm" onClick={() => onDelete(notification.id)}>
                       <Trash2 className="mr-2 h-4 w-4"/>
-                      Supprimer
+                      {deleteLabel}
                     </Button>)}
                   {onMarkAsRead && !notification.isRead && (<Button variant="outline" size="sm" onClick={() => onMarkAsRead(notification.id)}>
                     Marquer comme lue
@@ -154,7 +155,7 @@ function fromDateTimeLocalValue(value: string): number | null {
 }
 export default function Notifications() {
     const { user } = useAuth();
-    const { notifications, unreadCount, isLoading, markAsRead, refresh } = useNotifications();
+  const { notifications, unreadCount, isLoading, markAsRead, dismissNotification, refresh } = useNotifications();
     const [stores, setStores] = useState<StoreOption[]>([]);
     const [users, setUsers] = useState<UserOption[]>([]);
     const [sentNotifications, setSentNotifications] = useState<AppNotification[]>([]);
@@ -266,6 +267,18 @@ export default function Notifications() {
     if (!user) {
         return null;
     }
+      const handleDismissForMe = async (notificationId: string) => {
+        if (!window.confirm('Supprimer cette notification de votre boîte de réception ?')) {
+          return;
+        }
+        try {
+          await dismissNotification(notificationId);
+          toast.success('Notification supprimée de votre boîte de réception');
+        }
+        catch (error) {
+          toast.error('Impossible de supprimer cette notification pour votre compte');
+        }
+      };
     const resetForm = () => {
         setForm({
             title: '',
@@ -493,7 +506,7 @@ export default function Notifications() {
             <NotificationList title="Historique des envois" description={isLoadingSent ? 'Chargement des envois...' : 'Dernières notifications envoyées par le super admin.'} notifications={sentNotifications} emptyState="Aucune notification n'a encore été envoyée." storesById={storesById} usersById={usersById} showReadCount canDelete onDelete={(notificationId) => void handleDelete(notificationId)} paginate pageSize={3}/>
           </div>)}
 
-        <NotificationList title="Boîte de réception" description={isLoading ? 'Chargement...' : 'Toutes les notifications visibles pour votre compte.'} notifications={notifications} emptyState="Aucune notification dans votre boîte de réception." onMarkAsRead={(notificationId) => void markAsRead(notificationId)} storesById={storesById} usersById={usersById} paginate pageSize={5}/>
+        <NotificationList title="Boîte de réception" description={isLoading ? 'Chargement...' : 'Toutes les notifications visibles pour votre compte.'} notifications={notifications} emptyState="Aucune notification dans votre boîte de réception." onMarkAsRead={(notificationId) => void markAsRead(notificationId)} canDelete onDelete={(notificationId) => void handleDismissForMe(notificationId)} deleteLabel="Supprimer pour moi" storesById={storesById} usersById={usersById} paginate pageSize={5}/>
       </div>
     </div>);
 }

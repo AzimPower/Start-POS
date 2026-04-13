@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import NotificationBell from '@/components/NotificationBell';
 import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
 import { getDB } from '@/lib/db';
+import { isActiveFlag } from '@/lib/status';
 import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, Shield, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard, } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 interface LayoutProps {
@@ -21,14 +22,14 @@ export default function Layout({ children }: LayoutProps) {
             return;
         getDB().then(db => db.getAll('stores')).then(stores => {
             if (user.role === 'super_admin') {
-                setStoreCount(stores.filter(s => s.active !== false).length);
+            setStoreCount(stores.filter(s => isActiveFlag(s.active)).length);
             }
             else {
                 // Pour un admin, ne compter que les magasins auxquels il est lié
                 const userStoreIds: string[] = (user as any).storeIds?.length > 0
                     ? (user as any).storeIds
                     : (user.storeId ? [user.storeId] : []);
-                setStoreCount(stores.filter(s => s.active !== false && userStoreIds.includes(s.id)).length);
+                setStoreCount(stores.filter(s => isActiveFlag(s.active) && userStoreIds.includes(s.id)).length);
             }
         }).catch(() => { });
     }, [user]);
@@ -223,7 +224,7 @@ export default function Layout({ children }: LayoutProps) {
             ? 'bg-green-500 text-white shadow-sm'
             : 'bg-red-500 text-white shadow-sm'}`} title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'} aria-live="polite">
                 <Wifi className="w-4 h-4"/>
-                <span>{network.isBackendReachable ? 'OK' : 'Offline'}</span>
+                <span>{network.isBackendReachable ? '' : ''}</span>
               </span>
 
               <NotificationBell buttonClassName="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/30 bg-white/25 p-0 text-white hover:bg-white/40" iconClassName="h-5 w-5"/>

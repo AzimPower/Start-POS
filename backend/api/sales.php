@@ -19,6 +19,157 @@ function is_refunded_sale_flag($value) {
     return $value === true || $value === 1 || $value === '1' || $value === 'true';
 }
 
+function is_draft_sale_flag($value) {
+    return $value === true || $value === 1 || $value === '1' || $value === 'true';
+}
+
+function has_receipt_metadata($sale) {
+    $receiptNumber = isset($sale['receiptNumber']) ? trim((string) $sale['receiptNumber']) : '';
+    $receiptSequence = isset($sale['receiptSequence']) ? intval($sale['receiptSequence']) : 0;
+
+    return $receiptNumber !== '' && $receiptSequence > 0;
+}
+
+function get_receipt_day_start_ms($createdAt) {
+    $timestampMs = intval($createdAt ?? 0);
+    $timestampSeconds = intdiv(max($timestampMs, 0), 1000);
+    $dayStartSeconds = $timestampSeconds - ($timestampSeconds % 86400);
+
+    return $dayStartSeconds * 1000;
+}
+
+function fnv1a32($input) {
+    $hash = 0x811c9dc5;
+    $length = strlen($input);
+
+    for ($index = 0; $index < $length; $index += 1) {
+        $hash ^= ord($input[$index]);
+        $hash = ($hash * 0x01000193) & 0xFFFFFFFF;
+    }
+
+    return $hash;
+}
+
+function get_receipt_prefix($storeId, $createdAt) {
+    $storeKey = trim((string) ($storeId ?? ''));
+    if ($storeKey === '') {
+        $storeKey = 'global';
+    }
+
+    $dayKey = gmdate('Ymd', intdiv(max(intval($createdAt ?? 0), 0), 1000));
+    $hash = strtoupper(str_pad(dechex(fnv1a32($storeKey . ':' . $dayKey)), 8, '0', STR_PAD_LEFT));
+
+    return substr($hash, 0, 7);
+}
+
+function backfill_missing_receipt_metadata($pdo, $sales) {
+    if (empty($sales)) {
+        return $sales;
+    }
+
+    $salesById = [];
+    $groups = [];
+
+    foreach ($sales as $index => $sale) {
+        $saleId = isset($sale['id']) ? (string) $sale['id'] : '';
+        if ($saleId !== '') {
+            $salesById[$saleId][] = $index;
+        }
+
+        if (is_draft_sale_flag($sale['draft'] ?? false) || has_receipt_metadata($sale)) {
+            continue;
+        }
+
+        $dayStart = get_receipt_day_start_ms($sale['createdAt'] ?? 0);
+        $storeId = $sale['storeId'] ?? null;
+        $groupKey = ($storeId === null ? '__NULL__' : (string) $storeId) . '|' . $dayStart;
+        $groups[$groupKey] = [
+            'storeId' => $storeId,
+            'dayStart' => $dayStart,
+        ];
+    }
+
+    if (empty($groups)) {
+        return $sales;
+    }
+
+    $selectWithStoreStmt = $pdo->prepare(
+        'SELECT id, storeId, createdAt, draft, receiptSequence, receiptNumber
+         FROM sales
+         WHERE storeId = ? AND createdAt >= ? AND createdAt < ? AND (draft = 0 OR draft IS NULL)
+         ORDER BY createdAt ASC, id ASC'
+    );
+    $selectWithoutStoreStmt = $pdo->prepare(
+        'SELECT id, storeId, createdAt, draft, receiptSequence, receiptNumber
+         FROM sales
+         WHERE (storeId IS NULL OR storeId = "") AND createdAt >= ? AND createdAt < ? AND (draft = 0 OR draft IS NULL)
+         ORDER BY createdAt ASC, id ASC'
+    );
+    $updateStmt = $pdo->prepare(
+        'UPDATE sales
+         SET receiptSequence = ?, receiptNumber = ?
+         WHERE id = ? AND (receiptSequence IS NULL OR receiptSequence = 0 OR receiptNumber IS NULL OR receiptNumber = "")'
+    );
+
+    foreach ($groups as $group) {
+        $dayStart = intval($group['dayStart']);
+        $dayEnd = $dayStart + 86400000;
+        $storeId = $group['storeId'];
+
+        if ($storeId === null || $storeId === '') {
+            $selectWithoutStoreStmt->execute([$dayStart, $dayEnd]);
+            $groupSales = $selectWithoutStoreStmt->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $selectWithStoreStmt->execute([$storeId, $dayStart, $dayEnd]);
+            $groupSales = $selectWithStoreStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        if (empty($groupSales)) {
+            continue;
+        }
+
+        $usedSequences = [];
+        foreach ($groupSales as $groupSale) {
+            if (!has_receipt_metadata($groupSale)) {
+                continue;
+            }
+
+            $usedSequences[intval($groupSale['receiptSequence'])] = true;
+        }
+
+        foreach ($groupSales as $position => $groupSale) {
+            $receiptSequence = isset($groupSale['receiptSequence']) ? intval($groupSale['receiptSequence']) : 0;
+            $receiptNumber = isset($groupSale['receiptNumber']) ? trim((string) $groupSale['receiptNumber']) : '';
+
+            if ($receiptSequence > 0 && $receiptNumber !== '') {
+                $resolvedSequence = $receiptSequence;
+                $resolvedNumber = $receiptNumber;
+            } else {
+                $resolvedSequence = $position + 1;
+                while (isset($usedSequences[$resolvedSequence])) {
+                    $resolvedSequence += 1;
+                }
+
+                $usedSequences[$resolvedSequence] = true;
+                $resolvedNumber = 'REC' . get_receipt_prefix($groupSale['storeId'] ?? null, $groupSale['createdAt'] ?? 0) . '-' . $resolvedSequence;
+                $updateStmt->execute([$resolvedSequence, $resolvedNumber, $groupSale['id']]);
+            }
+
+            $saleId = isset($groupSale['id']) ? (string) $groupSale['id'] : '';
+            if (!isset($salesById[$saleId])) {
+                continue;
+            }
+
+            foreach ($salesById[$saleId] as $saleIndex) {
+                $sales[$saleIndex]['receiptSequence'] = $resolvedSequence;
+                $sales[$saleIndex]['receiptNumber'] = $resolvedNumber;
+            }
+        }
+    }
+
+    return $sales;
+}
+
 switch ($method) {
     case 'GET':
         $storeId = $_GET['storeId'] ?? null;
@@ -42,6 +193,7 @@ switch ($method) {
             $conditions[] = 'createdAt <= ?';
             $params[] = $endDate;
         }
+        $filterParams = $params;
         if (!empty($conditions)) {
             $sql .= ' WHERE ' . implode(' AND ', $conditions);
         }
@@ -76,6 +228,9 @@ switch ($method) {
             foreach ($sales as &$sale) {
                 $sale['items'] = $itemsBySale[$sale['id']] ?? [];
             }
+            unset($sale);
+
+            $sales = backfill_missing_receipt_metadata($pdo, $sales);
         }
 
         // Compter le total pour la pagination
@@ -83,7 +238,7 @@ switch ($method) {
         $countParams = [];
         if (!empty($conditions)) {
             $countSql .= ' WHERE ' . implode(' AND ', $conditions);
-            $countParams = $params;
+            $countParams = $filterParams;
         }
         $countStmt = $pdo->prepare($countSql);
         $countStmt->execute($countParams);
@@ -98,7 +253,7 @@ switch ($method) {
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
-        $sql = 'INSERT INTO sales (id, shiftId, userId, storeId, customerId, subtotal, tax, total, paymentMethod, cashAmount, mobileMoneyAmount, otherAmount, createdAt, refunded, refundedAt, draft, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $sql = 'INSERT INTO sales (id, shiftId, userId, storeId, customerId, subtotal, tax, total, paymentMethod, cashAmount, mobileMoneyAmount, otherAmount, createdAt, refunded, refundedAt, draft, completedAt, receiptSequence, receiptNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
         $stmt->execute([
@@ -118,7 +273,9 @@ switch ($method) {
             $data['refunded'] ?? false,
             $data['refundedAt'],
             $data['draft'] ?? false,
-            $data['completedAt']
+            $data['completedAt'],
+            $data['receiptSequence'] ?? null,
+            $data['receiptNumber'] ?? null,
         ]);
         
         // Insérer les items de la vente
@@ -177,7 +334,7 @@ switch ($method) {
             }
         }
         
-        $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=? WHERE id=?';
+        $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=?, receiptSequence=?, receiptNumber=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $data['shiftId'],
@@ -196,6 +353,8 @@ switch ($method) {
             $data['refundedAt'] ?? null,
             $data['draft'] ?? false,
             $data['completedAt'] ?? null,
+            $data['receiptSequence'] ?? null,
+            $data['receiptNumber'] ?? null,
             $data['id']
         ]);
         

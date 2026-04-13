@@ -214,7 +214,7 @@ try {
                 $storeIds = array_values(array_unique($storeIds));
             }
 
-            $params = [$userId, $now, $role, $userId];
+            $params = [$userId, $userId, $now, $role, $userId];
             $visibility = [
                 "n.targetType = 'all'",
                 "(n.targetType = 'role' AND n.targetRole = ?)",
@@ -227,11 +227,13 @@ try {
                 $params = array_merge($params, $storeIds);
             }
 
-            $sql = 'SELECT n.*, nr.readAt, u.username AS senderUsername, u.role AS senderRole
+                        $sql = 'SELECT n.*, nr.readAt, nd.dismissedAt, u.username AS senderUsername, u.role AS senderRole
                     FROM notifications n
                     LEFT JOIN notification_reads nr ON nr.notificationId = n.id AND nr.userId = ?
+                                        LEFT JOIN notification_dismissals nd ON nd.notificationId = n.id AND nd.userId = ?
                     LEFT JOIN users u ON u.id = n.senderUserId
                     WHERE n.active = 1
+                                            AND nd.id IS NULL
                       AND (n.expiresAt IS NULL OR n.expiresAt >= ?)
                       AND (' . implode(' OR ', $visibility) . ')
                     ORDER BY n.createdAt DESC
@@ -327,6 +329,35 @@ try {
 
                 $stmt = $pdo->prepare('UPDATE notifications SET active = 0 WHERE id = ?');
                 $stmt->execute([$notificationId]);
+
+                echo json_encode(['success' => true]);
+                break;
+            }
+
+            if ($action === 'dismiss') {
+                $userId = trim((string)($data['userId'] ?? ''));
+                $notificationId = trim((string)($data['notificationId'] ?? ''));
+                if ($userId === '' || $notificationId === '') {
+                    json_error('userId et notificationId sont requis');
+                }
+
+                $exists = $pdo->prepare('SELECT id FROM notifications WHERE id = ? LIMIT 1');
+                $exists->execute([$notificationId]);
+                if (!$exists->fetch()) {
+                    json_error('Notification introuvable', 404);
+                }
+
+                $stmt = $pdo->prepare(
+                    'INSERT INTO notification_dismissals (id, notificationId, userId, dismissedAt)
+                     VALUES (?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE dismissedAt = VALUES(dismissedAt)'
+                );
+                $stmt->execute([
+                    generate_entity_id('dismiss_'),
+                    $notificationId,
+                    $userId,
+                    (int)round(microtime(true) * 1000),
+                ]);
 
                 echo json_encode(['success' => true]);
                 break;

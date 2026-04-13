@@ -13,6 +13,7 @@ import { CreditCard, RefreshCw, Plus, Trash2, Search, Store, TrendingUp, Calenda
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { toast } from 'sonner';
+import { useIsMobile } from '@/hooks/use-mobile';
 const BACKEND = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
 const PAGE_SIZE = 20;
 interface PaymentRecord {
@@ -36,7 +37,10 @@ function formatCFA(n: number) {
         style: 'currency',
         currency: 'XOF',
         maximumFractionDigits: 0,
-    }).format(n);
+  })
+    .format(n)
+  .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/\s*F\s*CFA$/, ' F');
 }
 function KPICard({ title, value, subtitle, icon: Icon, color, }: {
     title: string;
@@ -46,16 +50,16 @@ function KPICard({ title, value, subtitle, icon: Icon, color, }: {
     color: string;
 }) {
     return (<Card>
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-sm text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold mt-1">{value}</p>
-            {subtitle && <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>}
-          </div>
-          <div className={`p-2.5 rounded-xl ${color}`}>
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <p className="min-w-0 flex-1 text-sm text-muted-foreground break-words">{title}</p>
+          <div className={`shrink-0 p-2.5 rounded-xl ${color}`}>
             <Icon size={20} className="text-white"/>
           </div>
+        </div>
+        <div className="mt-3 min-w-0">
+          <p className="text-base font-bold leading-tight tracking-tight break-words sm:text-2xl">{value}</p>
+          {subtitle && <p className="mt-1 text-xs text-muted-foreground break-words">{subtitle}</p>}
         </div>
       </CardContent>
     </Card>);
@@ -63,6 +67,7 @@ function KPICard({ title, value, subtitle, icon: Icon, color, }: {
 export default function SubscriptionPayments() {
     const { user } = useAuth();
     const navigate = useNavigate();
+  const isMobile = useIsMobile();
     // ── Data ──────────────────────────────────────────────────────────────────
     const [payments, setPayments] = useState<PaymentRecord[]>([]);
     const [stores, setStores] = useState<StoreData[]>([]);
@@ -348,7 +353,7 @@ export default function SubscriptionPayments() {
               </Button>
               <Button size="sm" onClick={() => setShowAdd(true)} className="bg-white text-blue-700 hover:bg-blue-50 font-semibold">
                 <Plus size={14} className="mr-1.5"/>
-                Ajouter
+                Encaissement
               </Button>
             </div>
           </div>
@@ -357,7 +362,7 @@ export default function SubscriptionPayments() {
 
       <div className="max-w-7xl mx-auto px-4 -mt-4 pb-10 space-y-6">
         {/* ── KPI Cards ────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <KPICard title={periodFilter === 'all' ? 'Total encaissé' : 'Encaissé (période)'} value={formatCFA(totalEncaisse)} subtitle={`${filteredPayments.length} paiement${filteredPayments.length !== 1 ? 's' : ''}`} icon={Wallet} color="bg-blue-500"/>
           <KPICard title="Ce mois-ci" value={formatCFA(thisMonthTotal)} subtitle={`${thisMonthPayments.length} paiement${thisMonthPayments.length !== 1 ? 's' : ''}`} icon={Calendar} color="bg-indigo-500"/>
           <KPICard title="Boutiques payantes" value={uniqueStoresPaying} subtitle={`sur ${stores.length} boutiques`} icon={Store} color="bg-purple-500"/>
@@ -522,69 +527,104 @@ export default function SubscriptionPayments() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/30">
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground whitespace-nowrap">Date</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Boutique</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground">Mois</th>
-                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">Montant</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Note</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-muted-foreground w-10"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedPayments.length === 0 ? (<tr>
-                      <td colSpan={6} className="text-center py-10 text-muted-foreground text-sm">
-                        Aucun encaissement trouvé
-                      </td>
-                    </tr>) : (pagedPayments.map((p) => (<tr key={p.id} className="border-b last:border-0 hover:bg-muted/20 group">
-                        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                          {format(p.paidAt, 'dd MMM yyyy', { locale: fr })}
-                          <span className="block text-muted-foreground/60">
-                            {format(p.paidAt, 'HH:mm')}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 font-medium">{p.storeName}</td>
-                        <td className="px-4 py-3 text-center">
-                          <Badge variant="secondary" className="text-xs">
-                            {p.months} mois
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-right font-bold text-blue-600 whitespace-nowrap">
-                          {formatCFA(p.amount)}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground max-w-40 truncate">
-                          {p.note || <span className="text-muted-foreground/40">—</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => setDeleteId(p.id)}>
-                            <Trash2 size={13}/>
-                          </Button>
-                        </td>
-                      </tr>)))}
-                </tbody>
-                {filteredPayments.length > 0 && (<tfoot>
-                    <tr className="border-t bg-muted/20">
-                      <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-muted-foreground">
-                        Total ({filteredPayments.length} encaissements)
-                      </td>
-                      <td className="px-4 py-3 text-right font-bold text-blue-600">
-                        {formatCFA(totalEncaisse)}
-                      </td>
-                      <td colSpan={2}/>
+            {isMobile ? (<div className="space-y-3 p-3">
+                {pagedPayments.length === 0 ? (<div className="py-10 text-center text-sm text-muted-foreground">
+                    Aucun encaissement trouvé
+                  </div>) : (pagedPayments.map((p) => (<div key={p.id} className="rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold leading-tight text-foreground">{p.storeName}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {format(p.paidAt, 'dd MMM yyyy', { locale: fr })} a {format(p.paidAt, 'HH:mm')}
+                          </p>
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-destructive" onClick={() => setDeleteId(p.id)}>
+                          <Trash2 size={14}/>
+                        </Button>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <Badge variant="secondary" className="text-xs">
+                          {p.months} mois
+                        </Badge>
+                        <p className="text-base font-bold text-blue-600">{formatCFA(p.amount)}</p>
+                      </div>
+
+                      <div className="mt-3 rounded-xl bg-muted/30 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Note</p>
+                        <p className="mt-1 text-sm leading-5 text-muted-foreground break-words">
+                          {p.note || <span className="text-muted-foreground/40">Aucune note</span>}
+                        </p>
+                      </div>
+                    </div>)))}
+
+                {filteredPayments.length > 0 && (<div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+                    <div className="text-xs font-semibold text-blue-700">Total ({filteredPayments.length} encaissements)</div>
+                    <div className="mt-1 text-lg font-bold text-blue-700">{formatCFA(totalEncaisse)}</div>
+                  </div>)}
+              </div>) : (<div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/30">
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground whitespace-nowrap">Date</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Boutique</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground">Mois</th>
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">Montant</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Note</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-muted-foreground w-10"></th>
                     </tr>
-                  </tfoot>)}
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {pagedPayments.length === 0 ? (<tr>
+                        <td colSpan={6} className="text-center py-10 text-muted-foreground text-sm">
+                          Aucun encaissement trouvé
+                        </td>
+                      </tr>) : (pagedPayments.map((p) => (<tr key={p.id} className="border-b last:border-0 hover:bg-muted/20 group">
+                          <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                            {format(p.paidAt, 'dd MMM yyyy', { locale: fr })}
+                            <span className="block text-muted-foreground/60">
+                              {format(p.paidAt, 'HH:mm')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-medium">{p.storeName}</td>
+                          <td className="px-4 py-3 text-center">
+                            <Badge variant="secondary" className="text-xs">
+                              {p.months} mois
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-blue-600 whitespace-nowrap">
+                            {formatCFA(p.amount)}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground max-w-40 truncate">
+                            {p.note || <span className="text-muted-foreground/40">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => setDeleteId(p.id)}>
+                              <Trash2 size={13}/>
+                            </Button>
+                          </td>
+                        </tr>)))}
+                  </tbody>
+                  {filteredPayments.length > 0 && (<tfoot>
+                      <tr className="border-t bg-muted/20">
+                        <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-muted-foreground">
+                          Total ({filteredPayments.length} encaissements)
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-blue-600">
+                          {formatCFA(totalEncaisse)}
+                        </td>
+                        <td colSpan={2}/>
+                      </tr>
+                    </tfoot>)}
+                </table>
+              </div>)}
 
             {/* Pagination */}
-            {totalPages > 1 && (<div className="flex items-center justify-between px-4 py-3 border-t">
+            {totalPages > 1 && (<div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-muted-foreground">
                   Page {page} sur {totalPages} · {filteredPayments.length} résultat{filteredPayments.length !== 1 ? 's' : ''}
                 </p>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center justify-between gap-1 sm:justify-start">
                   <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
                     <ChevronLeft size={14}/>
                   </Button>

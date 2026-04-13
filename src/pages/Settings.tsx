@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Edit } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Edit, type LucideIcon } from 'lucide-react';
 import * as NativePrinter from '@/lib/nativePrinter';
 import * as secureStorage from '@/lib/secureStorage';
 import { useAuth } from '@/contexts/AuthContext';
+import { isActiveFlag } from '@/lib/status';
 // Helpers: dynamic Capacitor Storage/App usage with localStorage fallback.
 async function storageGet(key: string): Promise<string | null> {
     try {
@@ -47,17 +47,37 @@ async function addAppResumeListener(cb: (isActive: boolean) => void) {
     }
 }
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
-import { Sun, Printer, ImageIcon, Trash, Check, ZapOff, RefreshCw, Download } from 'lucide-react';
+import { Printer, ImageIcon, Trash, Check, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
 import { invalidateEmailSettingsCache } from '@/lib/emailSettingsCache';
-import { versionManager } from '@/lib/versionManager';
-import { checkForUpdates, forceUpdateApp } from '@/registerServiceWorker';
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
+const elevatedCardClassName = 'overflow-hidden rounded-[1.75rem] border border-border/60 bg-card/95 shadow-sm shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90';
+function SettingsSectionHeading({ icon: Icon, title, description, action }: {
+        icon: LucideIcon;
+        title: string;
+        description: string;
+        action?: ReactNode;
+}) {
+        return (<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-sm dark:bg-slate-100 dark:text-slate-900">
+                    <Icon className="h-5 w-5"/>
+                </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                    <CardTitle className="text-base sm:text-lg">{title}</CardTitle>
+                    <p className="max-w-xl text-sm text-muted-foreground">{description}</p>
+                </div>
+            </div>
+            {action ? <div className="shrink-0">{action}</div> : null}
+        </div>);
+}
 export default function Settings() {
     const { user } = useAuth();
     // Store balance admin section state
@@ -450,7 +470,6 @@ export default function Settings() {
         return p || '80';
     });
     const [lastPrinterDiagAt, setLastPrinterDiagAt] = useState<string | null>(null);
-    const navigate = useNavigate();
     // Verify that a remote logo URL actually exists on the server. If the server
     // returns 404 or not-ok, clear local copies (localStorage + IndexedDB) so the
     // removed file is not displayed from cache.
@@ -1213,6 +1232,10 @@ export default function Settings() {
         </Card>
       </div>);
     }
+    const canManageStoreBalance = user.role === 'admin' || user.role === 'super_admin';
+    const canEditEmailSettings = user.role === 'admin';
+    const selectedPrinterName = paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante';
+    const printerStatusLabel = selectedPrinter ? (printerConnected ? 'Connectée' : 'À reconnecter') : 'Non configurée';
     // Unified test-print function: prefer using NativePrinter.printHtml which handles
     // connecting and sending via the configured native plugin. If no native plugin
     // is available, show an informative toast.
@@ -1383,26 +1406,13 @@ export default function Settings() {
             reader.readAsDataURL(file);
         }
     };
-    return (<div className="w-full p-4 sm:p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Main page title and subtitle at the very top */}
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-3xl font-bold">Paramètres</h1>
-            <p className="text-muted-foreground">
-                Gérez les préférences de l'application et le matériel connecté.
-            </p>
-          </div>
-        </div>
-
+        return (<div className="w-full p-4 sm:p-8">
+            <div className="mx-auto max-w-6xl space-y-6">
         {/* Admin Store Balance Section */}
-        {(user.role === 'admin' || user.role === 'super_admin') && (<div className="mb-6">
+                {canManageStoreBalance && (<div>
             <div className="grid grid-cols-1 gap-4 mb-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Solde du magasin</CardTitle>
-                </CardHeader>
-                <CardContent>
+                            <Card className={elevatedCardClassName}>
+                <CardContent className="pt-6">
                   {loadingStore ? (<div className="space-y-4 animate-pulse">{/* ...squelettes... */}</div>) : !store ? (<div className="space-y-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <div className="flex items-start gap-3">
                         <div className="p-2 bg-yellow-100 rounded-full">
@@ -1443,10 +1453,11 @@ export default function Settings() {
                           Réessayer
                         </Button>
                       </div>
-                    </div>) : (<div className="space-y-4">
+                                        </div>) : (<div className="space-y-5">
                       {/* Bloc principal solde + nouveaux indicateurs */}
                       <div className="flex flex-col gap-2">
-                        <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
+                                                <div className="rounded-[1.5rem] border border-border/60 bg-muted/25 p-4 sm:p-5">
+                                                    <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
                           <div className="flex items-center gap-4">
                             {store.logo ? (<img src={store.logo} alt="logo" className="w-16 h-16 sm:w-20 sm:h-20 rounded-md object-cover border"/>) : (<div className="w-16 h-16 sm:w-20 sm:h-20 rounded-md bg-gray-100 flex items-center justify-center text-gray-400 border">🏬</div>)}
                             <div>
@@ -1454,8 +1465,8 @@ export default function Settings() {
                               <p className="text-lg font-semibold truncate max-w-[180px] sm:max-w-none">{store.name || 'Inconnu'}</p>
                               <p className="text-xs text-muted-foreground truncate max-w-[220px] sm:max-w-none">{store.address || 'Inconnu'}</p>
                               <div className="mt-2">
-                                <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${(store.active !== false) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                  {(store.active !== false) ? 'Actif' : 'Inactif'}
+                                                                <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${isActiveFlag(store.active) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                                    {isActiveFlag(store.active) ? 'Actif' : 'Inactif'}
                                 </span>
                               </div>
                             </div>
@@ -1514,11 +1525,12 @@ export default function Settings() {
                             </div>
                           </div>
                         </div>
+                                                </div>
                         {/* Indicators displayed as two cards side-by-side */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-4 max-w-none">
-                          <Card className="w-full min-w-0 ring-2 ring-blue-400">
+                                                    <Card className="w-full min-w-0 border-blue-200/70 bg-blue-500/[0.04] shadow-none">
                             <CardHeader>
-                              <CardTitle className="text-sm">Fond</CardTitle>
+                                                            <CardTitle className="text-sm">Fond</CardTitle>
                             </CardHeader>
                             <CardContent>
                               <div className="flex items-center justify-between">
@@ -1569,7 +1581,7 @@ export default function Settings() {
                             </CardContent>
                           </Card>
 
-                          <Card className="w-full min-w-0 ring-2 ring-green-400">
+                                                    <Card className="w-full min-w-0 border-emerald-200/70 bg-emerald-500/[0.04] shadow-none">
                             <CardHeader>
                               <CardTitle className="text-sm">Bénéfice</CardTitle>
                             </CardHeader>
@@ -1635,22 +1647,18 @@ export default function Settings() {
 
 
 
-        <div className="grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 gap-5 2xl:grid-cols-12">
           {/* Printer card */}
-          <Card className="shadow-sm">
-            <CardHeader>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-50 rounded-md sm:hidden">
-                  <Printer size={18}/>
-                </div>
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-sm">Imprimante</CardTitle>
-                  <p className="text-xs text-muted-foreground">Connectez une imprimante thermique via Bluetooth ou utilisez les plugins natifs sur mobile.</p>
-                </div>
-                  {!nativePrinterAvailable && (<div className="ml-auto text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-100">
-                      Plugin natif non detecte
-                    </div>)}
-              </div>
+                    <Card className={`${elevatedCardClassName} 2xl:col-span-7`}>
+                        <CardHeader className="space-y-4 pb-4">
+                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique via Bluetooth et gardez un statut lisible pour l'impression des reçus." action={<Badge variant="outline" className={nativePrinterAvailable ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-red-200 bg-red-500/10 text-red-700'}>
+                                        {nativePrinterAvailable ? 'Plugin natif détecté' : 'Plugin natif absent'}
+                                    </Badge>}/>
+                            <div className="flex flex-wrap gap-2">
+                                <Badge variant="outline" className={selectedPrinter ? (printerConnected ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-amber-200 bg-amber-500/10 text-amber-700') : 'border-slate-200 bg-slate-500/10 text-slate-700'}>{printerStatusLabel}</Badge>
+                                <Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{selectedPrinterName}</Badge>
+                                <Badge variant="outline" className={autoPrint ? 'border-blue-200 bg-blue-500/10 text-blue-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>{autoPrint ? 'Auto-impression active' : 'Auto-impression inactive'}</Badge>
+                            </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
@@ -1658,6 +1666,7 @@ export default function Settings() {
                   <Button onClick={async () => {
             // Open native paired devices list / test print flow
             try {
+                                setScanning(true);
                 const devices = await NativePrinter.listPaired();
                 setPaired(devices || []);
                 if (!devices || devices.length === 0)
@@ -1666,16 +1675,21 @@ export default function Settings() {
             catch (e) {
                 toast.error('Impossible de lister les appareils appairés');
             }
-        }} className="w-full sm:w-auto">Rechercher imprimantes</Button>
+                        finally {
+                                setScanning(false);
+                        }
+                }} className="w-full sm:w-auto" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button>
                   <Button variant="outline" onClick={handlePrinterDiagnostics} className="w-full sm:w-auto">Diagnostic</Button>
                   <div className="flex-1"/>
                   {/* Test d'impression disponible ci-dessous — un seul bouton centralisé */}
                 </div>
                 {lastPrinterDiagAt && (<p className="text-xs text-muted-foreground">Dernier diagnostic: {lastPrinterDiagAt}</p>)}
 
+                                <Separator/>
+
                 {/* Afficher l'avertissement et la liste des imprimantes directement
             sous le bouton Rechercher imprimantes pour une meilleure UX */}
-                {paired.length === 0 ? (<p className="text-sm text-muted-foreground mt-2">Aucune imprimante appairée trouvée. Assurez-vous que l'imprimante est appairée au téléphone via les paramètres Android.</p>) : (<div className="space-y-2 mt-2">
+                                {paired.length === 0 ? (<div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground mt-2">Aucune imprimante appairée trouvée. Assurez-vous que l'imprimante est appairée au téléphone via les paramètres Android.</div>) : (<div className="space-y-2 mt-2">
                     {paired.map(d => (<div key={d.id} className={`p-2 border rounded flex items-center justify-between ${selectedPrinter === d.id ? 'bg-muted' : ''}`}>
                         <div>
                           <div className="font-medium">{d.name}</div>
@@ -1727,11 +1741,11 @@ export default function Settings() {
                   </div>)}
 
                 {/* Affichage synthétique de l'imprimante sélectionnée / connexion */}
-                <div className="mt-3 p-2 border rounded bg-white">
+                                <div className="mt-3 rounded-2xl border border-border/60 bg-muted/25 p-4">
                   {selectedPrinter ? (<div className="flex items-center justify-between">
                       <div className="text-sm">
-                        <div className="font-medium">Imprimante sélectionnée</div>
-                        <div className="text-xs text-muted-foreground">{paired.find(p => p.id === selectedPrinter)?.name || selectedPrinter}</div>
+                                                <div className="font-medium">Imprimante sélectionnée</div>
+                                                <div className="text-xs text-muted-foreground">{selectedPrinterName}</div>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className={`inline-flex items-center gap-2 px-2 py-1 rounded text-sm ${printerConnected ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
@@ -1740,6 +1754,8 @@ export default function Settings() {
                       </div>
                     </div>) : (<div className="text-sm text-muted-foreground">Aucune imprimante sélectionnée.</div>)}
                 </div>
+
+                                <Separator/>
 
                 <div className="py-2">
                   <div className="flex items-center justify-between">
@@ -1759,20 +1775,21 @@ export default function Settings() {
                   <p className="text-xs text-muted-foreground mt-1">Sélectionnez la largeur du papier pour aligner correctement les colonnes.</p>
                 </div>
 
-                <div className="border-t pt-3">
-                  <div className="flex items-center gap-3 mb-2">
-                      <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="inline-flex items-center gap-2 px-3 py-2">
-                        <Printer className="w-4 h-4"/>
+                                <div className="rounded-2xl border border-border/60 text-white">
+                                    <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
+                                            <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="w-full justify-start gap-3 whitespace-nowrap rounded-xl px-4 py-3 text-left sm:w-auto sm:justify-center" disabled={isTesting}>
+                        <Printer className="h-4 w-4 shrink-0"/>
+                                                <span>{isTesting ? 'Test en cours...' : 'Imprimer un reçu de test'}</span>
                       </Button>
-                      <Button className="inline-flex items-center gap-2 px-3 py-2 bg-orange-500 text-white hover:bg-orange-600" variant="outline" onClick={async () => {
+                                            <Button className="w-full justify-start gap-3 whitespace-nowrap rounded-xl border-sky-700 bg-sky-600 px-4 py-3 text-left text-white shadow-sm hover:bg-sky-700 sm:w-auto sm:justify-center" variant="outline" onClick={async () => {
             const ok = NativePrinter.isConnected();
             setPrinterConnected(ok);
             toast.info(ok ? 'Imprimante native connectée' : 'Aucune connexion native');
         }} title="Statut imprimante" aria-label="Statut imprimante">
-                        <Check className="w-4 h-4"/>
-                        <span className="text-sm">Statut</span>
+                        <Check className="h-4 w-4 shrink-0"/>
+                        <span className="text-sm">Verifier le statut</span>
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={async () => {
+                                            <Button size="sm" variant="outline" className="w-full justify-start gap-3 whitespace-nowrap rounded-xl border-rose-700 bg-rose-600 px-4 py-3 text-left text-white shadow-sm hover:bg-rose-700 sm:w-auto sm:justify-center" onClick={async () => {
             try {
                 await NativePrinter.disconnect();
             }
@@ -1808,29 +1825,20 @@ export default function Settings() {
             setSelectedPrinter(null);
             setPrinterConnected(false);
             toast.success('Imprimante dissociée et déconnectée (auto-connexion désactivée)');
-        }}>Déconnecter</Button>
+                }}>
+                                                <LogOut className="h-4 w-4 shrink-0"/>
+                                                <span>Dissocier l'imprimante</span>
+                                            </Button>
                     </div>
-
-                  
-
-                  
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Email Notifications Configuration card */}
-          {user?.role === 'admin' && (<Card className="shadow-sm">
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-green-50 rounded-md">
-                    <ZapOff size={18} className="text-green-600"/>
-                  </div>
-                  <div>
-                    <CardTitle className="text-sm">Notifications Email</CardTitle>
-                    <p className="text-xs text-muted-foreground">Configurez l'envoi automatique d'emails pour votre magasin.</p>
-                  </div>
-                </div>
+                    {canEditEmailSettings && (<Card className={`${elevatedCardClassName} 2xl:col-span-5`}>
+                            <CardHeader className="space-y-4 pb-4">
+                                <SettingsSectionHeading icon={BellRing} title="Notifications Email" description="Choisissez quels événements doivent déclencher un email automatique pour le magasin." action={<Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700">Synchronisé</Badge>}/>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -1886,27 +1894,26 @@ export default function Settings() {
                 </div>
               </CardContent>
             </Card>)}
+                </div>
+
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
 
           {/* PIN Security Configuration card */}
-          <Card className="shadow-sm">
-            <CardHeader>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-50 rounded-md">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                  </svg>
-                </div>
-                <div>
-                  <CardTitle className="text-sm">Sécurité par code PIN</CardTitle>
-                  <p className="text-xs text-muted-foreground">Protégez votre compte avec un code PIN à 4 chiffres.</p>
-                </div>
-              </div>
+                                        <Card className={`${elevatedCardClassName} xl:col-span-5`}>
+                        <CardHeader className="space-y-4 pb-4">
+                                                        <SettingsSectionHeading icon={Shield} title="Sécurité par code PIN" description="Ajoutez un code PIN demandé au retour sur l'application pour sécuriser le poste." action={<Badge variant="outline" className={pinEnabled ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>
+                                        {pinEnabled ? 'Protection active' : 'Protection inactive'}
+                                    </Badge>}/>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
+                            <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
+                                                                <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+                                    <p className="text-sm font-medium">État actuel</p>
+                                    <p className="mt-1 text-xs text-muted-foreground">{pinEnabled ? 'Le verrouillage PIN est actif pour ce compte.' : 'Aucun code PIN supplémentaire n’est demandé actuellement.'}</p>
+                                </div>
+
+                                <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-muted/25 p-4">
+                                    <div className="pr-4">
                     <p className="text-sm font-medium">Code PIN</p>
                     <p className="text-xs text-muted-foreground">
                       {pinEnabled ? 'Activé - L\'application demandera votre PIN' : 'Désactivé - Pas de vérification PIN'}
@@ -1949,101 +1956,26 @@ export default function Settings() {
               </div>
             </CardContent>
           </Card>
-
-          {/* Updates and Version Management card */}
-          <Card className="shadow-sm">
-            <CardHeader>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-50 rounded-md">
-                  <RefreshCw size={18} className="text-blue-600"/>
-                </div>
-                <div>
-                  <CardTitle className="text-sm">Mises à jour</CardTitle>
-                  <p className="text-xs text-muted-foreground">Gérez les versions et mises à jour de l'application.</p>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {/* Version actuelle */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">Version actuelle</p>
-                    <p className="text-xs text-muted-foreground">{versionManager.getVersionString()}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${versionManager.getCurrentVersion().environment === 'development'
-            ? 'bg-orange-100 text-orange-800'
-            : 'bg-green-100 text-green-800'}`}>
-                      {versionManager.getCurrentVersion().environment === 'development' ? 'Développement' : 'Production'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Statut mise à jour */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">Statut</p>
-                    <p className="text-xs text-muted-foreground">
-                      {versionManager.isOutdated() ? 'Mise à jour recommandée' : 'À jour'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex flex-col gap-2">
-                  <Button variant="outline" size="sm" onClick={async () => {
-            try {
-                await checkForUpdates();
-                toast.success('Vérification terminée');
-            }
-            catch (error) {
-                toast.error('Erreur lors de la vérification');
-            }
-        }} className="w-full flex items-center gap-2">
-                    <RefreshCw className="h-4 w-4"/>
-                    Vérifier les mises à jour
-                  </Button>
-
-                  {versionManager.getCurrentVersion().environment === 'production' && (<Button variant="secondary" size="sm" onClick={() => {
-                if (confirm('Êtes-vous sûr de vouloir forcer une mise à jour ? Cette action rechargera l\'application.')) {
-                    forceUpdateApp();
-                }
-            }} className="w-full flex items-center gap-2">
-                      <Download className="h-4 w-4"/>
-                      Forcer la mise à jour
-                    </Button>)}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
           {/* Appearance / Logo card */}
-          <Card className="shadow-sm">
-            <CardHeader>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-50 rounded-md">
-                  <Sun size={18}/>
-                </div>
-                <div>
-                  <CardTitle className="text-sm">Apparence</CardTitle>
-                  <p className="text-xs text-muted-foreground">Personnalisez le thème et l'identité visuelle.</p>
-                </div>
-              </div>
+                                        <Card className={`${elevatedCardClassName} xl:col-span-7`}>
+                        <CardHeader className="space-y-4 pb-4">
+                                                        <SettingsSectionHeading icon={Palette} title="Apparence" description="Ajustez le thème et l’identité visuelle affichée sur les reçus et dans l’interface." action={<Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{darkMode ? 'Mode sombre' : 'Mode clair'}</Badge>}/>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center justify-between">
+                            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:items-start">
+                                <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+                                <div className="flex items-center justify-between gap-4">
                   <div>
                     <Label id="dark-mode-label">Mode sombre</Label>
-                    <p className="text-xs text-muted-foreground">Activez pour une interface sombre (sauvegardé localement).</p>
+                    <p className="text-xs text-muted-foreground">Pour une interface sombre.</p>
                   </div>
                   <Switch aria-labelledby="dark-mode-label" checked={darkMode} onCheckedChange={handleDarkMode}/>
                 </div>
+                                </div>
 
-                <div className="flex items-start gap-4">
-                  <div className="w-20 h-20 bg-muted rounded flex items-center justify-center border overflow-hidden flex-shrink-0">
-                    {store && store.logo ? (<img src={store.logo} alt="Logo magasin" className="object-contain w-full h-full"/>) : (<div className="flex flex-col items-center text-xs text-muted-foreground">
+                                <div className="flex items-start gap-4 rounded-2xl border border-border/60 bg-muted/25 p-4">
+                                    <div className="flex h-24 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-border/60 bg-gradient-to-br from-slate-100 via-white to-slate-50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
+                                        {(logoPreview || store?.logo) ? (<img src={logoPreview || store?.logo} alt="Logo magasin" className="object-contain w-full h-full p-3"/>) : (<div className="flex flex-col items-center text-xs text-muted-foreground">
                         <ImageIcon size={20}/>
                         <span>Aucun logo</span>
                       </div>)}
@@ -2053,18 +1985,19 @@ export default function Settings() {
                     <p className="text-sm font-medium">Logo du magasin</p>
                     <p className="text-xs text-muted-foreground">Formats acceptés : PNG, JPEG. Taille recommandée : 300x300px.</p>
 
-                    <div className="mt-3 flex flex-wrap gap-2">
+                                                                                <div className="mt-3 flex flex-wrap gap-2 xl:flex-nowrap">
                       {/* Hidden file input and styled button */}
                       <input id="logo-input" type="file" accept="image/*" onChange={handleLogoChange} className="hidden"/>
-                      <label htmlFor="logo-input" className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-500 cursor-pointer">
+                                            <label htmlFor="logo-input" className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 cursor-pointer">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v4a1 1 0 001 1h3m10 0h3a1 1 0 001-1V7M8 21h8M12 3v12"/>
                         </svg>
                         <span className="text-sm">Téléverser un logo</span>
                       </label>
 
-                      {logoPreview && (<button type="button" onClick={handleRemoveLogo} className="inline-flex items-center justify-center px-2 py-2 rounded-md bg-red-50 hover:bg-red-100 text-red-600" title="Supprimer le logo">
+                                                                                        {(logoPreview || store?.logo) && (<button type="button" onClick={handleRemoveLogo} className="inline-flex items-center justify-center rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 hover:bg-red-100" title="Supprimer le logo">
                           <Trash size={18}/>
+                                                    <span>Supprimer</span>
                         </button>)}
 
                     </div>

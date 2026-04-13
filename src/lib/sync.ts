@@ -664,7 +664,7 @@ export async function refreshAllFromBackend(storeId?: string) {
         fetchAndMerge(`${BASE}/customers.php`, 'customers', 'customers', undefined, params),
         fetchAndMerge(`${BASE}/categories.php`, 'categories', 'categories', undefined, params),
         fetchAndMerge(`${BASE}/expense_categories.php`, 'expenseCategories', 'expenseCategories', undefined, params),
-        fetchAndMerge(`${BASE}/stores.php`, 'stores', 'stores', undefined, params),
+        fetchAndMerge(`${BASE}/stores.php?include_inactive=1`, 'stores', 'stores', undefined, params),
         fetchAndMerge(`${BASE}/users.php`, 'users', 'users', undefined, params),
     ]);
     // Batch 2 : shifts et sales (en parallèle, doivent être terminés avant la réconciliation)

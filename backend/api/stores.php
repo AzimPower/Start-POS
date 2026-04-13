@@ -672,9 +672,58 @@ try {
                 error_log('Suppression magasin id=' . $id);
                 try {
                     $pdo->beginTransaction();
-                    // Supprimer les mappings user_stores pour ce magasin (ne pas supprimer les utilisateurs eux-mêmes)
+                    $affectedUsers = $pdo->prepare(
+                        'SELECT DISTINCT id, role, storeId FROM users WHERE storeId = ? OR id IN (SELECT userId FROM user_stores WHERE storeId = ?)'
+                    );
+                    $affectedUsers->execute([$id, $id]);
+                    $affectedUsers = $affectedUsers->fetchAll(PDO::FETCH_ASSOC);
+
+                    // Supprimer les mappings user_stores pour ce magasin.
                     $stmt = $pdo->prepare('DELETE FROM user_stores WHERE storeId=?');
                     $stmt->execute([$id]);
+
+                    $selectRemainingStores = $pdo->prepare('SELECT storeId FROM user_stores WHERE userId = ?');
+                    $updatePrimaryStore = $pdo->prepare('UPDATE users SET storeId = ? WHERE id = ?');
+                    $deleteUserPushSubscriptions = $pdo->prepare('DELETE FROM push_subscriptions WHERE userId = ?');
+                    $deleteUserNotificationReads = $pdo->prepare('DELETE FROM notification_reads WHERE userId = ?');
+                    $deleteUserNotificationDismissals = $pdo->prepare('DELETE FROM notification_dismissals WHERE userId = ?');
+                    $deleteUser = $pdo->prepare('DELETE FROM users WHERE id = ?');
+
+                    foreach ($affectedUsers as $affectedUser) {
+                        $userId = (string)$affectedUser['id'];
+                        $role = (string)($affectedUser['role'] ?? '');
+                        $currentPrimaryStoreId = (string)($affectedUser['storeId'] ?? '');
+
+                        $selectRemainingStores->execute([$userId]);
+                        $remainingStoreIds = $selectRemainingStores->fetchAll(PDO::FETCH_COLUMN);
+
+                        if (empty($remainingStoreIds) && $role !== 'super_admin') {
+                            $deleteUserPushSubscriptions->execute([$userId]);
+                            $deleteUserNotificationReads->execute([$userId]);
+                            $deleteUserNotificationDismissals->execute([$userId]);
+                            $deleteUser->execute([$userId]);
+                            continue;
+                        }
+
+                        $nextStoreId = $currentPrimaryStoreId === $id
+                            ? ($remainingStoreIds[0] ?? '')
+                            : $currentPrimaryStoreId;
+                        $updatePrimaryStore->execute([$nextStoreId, $userId]);
+                    }
+
+                    $storeNotificationIds = $pdo->prepare('SELECT id FROM notifications WHERE targetType = "store" AND targetStoreId = ?');
+                    $storeNotificationIds->execute([$id]);
+                    $storeNotificationIds = $storeNotificationIds->fetchAll(PDO::FETCH_COLUMN);
+                    if (!empty($storeNotificationIds)) {
+                        $placeholders = implode(',', array_fill(0, count($storeNotificationIds), '?'));
+                        $deleteNotificationReads = $pdo->prepare("DELETE FROM notification_reads WHERE notificationId IN ($placeholders)");
+                        $deleteNotificationReads->execute($storeNotificationIds);
+                        $deleteNotificationDismissals = $pdo->prepare("DELETE FROM notification_dismissals WHERE notificationId IN ($placeholders)");
+                        $deleteNotificationDismissals->execute($storeNotificationIds);
+                        $deleteNotifications = $pdo->prepare("DELETE FROM notifications WHERE id IN ($placeholders)");
+                        $deleteNotifications->execute($storeNotificationIds);
+                    }
+
                     // Supprimer les items de vente liés aux ventes du magasin
                     $stmt = $pdo->prepare('DELETE si FROM sale_items si INNER JOIN sales s ON si.saleId = s.id WHERE s.storeId = ?');
                     $stmt->execute([$id]);
@@ -711,6 +760,9 @@ try {
                     $stmt->execute([$id]);
                     // Supprimer les signaux de stock liés
                     $stmt = $pdo->prepare('DELETE FROM stock_signals WHERE storeId=?');
+                    $stmt->execute([$id]);
+                    // Supprimer les paiements d'abonnement liés
+                    $stmt = $pdo->prepare('DELETE FROM subscription_payments WHERE storeId=?');
                     $stmt->execute([$id]);
                     // Supprimer les réglages email liés (store_id)
                     try {

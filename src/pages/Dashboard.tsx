@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSpreadsheet, FileText, ChevronLeft, ChevronRight, ArrowUpRight, ArrowDownRight, Package, RefreshCcw, TrendingDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { cn } from '@/lib/utils';
 import { DollarSign, ShoppingCart, TrendingUp, Wallet } from 'lucide-react';
 export default function Dashboard() {
@@ -367,7 +368,7 @@ export default function Dashboard() {
         const csvRows = [
             headers.join(';'), // Utiliser point-virgule comme séparateur pour Excel français
             ...filteredSales.map(sale => [
-                sale.id.substring(0, 8).toUpperCase(),
+              formatReceiptNumber(sale, filteredSales),
                 new Date(sale.createdAt).toLocaleDateString('fr-FR'),
                 new Date(sale.createdAt).toLocaleTimeString('fr-FR'),
                 sale.total,
@@ -502,7 +503,7 @@ export default function Dashboard() {
             <tbody>
               ${filteredSales.map(sale => `
                 <tr>
-                  <td>${sale.id.substring(0, 8).toUpperCase()}</td>
+                  <td>${formatReceiptNumber(sale, filteredSales)}</td>
                   <td>${new Date(sale.createdAt).toLocaleDateString('fr-FR')}</td>
                   <td>${new Date(sale.createdAt).toLocaleTimeString('fr-FR')}</td>
                   <td class="amount">${(Number(sale.total) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 })} FCFA</td>
@@ -785,14 +786,9 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent className="px-4 pb-4">
               {(() => {
-                // Exclure les tickets remboursés du calcul du coût des marchandises
-                // On suppose que recapStats.ventesBrutes et recapStats.margeBrute incluent tous les tickets, donc il faut soustraire les remboursés
-                // Si recapStats fournit déjà les montants hors remboursés, il suffit d'utiliser ceux-ci. Sinon, il faut ajuster ici.
-                // Pour une solution simple côté affichage, on suppose que recapStats.ventesBrutes inclut tout, donc on doit ignorer la part remboursée :
-                const ventes = (Number(recapStats.ventesBrutes) || 0) - (Number(recapStats.remboursements) || 0);
+                const ventes = Number(recapStats.ventesBrutes) || 0;
                 const marge = Number(recapStats.margeBrute) || 0;
                 const cost = ventes - marge;
-                // Calcul du pourcentage du coût des marchandises par rapport aux ventes brutes (hors remboursés)
                 const percent = ventes > 0 ? ((cost / ventes) * 100).toFixed(2) : '0.00';
                 return (<>
                     <div className="text-xl font-bold text-purple-700 dark:text-purple-400 leading-tight">

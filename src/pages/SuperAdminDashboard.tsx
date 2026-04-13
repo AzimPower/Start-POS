@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, } from 'recharts';
 import { Store, Users, TrendingUp, AlertTriangle, CheckCircle, XCircle, RefreshCw, Crown, Building2, UserCheck, ShoppingCart, Calendar, ArrowUpRight, ArrowDownRight, Clock, CreditCard, Activity, ShieldCheck, Wallet, BarChart3, Settings, Eye, } from 'lucide-react';
 import { format, isAfter, isBefore, addDays, differenceInDays } from 'date-fns';
@@ -55,16 +54,16 @@ function StatCard({ title, value, subtitle, icon: Icon, trend, color, onClick, }
     return (<Card className={`cursor-pointer hover:shadow-md transition-shadow ${onClick ? 'hover:border-primary/50' : ''}`} onClick={onClick}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <p className="text-sm text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold mt-1">{value}</p>
-            {subtitle && <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-muted-foreground break-words">{title}</p>
+            <p className="mt-1 break-words text-xl font-bold leading-tight sm:text-2xl">{value}</p>
+            {subtitle && <p className="mt-1 break-words text-xs text-muted-foreground">{subtitle}</p>}
             {trend && (<div className={`flex items-center gap-1 mt-2 text-xs font-medium ${trend.value >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                 {trend.value >= 0 ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>}
                 {Math.abs(trend.value).toFixed(1)}% {trend.label}
               </div>)}
           </div>
-          <div className={`p-2.5 rounded-xl ${color || 'bg-primary/10'}`}>
+          <div className={`shrink-0 p-2.5 rounded-xl ${color || 'bg-primary/10'}`}>
             <Icon size={20} className={color ? 'text-white' : 'text-primary'}/>
           </div>
         </div>
@@ -140,33 +139,6 @@ export default function SuperAdminDashboard() {
                     .catch(() => ({ storeId: store.id, storeName: store.name, revenue: 0, transactions: 0 })));
                 const statsResults = await Promise.all(statsPromises);
                 setStoreStats(statsResults);
-                // Fetch last 6 months global revenue
-                const monthsData: {
-                    month: string;
-                    revenue: number;
-                }[] = [];
-                for (let i = 5; i >= 0; i--) {
-                    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-                    const start = d.getTime();
-                    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).getTime();
-                    try {
-                        const res = await fetch(`${BACKEND}/api/sales_stats.php?start=${start}&end=${end}&groupBy=months`);
-                        if (res.ok) {
-                            const json = await res.json();
-                            monthsData.push({
-                                month: format(d, 'MMM yy', { locale: fr }),
-                                revenue: json?.recapStats?.ventesNettes ?? json?.recapStats?.ventesBrutes ?? 0,
-                            });
-                        }
-                        else {
-                            monthsData.push({ month: format(d, 'MMM yy', { locale: fr }), revenue: 0 });
-                        }
-                    }
-                    catch {
-                        monthsData.push({ month: format(d, 'MMM yy', { locale: fr }), revenue: 0 });
-                    }
-                }
-                setMonthlyRevenue(monthsData);
             }
             if (usersRes.ok) {
                 const data: UserData[] = await usersRes.json();
@@ -177,8 +149,28 @@ export default function SuperAdminDashboard() {
                 const pRes = await fetch(`${BACKEND}/api/subscription_payments.php?limit=500`);
                 if (pRes.ok) {
                     const pJson = await pRes.json();
-                    setPayments(pJson.data || []);
+                const parsedPayments: PaymentRecord[] = (pJson.data || []).map((payment: PaymentRecord) => ({
+                  ...payment,
+                  amount: Number(payment.amount || 0),
+                }));
+                setPayments(parsedPayments);
                     setPaymentsTotal(pJson.total || 0);
+                const currentDate = new Date();
+                const monthsData: {
+                  month: string;
+                  revenue: number;
+                }[] = [];
+                for (let i = 5; i >= 0; i--) {
+                  const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+                  const start = date.getTime();
+                  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59).getTime();
+                  const monthPayments = parsedPayments.filter((payment) => payment.paidAt >= start && payment.paidAt <= end);
+                  monthsData.push({
+                    month: format(date, 'MMM yy', { locale: fr }),
+                    revenue: monthPayments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0),
+                  });
+                }
+                setMonthlyRevenue(monthsData);
                 }
             }
             catch (e) {
@@ -207,7 +199,10 @@ export default function SuperAdminDashboard() {
         return d >= 0 && d <= 30;
     });
     const expiredStores = stores.filter((s) => s.subscriptionEnd && s.subscriptionEnd < now);
-    const totalRevThisMonth = storeStats.reduce((acc, s) => acc + (s.revenue || 0), 0);
+    const currentMonth = new Date();
+    const currentMonthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getTime();
+    const subscriptionPaymentsThisMonth = payments.filter((payment) => payment.paidAt >= currentMonthStart && payment.paidAt <= now);
+    const subscriptionRevenueThisMonth = subscriptionPaymentsThisMonth.reduce((acc, payment) => acc + Number(payment.amount || 0), 0);
     const topStores = [...storeStats].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
     const roleCount = users.reduce((acc, u) => {
         acc[u.role] = (acc[u.role] || 0) + 1;
@@ -223,7 +218,9 @@ export default function SuperAdminDashboard() {
         { name: 'Actifs', value: activeStores.length },
         { name: 'Inactifs', value: inactiveStores.length },
     ].filter((d) => d.value > 0);
-    const formatCurrency = (n: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF', maximumFractionDigits: 0 }).format(n);
+    const formatCurrency = (n: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF', maximumFractionDigits: 0 })
+      .format(n)
+      .replace(/\s*F\s*CFA$/, ' F');
     if (isLoading) {
         return (<div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"/>
@@ -234,29 +231,26 @@ export default function SuperAdminDashboard() {
       {/* ── Header ────────────────────────────────────────────────────── */}
       <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 px-4 pt-6 pb-8">
         <div className="max-w-7xl mx-auto">
-          <div className="flex items-start justify-between flex-wrap gap-3">
-            <div>
+          <div className="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 <Crown size={18} className="text-yellow-300"/>
                 <span className="text-indigo-200 text-sm font-medium">Propriétaire SAS</span>
               </div>
-              <h1 className="text-2xl font-bold text-white">
+              <h1 className="break-words text-xl font-bold text-white sm:text-2xl">
                 Bonjour, {user?.username || 'Super Admin'} 👋
               </h1>
               <p className="text-indigo-200 text-sm mt-0.5">
                 {format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               <div className="text-right">
                 <p className="text-indigo-200 text-xs">Dernière sync</p>
                 <p className="text-white text-xs font-medium">{format(lastRefresh, 'HH:mm:ss')}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={loadData} className="bg-white/20 text-white border-white/30 hover:bg-white/30">
                 <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''}/>
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => navigate('/stores')} className="bg-white/20 text-white border-white/30 hover:bg-white/30">
-                <Settings size={14}/>
               </Button>
             </div>
           </div>
@@ -280,28 +274,18 @@ export default function SuperAdminDashboard() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard title="Magasins actifs" value={activeStores.length} subtitle={`${inactiveStores.length} inactif${inactiveStores.length !== 1 ? 's' : ''}`} icon={Store} color="bg-indigo-500" onClick={() => navigate('/stores')}/>
           <StatCard title="Utilisateurs" value={users.length} subtitle={`${roleCount['admin'] || 0} admins · ${roleCount['cashier'] || 0} caissiers`} icon={Users} color="bg-purple-500" onClick={() => navigate('/users')}/>
-          <StatCard title="CA ce mois" value={formatCurrency(totalRevThisMonth)} subtitle="Toutes boutiques confondues" icon={TrendingUp} color="bg-emerald-500"/>
-          <StatCard title="Alertes abonnements" value={expiredStores.length + expiringStores.length} subtitle={`${expiredStores.length} expirés · ${expiringStores.length} proches`} icon={AlertTriangle} color={expiredStores.length > 0 ? 'bg-red-500' : expiringStores.length > 0 ? 'bg-orange-500' : 'bg-slate-400'}/>
+          <StatCard title="Abonnements ce mois" value={formatCurrency(subscriptionRevenueThisMonth)} subtitle={`${subscriptionPaymentsThisMonth.length} paiement${subscriptionPaymentsThisMonth.length !== 1 ? 's' : ''} encaissé${subscriptionPaymentsThisMonth.length !== 1 ? 's' : ''}`} icon={TrendingUp} color="bg-emerald-500"/>
+          <StatCard title="Aonnements" value={expiredStores.length + expiringStores.length} subtitle={`${expiredStores.length} expirés · ${expiringStores.length} proches`} icon={AlertTriangle} color={expiredStores.length > 0 ? 'bg-red-500' : expiringStores.length > 0 ? 'bg-orange-500' : 'bg-slate-400'}/>
         </div>
 
-        {/* ── Tabs ──────────────────────────────────────────────────────── */}
-        <Tabs defaultValue="overview" className="space-y-4">
-          <TabsList className="grid grid-cols-4 w-full md:w-auto md:inline-flex">
-            <TabsTrigger value="overview"><BarChart3 size={14} className="mr-1.5"/>Vue globale</TabsTrigger>
-            <TabsTrigger value="stores"><Store size={14} className="mr-1.5"/>Boutiques</TabsTrigger>
-            <TabsTrigger value="subscriptions"><CreditCard size={14} className="mr-1.5"/>Abonnements</TabsTrigger>
-            <TabsTrigger value="users"><Users size={14} className="mr-1.5"/>Utilisateurs</TabsTrigger>
-          </TabsList>
-
-          {/* ── TAB: Overview ──────────────────────────────────────────── */}
-          <TabsContent value="overview" className="space-y-4">
+        <div className="space-y-4">
             <div className="grid md:grid-cols-3 gap-4">
-              {/* Revenue trend (6 months) */}
+              {/* Subscription payments trend (6 months) */}
               <Card className="md:col-span-2">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
                     <Activity size={16} className="text-indigo-500"/>
-                    Chiffre d'affaires mensuel (6 derniers mois)
+                    Encaissements abonnements (6 derniers mois)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -311,7 +295,7 @@ export default function SuperAdminDashboard() {
                       <XAxis dataKey="month" tick={{ fontSize: 11 }}/>
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}/>
                       <Tooltip formatter={(v: number) => formatCurrency(v)}/>
-                      <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenus"/>
+                      <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Encaissements"/>
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -421,329 +405,7 @@ export default function SuperAdminDashboard() {
                 </CardContent>
               </Card>
             </div>
-          </TabsContent>
-
-          {/* ── TAB: Stores ────────────────────────────────────────────── */}
-          <TabsContent value="stores" className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">{stores.length} boutique{stores.length !== 1 ? 's' : ''} au total</p>
-              <Button size="sm" variant="outline" onClick={() => navigate('/stores')}>
-                <Settings size={13} className="mr-1.5"/>
-                Gérer
-              </Button>
-            </div>
-            <div className="space-y-2">
-              {stores.map((store) => {
-            const stats = storeStats.find((s) => s.storeId === store.id);
-            const storeUsers = users.filter((u) => u.storeId === store.id ||
-                (u.storeIds && u.storeIds.includes(store.id)));
-            return (<Card key={store.id} className="hover:shadow-sm transition-shadow">
-                    <CardContent className="p-4">
-                      <div className="flex items-start gap-3">
-                        <div className={`p-2 rounded-lg mt-0.5 ${store.active ? 'bg-green-100 dark:bg-green-950' : 'bg-slate-100 dark:bg-slate-800'}`}>
-                          <Store size={16} className={store.active ? 'text-green-600' : 'text-slate-400'}/>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between flex-wrap gap-1">
-                            <h3 className="font-semibold text-sm truncate">{store.name}</h3>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <Badge variant={store.active ? 'default' : 'secondary'} className={`text-xs ${store.active ? 'bg-green-500' : ''}`}>
-                                {store.active ? 'Actif' : 'Inactif'}
-                              </Badge>
-                              <SubscriptionBadge store={store}/>
-                            </div>
-                          </div>
-                          {store.address && (<p className="text-xs text-muted-foreground mt-0.5 truncate">{store.address}</p>)}
-                          <div className="flex flex-wrap gap-3 mt-2">
-                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <Users size={11}/>
-                              <span>{storeUsers.length} utilisateur{storeUsers.length !== 1 ? 's' : ''}</span>
-                            </div>
-                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <Wallet size={11}/>
-                              <span>{formatCurrency(stats?.revenue || 0)} / mois</span>
-                            </div>
-                            {store.subscriptionEnd && (<div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Calendar size={11}/>
-                                <span>
-                                  {store.subscriptionEnd < now
-                        ? `Expiré le ${format(store.subscriptionEnd, 'dd/MM/yy')}`
-                        : `Expire le ${format(store.subscriptionEnd, 'dd/MM/yy')}`}
-                                </span>
-                              </div>)}
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>);
-        })}
-              {stores.length === 0 && (<div className="text-center py-10 text-muted-foreground text-sm">
-                  Aucune boutique enregistrée
-                </div>)}
-            </div>
-          </TabsContent>
-
-          {/* ── TAB: Subscriptions ─────────────────────────────────────── */}
-          <TabsContent value="subscriptions" className="space-y-4">
-            {/* Summary */}
-            <div className="grid grid-cols-3 gap-3">
-              <Card className="text-center">
-                <CardContent className="p-4">
-                  <CheckCircle size={20} className="text-green-500 mx-auto mb-1"/>
-                  <p className="text-xl font-bold">
-                    {activeStores.filter((s) => s.subscriptionEnd && s.subscriptionEnd > now).length}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Abonnements actifs</p>
-                </CardContent>
-              </Card>
-              <Card className="text-center">
-                <CardContent className="p-4">
-                  <Clock size={20} className="text-orange-500 mx-auto mb-1"/>
-                  <p className="text-xl font-bold">{expiringStores.length}</p>
-                  <p className="text-xs text-muted-foreground">Expirent ≤ 30j</p>
-                </CardContent>
-              </Card>
-              <Card className="text-center">
-                <CardContent className="p-4">
-                  <XCircle size={20} className="text-red-500 mx-auto mb-1"/>
-                  <p className="text-xl font-bold">{expiredStores.length}</p>
-                  <p className="text-xs text-muted-foreground">Expirés</p>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Expiring soon */}
-            {expiringStores.length > 0 && (<Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-semibold flex items-center gap-2 text-orange-600">
-                    <AlertTriangle size={15}/>
-                    Expirent bientôt (30 jours)
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 p-3 pt-0">
-                  {expiringStores
-                .sort((a, b) => (a.subscriptionEnd || 0) - (b.subscriptionEnd || 0))
-                .map((store) => {
-                const days = differenceInDays(store.subscriptionEnd!, now);
-                return (<div key={store.id} className="flex items-center justify-between p-2 rounded-lg bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-900">
-                          <div className="flex items-center gap-2">
-                            <Store size={14} className="text-orange-500"/>
-                            <span className="text-sm font-medium">{store.name}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-orange-600 font-medium">
-                              {format(store.subscriptionEnd!, 'dd/MM/yyyy')}
-                            </span>
-                            <Badge className="bg-orange-500 text-white text-xs">{days}j</Badge>
-                          </div>
-                        </div>);
-            })}
-                </CardContent>
-              </Card>)}
-
-            {/* Expired */}
-            {expiredStores.length > 0 && (<Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-semibold flex items-center gap-2 text-red-600">
-                    <XCircle size={15}/>
-                    Abonnements expirés
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 p-3 pt-0">
-                  {expiredStores.map((store) => (<div key={store.id} className="flex items-center justify-between p-2 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
-                      <div className="flex items-center gap-2">
-                        <Store size={14} className="text-red-500"/>
-                        <span className="text-sm font-medium">{store.name}</span>
-                      </div>
-                      <span className="text-xs text-red-600 font-medium">
-                        Expiré le {format(store.subscriptionEnd!, 'dd/MM/yyyy')}
-                      </span>
-                    </div>))}
-                </CardContent>
-              </Card>)}
-
-            {/* ── Encaissements ─────────────────────────────────── */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Wallet size={15} className="text-emerald-500"/>
-                  Encaissements abonnements
-                  <span className="ml-auto text-base font-bold text-emerald-600">
-                    {new Intl.NumberFormat('fr-FR').format(paymentsTotal)} F
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 pb-3">
-                {/* Filter by store */}
-                <div className="flex flex-wrap gap-2 items-center">
-                  <span className="text-xs text-muted-foreground">Filtrer :</span>
-                  <button className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${paymentsFilter === 'all' ? 'bg-indigo-600 text-white' : 'bg-muted text-muted-foreground hover:bg-muted/70'}`} onClick={() => setPaymentsFilter('all')}>
-                    Tous
-                  </button>
-                  {stores.map(s => (<button key={s.id} className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${paymentsFilter === s.id ? 'bg-indigo-600 text-white' : 'bg-muted text-muted-foreground hover:bg-muted/70'}`} onClick={() => setPaymentsFilter(s.id)}>
-                      {s.name}
-                    </button>))}
-                </div>
-
-                {/* Per-store summary */}
-                {paymentsFilter === 'all' && (<div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {stores.map(s => {
-                const storePayments = payments.filter(p => p.storeId === s.id);
-                const storeTotal = storePayments.reduce((a, p) => a + Number(p.amount), 0);
-                if (storeTotal === 0)
-                    return null;
-                return (<div key={s.id} className="p-2.5 rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200">
-                          <p className="text-xs font-semibold truncate">{s.name}</p>
-                          <p className="text-sm font-bold text-emerald-700 mt-0.5">
-                            {new Intl.NumberFormat('fr-FR').format(storeTotal)} F
-                          </p>
-                          <p className="text-xs text-muted-foreground">{storePayments.length} paiement{storePayments.length > 1 ? 's' : ''}</p>
-                        </div>);
-            })}
-                  </div>)}
-
-                {/* Payment list */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/30">
-                        <th className="text-left p-2.5 text-xs font-semibold text-muted-foreground">Date</th>
-                        <th className="text-left p-2.5 text-xs font-semibold text-muted-foreground">Boutique</th>
-                        <th className="text-center p-2.5 text-xs font-semibold text-muted-foreground">Mois</th>
-                        <th className="text-right p-2.5 text-xs font-semibold text-muted-foreground">Montant</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {payments
-            .filter(p => paymentsFilter === 'all' || p.storeId === paymentsFilter)
-            .slice(0, 50)
-            .map(p => (<tr key={p.id} className="border-b last:border-0 hover:bg-muted/20">
-                            <td className="p-2.5 text-xs text-muted-foreground whitespace-nowrap">
-                              {format(p.paidAt, 'dd/MM/yyyy HH:mm')}
-                            </td>
-                            <td className="p-2.5 font-medium">{p.storeName}</td>
-                            <td className="p-2.5 text-center">
-                              <Badge variant="secondary" className="text-xs">{p.months} mois</Badge>
-                            </td>
-                            <td className="p-2.5 text-right font-bold text-emerald-600 whitespace-nowrap">
-                              {new Intl.NumberFormat('fr-FR').format(Number(p.amount))} F
-                            </td>
-                          </tr>))}
-                    </tbody>
-                  </table>
-                  {payments.filter(p => paymentsFilter === 'all' || p.storeId === paymentsFilter).length === 0 && (<p className="text-center py-6 text-sm text-muted-foreground">Aucun encaissement enregistré</p>)}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* All subscriptions table */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <CreditCard size={15} className="text-indigo-500"/>
-                  Récapitulatif abonnements
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/30">
-                        <th className="text-left p-3 text-xs font-semibold text-muted-foreground">Boutique</th>
-                        <th className="text-left p-3 text-xs font-semibold text-muted-foreground">Début</th>
-                        <th className="text-left p-3 text-xs font-semibold text-muted-foreground">Fin</th>
-                        <th className="text-left p-3 text-xs font-semibold text-muted-foreground">Statut</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stores.map((store) => (<tr key={store.id} className="border-b last:border-0 hover:bg-muted/20">
-                          <td className="p-3 font-medium">{store.name}</td>
-                          <td className="p-3 text-muted-foreground">
-                            {store.subscriptionStart ? format(store.subscriptionStart, 'dd/MM/yyyy') : '—'}
-                          </td>
-                          <td className="p-3 text-muted-foreground">
-                            {store.subscriptionEnd ? format(store.subscriptionEnd, 'dd/MM/yyyy') : '—'}
-                          </td>
-                          <td className="p-3">
-                            <SubscriptionBadge store={store}/>
-                          </td>
-                        </tr>))}
-                    </tbody>
-                  </table>
-                  {stores.length === 0 && (<p className="text-center py-6 text-sm text-muted-foreground">Aucune boutique</p>)}
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ── TAB: Users ─────────────────────────────────────────────── */}
-          <TabsContent value="users" className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">{users.length} utilisateur{users.length !== 1 ? 's' : ''} au total</p>
-              <Button size="sm" variant="outline" onClick={() => navigate('/users')}>
-                <Settings size={13} className="mr-1.5"/>
-                Gérer
-              </Button>
-            </div>
-            {/* Per-store user breakdown */}
-            {activeStores.map((store) => {
-            const storeUsers = users.filter((u) => u.storeId === store.id ||
-                (u.storeIds && u.storeIds.includes(store.id)));
-            if (storeUsers.length === 0)
-                return null;
-            return (<Card key={store.id}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                      <Store size={14} className="text-indigo-500"/>
-                      {store.name}
-                      <Badge variant="secondary" className="ml-auto">{storeUsers.length} utilisateur{storeUsers.length !== 1 ? 's' : ''}</Badge>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-3 pt-0 space-y-1.5">
-                    {storeUsers.map((u) => (<div key={u.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-muted/30">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
-                            {u.username.charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium">{u.username}</p>
-                            {u.email && <p className="text-xs text-muted-foreground">{u.email}</p>}
-                          </div>
-                        </div>
-                        <Badge variant="secondary" className={`text-xs ${u.role === 'admin' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
-                        : u.role === 'manager' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-                            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'}`}>
-                          {u.role === 'admin' ? 'Admin' : u.role === 'manager' ? 'Manager' : 'Caissier'}
-                        </Badge>
-                      </div>))}
-                  </CardContent>
-                </Card>);
-        })}
-
-            {/* Users without a store */}
-            {(() => {
-            const orphans = users.filter((u) => u.role !== 'super_admin' &&
-                !u.storeId &&
-                (!u.storeIds || u.storeIds.length === 0));
-            if (orphans.length === 0)
-                return null;
-            return (<Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                      <AlertTriangle size={14} className="text-yellow-500"/>
-                      Utilisateurs sans boutique assignée ({orphans.length})
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-3 pt-0 space-y-1.5">
-                    {orphans.map((u) => (<div key={u.id} className="flex items-center justify-between py-1 px-2 rounded-lg bg-yellow-50 dark:bg-yellow-950/30">
-                        <span className="text-sm">{u.username}</span>
-                        <Badge variant="secondary" className="text-xs">{u.role}</Badge>
-                      </div>))}
-                  </CardContent>
-                </Card>);
-        })()}
-          </TabsContent>
-        </Tabs>
+        </div>
 
         {/* ── Quick Actions ─────────────────────────────────────────────── */}
         <Card>

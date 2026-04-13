@@ -5,10 +5,15 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { History, RefreshCw, Package, TrendingUp, TrendingDown, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
+
+type PeriodFilter = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
+type DeltaFilter = 'all' | 'plus' | 'moins';
+
 interface AdjustmentHistory {
     id: string;
     sessionId: string;
@@ -25,14 +30,45 @@ interface AdjustmentHistory {
     globalReason: string;
     createdAt: number;
 }
+
+  function parseTimeToMinutes(value: string): number | null {
+    if (!value)
+      return null;
+    const [hours, minutes] = value.split(':').map(Number);
+    if (Number.isNaN(hours) || Number.isNaN(minutes))
+      return null;
+    return hours * 60 + minutes;
+  }
+
+  function buildDateTimeBoundary(dateValue: string, timeValue: string, isEnd: boolean): number | null {
+    if (!dateValue)
+      return null;
+    const date = new Date(`${dateValue}T00:00:00`);
+    if (Number.isNaN(date.getTime()))
+      return null;
+    if (timeValue) {
+      const [hours, minutes] = timeValue.split(':').map(Number);
+      if (!Number.isNaN(hours) && !Number.isNaN(minutes)) {
+        date.setHours(hours, minutes, isEnd ? 59 : 0, isEnd ? 999 : 0);
+        return date.getTime();
+      }
+    }
+    date.setHours(isEnd ? 23 : 0, isEnd ? 59 : 0, isEnd ? 59 : 0, isEnd ? 999 : 0);
+    return date.getTime();
+  }
+
 export default function StockAdjustmentHistory() {
     const { user } = useAuth();
     const { isBackendReachable } = useNetwork();
     const [history, setHistory] = useState<AdjustmentHistory[]>([]);
     const [loading, setLoading] = useState(false);
     const [search, setSearch] = useState('');
-    const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'yesterday' | 'week' | 'month'>('today');
-    const [deltaFilter, setDeltaFilter] = useState<'all' | 'plus' | 'moins'>('all');
+    const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('today');
+    const [deltaFilter, setDeltaFilter] = useState<DeltaFilter>('all');
+    const [customStartDate, setCustomStartDate] = useState('');
+    const [customStartTime, setCustomStartTime] = useState('');
+    const [customEndDate, setCustomEndDate] = useState('');
+    const [customEndTime, setCustomEndTime] = useState('');
     const load = useCallback(async () => {
         if (!isBackendReachable) {
             toast.error('Serveur inaccessible. Vérifiez votre connexion.');
@@ -120,6 +156,37 @@ export default function StockAdjustmentHistory() {
                 if (ts < now - 30 * 86400000)
                     return false;
             }
+            else if (periodFilter === 'custom') {
+              const startBoundary = buildDateTimeBoundary(customStartDate, customStartTime, false);
+              const endBoundary = buildDateTimeBoundary(customEndDate, customEndTime, true);
+              if (startBoundary !== null && ts < startBoundary)
+                return false;
+              if (endBoundary !== null && ts > endBoundary)
+                return false;
+              if (!customStartDate && !customEndDate) {
+                const startMinutes = parseTimeToMinutes(customStartTime);
+                const endMinutes = parseTimeToMinutes(customEndTime);
+                if (startMinutes !== null || endMinutes !== null) {
+                  const itemDate = new Date(ts);
+                  const itemMinutes = itemDate.getHours() * 60 + itemDate.getMinutes();
+                  if (startMinutes !== null && endMinutes !== null) {
+                    if (startMinutes <= endMinutes) {
+                      if (itemMinutes < startMinutes || itemMinutes > endMinutes)
+                        return false;
+                    }
+                    else if (itemMinutes < startMinutes && itemMinutes > endMinutes) {
+                      return false;
+                    }
+                  }
+                  else if (startMinutes !== null && itemMinutes < startMinutes) {
+                    return false;
+                  }
+                  else if (endMinutes !== null && itemMinutes > endMinutes) {
+                    return false;
+                  }
+                }
+              }
+            }
         }
         return true;
     });
@@ -185,7 +252,7 @@ export default function StockAdjustmentHistory() {
         <CardContent className="p-4">
           <div className="flex flex-col sm:flex-row gap-3">
             <Input className="flex-1" placeholder="Rechercher produit, utilisateur, motif..." value={search} onChange={(e) => setSearch(e.target.value)}/>
-            <Select value={periodFilter} onValueChange={(v: any) => setPeriodFilter(v)}>
+            <Select value={periodFilter} onValueChange={(value) => setPeriodFilter(value as PeriodFilter)}>
               <SelectTrigger className="w-full sm:w-40">
                 <SelectValue />
               </SelectTrigger>
@@ -195,9 +262,10 @@ export default function StockAdjustmentHistory() {
                 <SelectItem value="yesterday">Hier</SelectItem>
                 <SelectItem value="week">7 derniers jours</SelectItem>
                 <SelectItem value="month">30 derniers jours</SelectItem>
+                <SelectItem value="custom">Personnalisé</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={deltaFilter} onValueChange={(v: any) => setDeltaFilter(v)}>
+            <Select value={deltaFilter} onValueChange={(value) => setDeltaFilter(value as DeltaFilter)}>
               <SelectTrigger className="w-full sm:w-40">
                 <SelectValue />
               </SelectTrigger>
@@ -208,6 +276,37 @@ export default function StockAdjustmentHistory() {
               </SelectContent>
             </Select>
           </div>
+          {periodFilter === 'custom' && (<div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="stock-custom-start-date">Date début</Label>
+                <Input id="stock-custom-start-date" type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)}/>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="stock-custom-start-time">Heure début</Label>
+                <Input id="stock-custom-start-time" type="time" value={customStartTime} onChange={(e) => setCustomStartTime(e.target.value)}/>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="stock-custom-end-date">Date fin</Label>
+                <Input id="stock-custom-end-date" type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)}/>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="stock-custom-end-time">Heure fin</Label>
+                <Input id="stock-custom-end-time" type="time" value={customEndTime} onChange={(e) => setCustomEndTime(e.target.value)}/>
+              </div>
+            </div>)}
+          {periodFilter === 'custom' && (<div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                Laissez un champ vide pour l'ignorer. Si seules les heures sont renseignées, le filtre s'applique sur l'heure de la journée.
+              </p>
+              <Button variant="ghost" size="sm" onClick={() => {
+                setCustomStartDate('');
+                setCustomStartTime('');
+                setCustomEndDate('');
+                setCustomEndTime('');
+            }}>
+                Réinitialiser la plage
+              </Button>
+            </div>)}
         </CardContent>
       </Card>
 
