@@ -65,17 +65,21 @@ interface NotificationSentCacheRecord {
     notification: AppNotification;
     updatedAt: number;
 }
+type NotificationSyncOperation = 'create' | 'update' | 'delete';
+
 interface NotificationSyncQueueEntry {
     id: string;
     table: string;
     url: string;
     method?: string;
-    operation?: string;
+    operation: NotificationSyncOperation;
     data: any;
     createdAt: number;
     attempts: number;
     lastError?: string;
 }
+
+type NotificationSyncQueueEntryInput = Omit<NotificationSyncQueueEntry, 'id' | 'createdAt' | 'attempts'>;
 function normalizeNotification(raw: any): AppNotification {
     return {
         ...raw,
@@ -190,7 +194,7 @@ async function getNotificationQueueEntries() {
     const queue = await db.getAll('syncQueue');
     return queue.filter((entry) => String(entry.table || '') === NOTIFICATIONS_TABLE || String(entry.url || '').includes('/notifications.php')) as NotificationSyncQueueEntry[];
 }
-async function addNotificationQueueEntry(entry: Omit<NotificationSyncQueueEntry, 'id' | 'createdAt' | 'attempts'>) {
+async function addNotificationQueueEntry(entry: NotificationSyncQueueEntryInput) {
     const db = await getDB();
     const queue = await getNotificationQueueEntries();
     const duplicate = queue.find((queuedEntry) => {

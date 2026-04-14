@@ -6,11 +6,20 @@ export const resetVersionData = () => {
         // Nettoyer toutes les données liées aux versions
         localStorage.removeItem('app_version_info');
         localStorage.removeItem('manifest_hash');
+        sessionStorage.removeItem('app_version_refresh_marker');
         // Nettoyer les caches du service worker
         if ('caches' in window) {
             caches.keys().then(names => {
                 names.forEach(name => {
-                    if (name.includes('workbox') || name.includes('sw-precache')) {
+                    if (name.includes('workbox') ||
+                        name.includes('sw-precache') ||
+                        name.includes('precache') ||
+                        name.includes('runtime') ||
+                        name.includes('static-assets') ||
+                        name.includes('api-cache') ||
+                        name.includes('image-cache') ||
+                        name.includes('external-api-cache') ||
+                        name.includes('google-fonts')) {
                         caches.delete(name);
                     }
                 });

@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { BellRing, ChevronLeft, ChevronRight, Send, ShieldAlert, Trash2 } from 'lucide-react';
+import { BellRing, CheckCheck, ChevronLeft, ChevronRight, Search, Send, ShieldAlert, Trash2 } from 'lucide-react';
 interface StoreOption {
     id: string;
     name: string;
@@ -43,7 +43,7 @@ function mergeUsersById(currentUsers: UserOption[], incomingUsers: UserOption[])
     }
     return Array.from(usersById.values());
 }
-function NotificationList({ title, description, notifications, emptyState, onMarkAsRead, storesById, usersById, showReadCount = false, canDelete = false, onDelete, deleteLabel = 'Supprimer', paginate = false, pageSize = 5, }: {
+function NotificationList({ title, description, notifications, emptyState, onMarkAsRead, storesById, usersById, showReadCount = false, canDelete = false, onDelete, deleteLabel = 'Supprimer', toolbar, selectable = false, selectedIds, onToggleSelection, paginate = false, pageSize = 5, }: {
     title: string;
     description: string;
     notifications: AppNotification[];
@@ -55,6 +55,10 @@ function NotificationList({ title, description, notifications, emptyState, onMar
     canDelete?: boolean;
     onDelete?: (notificationId: string) => void;
     deleteLabel?: string;
+    toolbar?: React.ReactNode;
+    selectable?: boolean;
+    selectedIds?: Set<string>;
+    onToggleSelection?: (notificationId: string) => void;
   paginate?: boolean;
   pageSize?: number;
 }) {
@@ -68,52 +72,83 @@ function NotificationList({ title, description, notifications, emptyState, onMar
     ? notifications.slice((page - 1) * safePageSize, page * safePageSize)
     : notifications;
     return (<Card className="shadow-sm">
-      <CardHeader>
+      <CardHeader className="space-y-4">
         <CardTitle className="flex items-center gap-2 text-lg">
           <BellRing className="h-5 w-5 text-blue-600"/>
           {title}
         </CardTitle>
         <p className="text-sm text-muted-foreground">{description}</p>
+        {toolbar ? <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">{toolbar}</div> : null}
       </CardHeader>
       <CardContent className="space-y-3">
         {notifications.length === 0 ? (<div className="rounded-xl border border-dashed bg-muted/40 px-4 py-8 text-center text-sm text-muted-foreground">
             {emptyState}
           </div>) : (visibleNotifications.map((notification) => ((() => {
             const expired = isNotificationExpired(notification);
-            return (<div key={notification.id} className={`rounded-xl border px-4 py-4 ${notification.isRead ? 'border-border bg-background' : 'border-blue-200 bg-blue-50/60'}`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${getNotificationBadgeClassName(notification.type)}`}>
-                      {getNotificationTypeLabel(notification.type)}
-                    </span>
-                    {!notification.isRead && (<Badge variant="secondary" className="bg-blue-100 text-blue-700">
-                        Non lue
-                      </Badge>)}
-                    {showReadCount && typeof notification.readCount === 'number' && (<Badge variant="outline">{notification.readCount} lecture(s)</Badge>)}
-                    {expired && (<Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
-                        Expirée
-                      </Badge>)}
-                  </div>
-                  <div>
-                    <p className="text-base font-semibold text-foreground">{notification.title}</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{notification.message}</p>
-                    <p className="mt-2 text-xs text-muted-foreground">{formatNotificationExpiry(notification.expiresAt)}</p>
+            const isSelectable = selectable && Boolean(onToggleSelection);
+            const isSelected = Boolean(selectedIds?.has(notification.id));
+            const handleToggleSelection = () => {
+              if (!onToggleSelection) {
+                return;
+              }
+              onToggleSelection(notification.id);
+            };
+            const handleSelectionKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+              if (!isSelectable) {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                handleToggleSelection();
+              }
+            };
+            return (<div key={notification.id} className={`rounded-xl border px-3 py-3 transition-colors sm:px-4 sm:py-4 ${isSelected ? 'border-blue-500 bg-blue-100/80 ring-2 ring-blue-200' : notification.isRead ? 'border-border bg-background' : 'border-blue-200 bg-blue-50/60'} ${isSelectable ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/80' : ''}`} onClick={isSelectable ? handleToggleSelection : undefined} onKeyDown={handleSelectionKeyDown} role={isSelectable ? 'button' : undefined} tabIndex={isSelectable ? 0 : undefined} aria-pressed={isSelectable ? isSelected : undefined}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-3 sm:pr-3">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isSelected ? (<Badge variant="secondary" className="bg-blue-600 text-white">
+                          Sélectionnée
+                        </Badge>) : null}
+                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${getNotificationBadgeClassName(notification.type)}`}>
+                        {getNotificationTypeLabel(notification.type)}
+                      </span>
+                      {!notification.isRead && (<Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                          Non lue
+                        </Badge>)}
+                      {showReadCount && typeof notification.readCount === 'number' && (<Badge variant="outline">{notification.readCount} lecture(s)</Badge>)}
+                      {expired && (<Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                          Expirée
+                        </Badge>)}
+                    </div>
+                    <div>
+                      <p className="text-base font-semibold text-foreground">{notification.title}</p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{notification.message}</p>
+                      <p className="mt-2 text-xs text-muted-foreground">{formatNotificationExpiry(notification.expiresAt)}</p>
+                    </div>
                   </div>
                 </div>
-                <div className="text-right text-xs text-muted-foreground">
-                  <p>{formatNotificationTimestamp(notification.createdAt)}</p>
-                  <p className="mt-1">{getNotificationTargetSummary(notification, { storesById, usersById })}</p>
+                <div className="w-full border-t border-slate-200/70 pt-2 text-xs text-muted-foreground sm:w-auto sm:min-w-[160px] sm:border-t-0 sm:pt-0 sm:text-right">
+                  <div className="flex items-center justify-between gap-3 sm:block">
+                    <p className="shrink-0 text-left sm:text-right">{formatNotificationTimestamp(notification.createdAt)}</p>
+                    <p className="min-w-0 text-right sm:mt-1 sm:text-right">{getNotificationTargetSummary(notification, { storesById, usersById })}</p>
+                  </div>
                 </div>
               </div>
-              {(onMarkAsRead && !notification.isRead) || (canDelete && onDelete) ? (<div className="mt-3 flex flex-wrap justify-end gap-2">
-                  {canDelete && onDelete && (<Button variant="destructive" size="sm" onClick={() => onDelete(notification.id)}>
+              {(onMarkAsRead && !notification.isRead) || (canDelete && onDelete) ? (<div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                  {onMarkAsRead && !notification.isRead && (<Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={(event) => {
+                    event.stopPropagation();
+                    onMarkAsRead(notification.id);
+                  }}>
+                    Marquer comme lue
+                  </Button>)}
+                  {canDelete && onDelete && (<Button variant="destructive" size="sm" className="w-full sm:w-auto" onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(notification.id);
+                    }}>
                       <Trash2 className="mr-2 h-4 w-4"/>
                       {deleteLabel}
                     </Button>)}
-                  {onMarkAsRead && !notification.isRead && (<Button variant="outline" size="sm" onClick={() => onMarkAsRead(notification.id)}>
-                    Marquer comme lue
-                  </Button>)}
                 </div>) : null}
             </div>);
         })()))) }
@@ -156,6 +191,10 @@ function fromDateTimeLocalValue(value: string): number | null {
 export default function Notifications() {
     const { user } = useAuth();
   const { notifications, unreadCount, isLoading, markAsRead, dismissNotification, refresh } = useNotifications();
+    const [inboxSearch, setInboxSearch] = useState('');
+    const [isInboxSelectionMode, setIsInboxSelectionMode] = useState(false);
+    const [selectedInboxIds, setSelectedInboxIds] = useState<Set<string>>(new Set());
+    const [isApplyingInboxBulkAction, setIsApplyingInboxBulkAction] = useState(false);
     const [stores, setStores] = useState<StoreOption[]>([]);
     const [users, setUsers] = useState<UserOption[]>([]);
     const [sentNotifications, setSentNotifications] = useState<AppNotification[]>([]);
@@ -189,6 +228,25 @@ export default function Notifications() {
         acc[item.id] = item.username;
         return acc;
     }, user ? { [user.id]: user.username } : {});
+    const inboxQuery = inboxSearch.trim().toLowerCase();
+    const filteredInboxNotifications = notifications.filter((notification) => {
+      if (!inboxQuery) {
+        return true;
+      }
+      const haystack = [
+        notification.title,
+        notification.message,
+        getNotificationTypeLabel(notification.type),
+        getNotificationTargetSummary(notification, { storesById, usersById }),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(inboxQuery);
+    });
+    const filteredInboxIds = filteredInboxNotifications.map((notification) => notification.id);
+    const hasInboxSelection = selectedInboxIds.size > 0;
+    const allFilteredSelected = filteredInboxIds.length > 0 && filteredInboxIds.every((notificationId) => selectedInboxIds.has(notificationId));
     const targetableUsers = users.filter((item) => item.role !== 'super_admin' && item.active !== false && item.active !== 0);
     const heroBadgeLabel = isSuperAdmin ? 'Centre de notifications' : 'Boîte de réception';
     const heroTitle = isSuperAdmin
@@ -264,6 +322,13 @@ export default function Notifications() {
         });
         return unsubscribe;
     }, [isSuperAdmin, user?.id]);
+      useEffect(() => {
+        setSelectedInboxIds((current) => {
+          const validIds = new Set(notifications.map((notification) => notification.id));
+          const next = new Set(Array.from(current).filter((notificationId) => validIds.has(notificationId)));
+          return next.size === current.size ? current : next;
+        });
+      }, [notifications]);
     if (!user) {
         return null;
     }
@@ -278,6 +343,104 @@ export default function Notifications() {
         catch (error) {
           toast.error('Impossible de supprimer cette notification pour votre compte');
         }
+      };
+      const toggleInboxSelectionMode = () => {
+        setIsInboxSelectionMode((current) => {
+          if (current) {
+            setSelectedInboxIds(new Set());
+          }
+          return !current;
+        });
+      };
+      const toggleInboxSelection = (notificationId: string) => {
+        setSelectedInboxIds((current) => {
+          const next = new Set(current);
+          if (next.has(notificationId)) {
+            next.delete(notificationId);
+          }
+          else {
+            next.add(notificationId);
+          }
+          return next;
+        });
+      };
+      const toggleSelectAllInbox = () => {
+        setSelectedInboxIds((current) => {
+          const next = new Set(current);
+          if (allFilteredSelected) {
+            filteredInboxIds.forEach((notificationId) => next.delete(notificationId));
+          }
+          else {
+            filteredInboxIds.forEach((notificationId) => next.add(notificationId));
+          }
+          return next;
+        });
+      };
+      const markNotificationsAsRead = async (notificationIds: string[], successMessage: string) => {
+        if (notificationIds.length === 0) {
+          toast.info('Aucune notification à marquer comme lue');
+          return;
+        }
+        setIsApplyingInboxBulkAction(true);
+        try {
+          for (const notificationId of notificationIds) {
+            await markAsRead(notificationId);
+          }
+          toast.success(successMessage);
+        }
+        catch (error) {
+          toast.error('Impossible de mettre à jour toutes les notifications sélectionnées');
+          await refresh();
+        }
+        finally {
+          setIsApplyingInboxBulkAction(false);
+        }
+      };
+      const dismissNotificationsForMe = async (notificationIds: string[]) => {
+        if (notificationIds.length === 0) {
+          toast.info('Aucune notification sélectionnée à supprimer');
+          return;
+        }
+        if (!window.confirm(`Supprimer ${notificationIds.length} notification${notificationIds.length > 1 ? 's' : ''} de votre boîte de réception ?`)) {
+          return;
+        }
+        setIsApplyingInboxBulkAction(true);
+        try {
+          for (const notificationId of notificationIds) {
+            await dismissNotification(notificationId);
+          }
+          setSelectedInboxIds((current) => {
+            const next = new Set(current);
+            notificationIds.forEach((notificationId) => next.delete(notificationId));
+            return next;
+          });
+          toast.success(`${notificationIds.length} notification${notificationIds.length > 1 ? 's supprimées' : ' supprimée'} de votre boîte de réception`);
+        }
+        catch (error) {
+          toast.error('Impossible de supprimer toutes les notifications sélectionnées');
+          await refresh();
+        }
+        finally {
+          setIsApplyingInboxBulkAction(false);
+        }
+      };
+      const handleMarkSelectedInboxAsRead = async () => {
+        const selectedIds = filteredInboxNotifications
+          .filter((notification) => selectedInboxIds.has(notification.id) && !notification.isRead)
+          .map((notification) => notification.id);
+        await markNotificationsAsRead(selectedIds, 'Les notifications cochées ont été marquées comme lues');
+        if (selectedIds.length > 0) {
+          setSelectedInboxIds((current) => {
+            const next = new Set(current);
+            selectedIds.forEach((notificationId) => next.delete(notificationId));
+            return next;
+          });
+        }
+      };
+      const handleDeleteSelectedInbox = async () => {
+        await dismissNotificationsForMe(filteredInboxNotifications
+          .filter((notification) => selectedInboxIds.has(notification.id))
+          .map((notification) => notification.id));
       };
     const resetForm = () => {
         setForm({
@@ -506,7 +669,36 @@ export default function Notifications() {
             <NotificationList title="Historique des envois" description={isLoadingSent ? 'Chargement des envois...' : 'Dernières notifications envoyées par le super admin.'} notifications={sentNotifications} emptyState="Aucune notification n'a encore été envoyée." storesById={storesById} usersById={usersById} showReadCount canDelete onDelete={(notificationId) => void handleDelete(notificationId)} paginate pageSize={3}/>
           </div>)}
 
-        <NotificationList title="Boîte de réception" description={isLoading ? 'Chargement...' : 'Toutes les notifications visibles pour votre compte.'} notifications={notifications} emptyState="Aucune notification dans votre boîte de réception." onMarkAsRead={(notificationId) => void markAsRead(notificationId)} canDelete onDelete={(notificationId) => void handleDismissForMe(notificationId)} deleteLabel="Supprimer pour moi" storesById={storesById} usersById={usersById} paginate pageSize={5}/>
+        <NotificationList title="Boîte de réception" description={isLoading ? 'Chargement...' : 'Toutes les notifications visibles pour votre compte.'} notifications={filteredInboxNotifications} emptyState={inboxQuery ? 'Aucune notification ne correspond à votre recherche.' : 'Aucune notification dans votre boîte de réception.'} onMarkAsRead={(notificationId) => void markAsRead(notificationId)} canDelete onDelete={(notificationId) => void handleDismissForMe(notificationId)} deleteLabel="Supprimer pour moi" storesById={storesById} usersById={usersById} paginate pageSize={5} selectable={isInboxSelectionMode} selectedIds={selectedInboxIds} onToggleSelection={toggleInboxSelection} toolbar={<div className="space-y-3 rounded-xl bg-white/80 sm:bg-transparent">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"/>
+                <Input value={inboxSearch} onChange={(event) => setInboxSearch(event.target.value)} placeholder="Rechercher par titre, message, type..." className="pl-9"/>
+              </div>
+              <div className="space-y-3 sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:space-y-0">
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {filteredInboxNotifications.length} notification{filteredInboxNotifications.length > 1 ? 's' : ''} affichée{filteredInboxNotifications.length > 1 ? 's' : ''}
+                  {isInboxSelectionMode && hasInboxSelection ? ` · ${selectedInboxIds.size} cochée${selectedInboxIds.size > 1 ? 's' : ''}` : ''}
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+                  <Button type="button" variant={isInboxSelectionMode ? 'secondary' : 'outline'} size="sm" className="w-full justify-center sm:w-auto" onClick={toggleInboxSelectionMode} disabled={filteredInboxIds.length === 0 || isApplyingInboxBulkAction}>
+                    {isInboxSelectionMode ? 'Fermer la sélection' : 'Sélectionner'}
+                  </Button>
+                  {isInboxSelectionMode ? (<div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                      <Button type="button" variant="outline" size="sm" className="w-full justify-center sm:w-auto" onClick={toggleSelectAllInbox} disabled={filteredInboxIds.length === 0 || isApplyingInboxBulkAction}>
+                        <CheckCheck className="mr-2 h-4 w-4"/>
+                        {allFilteredSelected ? 'Annuler' : 'Tout cocher'}
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" className="w-full justify-center sm:w-auto" onClick={() => void handleMarkSelectedInboxAsRead()} disabled={!hasInboxSelection || isApplyingInboxBulkAction}>
+                        Marquer lues
+                      </Button>
+                      <Button type="button" variant="destructive" size="sm" className="col-span-2 w-full justify-center sm:col-span-1 sm:w-auto" onClick={() => void handleDeleteSelectedInbox()} disabled={!hasInboxSelection || isApplyingInboxBulkAction}>
+                        <Trash2 className="mr-2 h-4 w-4"/>
+                        Supprimer
+                      </Button>
+                    </div>) : null}
+                </div>
+              </div>
+            </div>}/>
       </div>
     </div>);
 }

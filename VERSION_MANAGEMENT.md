@@ -15,17 +15,24 @@
 - **Cause**: Le système générait un nouveau hash à chaque rechargement
 - **Solution**: 
   - Version stable en développement (`dev-build`)
-  - Hash basé uniquement sur version + environnement (stable)
+  - Hash basé sur la version, l'environnement et l'horodatage réel du build en production
   - Désactivation des vérifications automatiques en développement
 
-### 2. Déconnexions répétées
+### 2. Assets obsolètes après redéploiement
+- **Cause**: Des clients conservaient un ancien shell PWA pointant vers des fichiers hashés supprimés
+- **Solution**:
+  - Détection d'un nouveau build même si la version `package.json` reste identique
+  - Nettoyage élargi des caches Workbox/runtime
+  - Rechargement automatique une seule fois lorsqu'un nouveau build est détecté
+
+### 3. Déconnexions répétées
 - **Cause**: Mises à jour forcées du service worker toutes les minutes
 - **Solution**:
   - Vérifications moins fréquentes (15-30 minutes en production)
   - Pas de vérifications automatiques en développement
   - Protection contre les notifications multiples
 
-### 3. Cache navigateur conflictuel
+### 4. Cache navigateur conflictuel
 - **Solution**: 
   - Headers HTTP appropriés (`_headers` et `.htaccess`)
   - Cache agressif pour les assets avec hash
@@ -81,13 +88,16 @@ resetVersionData()
 ### En production
 - Vérifications automatiques toutes les 30 minutes
 - Notifications contrôlées (max 1 par 5 minutes)
-- Mise à jour manuelle via interface
+- Détection des nouveaux builds même sans bump de version
+- Rechargement automatique unique après nettoyage des caches si un nouveau build est détecté
 
 ## 🚀 Déploiement
 
 1. Utiliser `npm run build` pour la production
 2. S'assurer que les headers HTTP sont configurés sur le serveur
-3. Tester les mises à jour dans un environnement de staging
+3. Déployer `index.html`, `sw.js`, `manifest.webmanifest` et le dossier `assets/` du même build
+4. Si des clients restent bloqués sur un ancien shell, exécuter `resetVersionData()` dans la console puis recharger la page
+5. Tester les mises à jour dans un environnement de staging
 
 ## 🔍 Surveillance
 

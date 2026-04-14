@@ -14,10 +14,11 @@ import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
-import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { buildBypassUrl, buildProjectedLocalSales, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { resolveUserOpenShift } from '@/lib/sync';
+import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, } from '@/components/ui/alert-dialog';
 interface Sale {
     id: string;
@@ -107,7 +108,7 @@ export default function Receipts() {
         };
         checkShiftAndLoad();
         return () => { cancelled = true; };
-    }, [user, isBackendReachable]);
+    }, [user, isBackendReachable, isOnline]);
     // we'll lazy-import getPendingSyncCount when needed to avoid circular imports
     const updatePendingSyncCount = async () => {
         try {
@@ -126,8 +127,9 @@ export default function Receipts() {
       }
         try {
             const db = await getDB();
-            // Si en ligne, charger depuis le backend et synchroniser
-            if (isOnline) {
+            const canReachBackend = isOnline && isBackendReachable;
+            // Si le backend est joignable, charger depuis le backend puis réinjecter les ventes locales en attente
+            if (canReachBackend) {
                 try {
                     // Pagination côté backend
                     const params = new URLSearchParams();
@@ -140,29 +142,28 @@ export default function Receipts() {
                         const backendResult = await response.json();
                         // backendResult: { data: Sale[], total, offset, limit }
                         const backendSales = Array.isArray(backendResult) ? backendResult : (backendResult.data || []);
-                        const mergedBackendSales = await mergeBackendSalesIntoLocalDb(db, backendSales);
-                      const nextSales = reset ? mergedBackendSales : [...salesRef.current, ...mergedBackendSales];
-                      const processedSales = await processSales(nextSales, db);
-                      setSales(processedSales);
-                      setLoadedCount(processedSales.length);
-                        // Il y a plus de données si on a reçu exactement le nombre demandé
-                        const stillHasMore = backendSales.length === limit;
-                        setHasMore(stillHasMore);
-                      await updatePendingSyncCount();
+                      await mergeBackendSalesIntoLocalDb(db, backendSales, { restrictToBackendIds: true });
+                      await loadFromLocal(db, offset, limit, reset);
+                        await updatePendingSyncCount();
                         return;
                     }
+
+                    await loadFromLocal(db, offset, limit, reset);
+                    await updatePendingSyncCount();
+                    return;
                 }
                 catch (error) {
-                  // En cas d'erreur, charger la meme page depuis la base locale
-                  await loadSalesPage(db, offset, limit, reset);
+                    await loadFromLocal(db, offset, limit, reset);
+                    await updatePendingSyncCount();
+                    return;
                 }
             }
             else {
-                // Hors ligne : charger depuis la base locale (paged)
-                await loadSalesPage(db, offset, limit, reset);
+                // Hors ligne ou backend indisponible : charger depuis la base locale projetée
+                  await loadFromLocal(db, offset, limit, reset);
+                await updatePendingSyncCount();
+                return;
             }
-            // Compter les éléments en attente de synchronisation
-            await updatePendingSyncCount();
         }
         catch (error) {
             toast.error('Erreur lors du chargement des données');
@@ -173,17 +174,15 @@ export default function Receipts() {
           }
         }
     };
-    const loadFromLocal = async (db: any) => {
-        // by default load the first page, ensuring we have data
-        const result = await loadSalesPage(db, 0, pageSize, true);
-        // If no results from pagination, try loading all and filtering
-        if (result.length === 0) {
-            const allSales = await db.getAll('sales');
-            if (allSales.length > 0) {
-                await processSales(allSales, db);
-            }
-        }
-        return result;
+    const loadFromLocal = async (db: any, offset = 0, limit = pageSize, reset = true) => {
+      const projectedSales = await buildProjectedLocalSales(db, { storeId: user?.storeId });
+      const pageSales = projectedSales.slice(offset, offset + limit);
+      const nextSales = reset ? pageSales : [...salesRef.current, ...pageSales];
+      const processedSales = await processSales(nextSales, db);
+      setSales(processedSales);
+      setLoadedCount(processedSales.length);
+      setHasMore(offset + pageSales.length < projectedSales.length);
+      return processedSales;
     };
     const loadSalesPage = async (db: any, offset: number, limit: number, reset = false) => {
         // Use the createdAt index in descending order. If the index doesn't exist yet, fall back to getAll
@@ -501,13 +500,27 @@ export default function Receipts() {
             catch (error) {
                 toast.success(`Vente remboursée - Stock restauré pour ${productsToRestoreStock.length} produit(s) (sera synchronisée plus tard)`);
             }
+            const store = stores.find(s => s.id === saleToRefund.storeId);
+            const storeName = store?.name || 'Magasin';
+            const refundReceiptNumber = formatReceiptNumber(saleToRefund, salesRef.current);
+            try {
+              await sendStoreAdminNotification({
+                event: 'refund',
+                senderUserId: user?.id || '',
+                storeId: saleToRefund.storeId,
+                relatedId: saleToRefund.id,
+                type: 'warning',
+                title: `Remboursement de vente: ${Number(saleToRefund.total).toLocaleString('fr-FR')} FCFA`,
+                message: `${user?.username || 'Un utilisateur'} a remboursé le reçu ${refundReceiptNumber} pour ${Number(saleToRefund.total).toLocaleString('fr-FR')} FCFA dans ${storeName} le ${new Date().toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Africa/Ouagadougou' })}.${refundComment ? ` Commentaire: ${refundComment}.` : ''}`,
+              });
+            }
+            catch (notificationError) {
+            }
             // Envoyer notification email aux admins du store
             try {
                 const emailSettings = await getEmailSettings(saleToRefund.storeId || '');
                 const shouldSendEmail = emailSettings.refunds;
                 if (shouldSendEmail) {
-                    const store = stores.find(s => s.id === saleToRefund.storeId);
-                    const storeName = store?.name || 'Magasin';
                     // Construction du template HTML structuré comme pour les dépenses
                     const refundMessage = `
 <div style="margin: 20px 0;">
@@ -524,6 +537,10 @@ export default function Receipts() {
     <div class="info-row">
       <span class="info-label">Montant remboursé :&nbsp;</span>
       <span class="info-value" style="font-weight: 600;">${Number(saleToRefund.total).toLocaleString('fr-FR')} F CFA</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">N° du reçu :&nbsp;</span>
+      <span class="info-value">${refundReceiptNumber}</span>
     </div>
     <div class="info-row">
       <span class="info-label">Date :&nbsp;</span>
@@ -554,7 +571,7 @@ export default function Receipts() {
   </div>
 
   <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; font-size: 12px; color: #6c757d;">
-    <strong>ID de la Vente :&nbsp;</strong>${saleToRefund.id}
+    <strong>N° du reçu :&nbsp;</strong>${refundReceiptNumber}
   </div>
 </div>
 `;

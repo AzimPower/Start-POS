@@ -69,13 +69,6 @@ export default function Dashboard() {
                 setStartTime('00:00');
                 setEndTime('23:59');
                 break;
-            case 'thisYear':
-                const startOfYear = new Date(nowYear, 0, 1);
-                setStartDate(startOfYear);
-                setEndDate(today);
-                setStartTime('00:00');
-                setEndTime('23:59');
-                break;
             case 'thisWeek':
                 const startOfWeek = new Date(today);
                 startOfWeek.setDate(today.getDate() - today.getDay() + 1); // Lundi
@@ -84,28 +77,10 @@ export default function Dashboard() {
                 setStartTime('00:00');
                 setEndTime('23:59');
                 break;
-            case 'lastWeek':
-                const lastWeekStart = new Date(today);
-                lastWeekStart.setDate(today.getDate() - today.getDay() - 6);
-                const lastWeekEnd = new Date(today);
-                lastWeekEnd.setDate(today.getDate() - today.getDay());
-                setStartDate(lastWeekStart);
-                setEndDate(lastWeekEnd);
-                setStartTime('00:00');
-                setEndTime('23:59');
-                break;
             case 'thisMonth':
                 const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
                 setStartDate(startOfMonth);
                 setEndDate(today);
-                setStartTime('08:00'); // Heure d'ouverture par défaut
-                setEndTime('18:00'); // Heure de fermeture par défaut
-                break;
-            case 'lastMonth':
-                const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-                const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
-                setStartDate(lastMonthStart);
-                setEndDate(lastMonthEnd);
                 setStartTime('08:00'); // Heure d'ouverture par défaut
                 setEndTime('18:00'); // Heure de fermeture par défaut
                 break;
@@ -917,12 +892,9 @@ export default function Dashboard() {
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('today')}>Aujourd'hui</Button>
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('yesterday')}>Hier</Button>
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisWeek')}>Cette semaine</Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastWeek')}>La semaine dernière</Button>
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisMonth')}>Ce mois</Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('lastMonth')}>Le mois dernier</Button>
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last7days')}>Il y a 7 jours</Button>
                           <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('last30days')}>Il y a 30 jours</Button>
-                          <Button variant="ghost" size="sm" className="w-full justify-start text-xs xl:text-sm" onClick={() => setPeriodShortcut('thisYear')}>Cette année</Button>
                         </div>
                       </div>
                       {/* Calendrier à droite - optimisé pour desktop */}

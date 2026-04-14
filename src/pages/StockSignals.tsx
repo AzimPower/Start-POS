@@ -18,6 +18,8 @@ import { AlertTriangle, TrendingUp, TrendingDown, Package, DollarSign, Clock, Ch
 import { toast } from 'sonner';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { hasPendingStockOperations } from '@/lib/sync';
+import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -558,11 +560,14 @@ export default function StockSignals() {
                 const backendProducts = await response.json();
                 // Filtrer côté client aussi pour sécurité
                 const storeProducts = backendProducts.filter((p: any) => !user?.storeId || p.storeId === user.storeId);
-                const tx = db.transaction('products', 'readwrite');
-                await Promise.all([
-                    ...storeProducts.map(p => tx.store.put(p)),
-                    tx.done
-                ]);
+                const pendingStockOperations = await hasPendingStockOperations(user?.storeId);
+                if (!pendingStockOperations) {
+                    const tx = db.transaction('products', 'readwrite');
+                    await Promise.all([
+                        ...storeProducts.map(p => tx.store.put(p)),
+                        tx.done
+                    ]);
+                }
             }
         }
         catch (error) {
@@ -970,7 +975,7 @@ export default function StockSignals() {
                         const emailSettings = await dbInstance.get('emailSettings', user?.storeId);
                         const shouldSendEmail = emailSettings?.stockSignals !== false;
                         const hasShortage = calculation.margin < 0;
-                        if (!shouldSendEmail || !hasShortage) {
+                    if (!hasShortage) {
                                 return;
                         }
                         const store = await dbInstance.get('stores', user?.storeId);
@@ -978,6 +983,18 @@ export default function StockSignals() {
                         const productName = expense.type === 'direct' && expense.directProduct
                                 ? getProductName(expense.directProduct.productId)
                                 : (categoryMap.get(expense.categoryId || '')?.name || 'Dépense indirecte');
+                    await sendStoreAdminNotification({
+                        event: 'stockSignal',
+                        senderUserId: user?.id || '',
+                        storeId: user?.storeId || '',
+                        relatedId: stockSignal.id,
+                        type: 'warning',
+                        title: `Signalement de stock: ${productName}`,
+                        message: `${user?.username || 'Un utilisateur'} a signalé un manque de stock sur ${productName} dans ${storeName}. Manque constaté: ${calculation.margin.toLocaleString('fr-FR')} FCFA entre le ${new Date(calculation.effectiveStartDate).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} et le ${new Date(chosenEndDate).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}.`,
+                    });
+                    if (!shouldSendEmail) {
+                        return;
+                    }
                         const shouldShowQuantities = expense.type === 'direct' && expense.directProduct
                                 ? (() => {
                                         const prod = productMap.get(expense.directProduct!.productId);
@@ -1651,7 +1668,7 @@ export default function StockSignals() {
 
               {/* Le bouton ‘Ajouter une Dépense’ a été retiré — utilisez la page Dépenses dédiée */}
 
-              {activeItems.length === 0 ? (activeSearch ? (<Card>
+                            {activeItems.length === 0 ? (activeSearch ? (<Card>
                     <CardContent className="text-center py-12">
                       <Package className="w-12 h-12 mx-auto text-muted-foreground mb-4"/>
                       <h3 className="text-lg font-semibold mb-2">Aucun résultat</h3>
@@ -1659,11 +1676,19 @@ export default function StockSignals() {
                     </CardContent>
                   </Card>) : (<Card>
                     <CardContent className="text-center py-12">
-                      <Package className="w-12 h-12 mx-auto text-muted-foreground mb-4"/>
-                      <h3 className="text-lg font-semibold mb-2">Aucun stock actif</h3>
-                      <p className="text-muted-foreground">
-                        Tous les stocks ont été signalés ou aucune dépense directe n'a été enregistrée.
-                      </p>
+                                            {(!isOnline || !isBackendReachable) ? (<>
+                                                    <WifiOff className="w-12 h-12 mx-auto text-muted-foreground mb-4"/>
+                                                    <h3 className="text-lg font-semibold mb-2">Connexion requise</h3>
+                                                    <p className="text-muted-foreground">
+                                                        Vous devez être connecté pour travailler dans les signalements de stock.
+                                                    </p>
+                                                </>) : (<>
+                                                    <Package className="w-12 h-12 mx-auto text-muted-foreground mb-4"/>
+                                                    <h3 className="text-lg font-semibold mb-2">Aucun stock actif</h3>
+                                                    <p className="text-muted-foreground">
+                                                        Tous les stocks ont été signalés ou aucune dépense directe n'a été enregistrée.
+                                                    </p>
+                                                </>)}
                     </CardContent>
                   </Card>)) : (<div className="grid gap-4">
                   {activeItems.map(expense => {

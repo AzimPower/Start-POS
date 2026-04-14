@@ -23,6 +23,7 @@ import ShiftReceiptDetails from './ShiftReceiptDetails';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerTrigger, DrawerClose } from '@/components/ui/drawer';
 import { fetchAndMerge, mergeBackendShifts, persistClosedShiftMarker, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
+import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 interface Shift {
     id: string;
     userId: string;
@@ -1306,6 +1307,22 @@ export default function Shifts() {
                 localStorage.setItem('shift_closed_event', JSON.stringify({ shiftId: updatedShift.id, closedAt: updatedShift.closedAt }));
             }
             catch { }
+            try {
+                const dbInstance = await getDB();
+                const store = await dbInstance.get('stores', updatedShift.storeId);
+                const storeName = store?.name || updatedShift.storeId || 'Magasin';
+                await sendStoreAdminNotification({
+                    event: 'shift',
+                    senderUserId: user?.id || '',
+                    storeId: updatedShift.storeId,
+                    relatedId: updatedShift.id,
+                    type: (updatedShift.difference ?? 0) < 0 ? 'warning' : 'success',
+                    title: (updatedShift.difference ?? 0) < 0 ? 'Fermeture de service avec écart' : 'Fermeture de service',
+                    message: `${user?.username || 'Un utilisateur'} a fermé le service ${updatedShift.id} du magasin ${storeName}. Fermeture: ${(updatedShift.closingAmount ?? 0).toLocaleString('fr-FR')} FCFA. Attendu: ${(updatedShift.expectedAmount ?? 0).toLocaleString('fr-FR')} FCFA. Écart: ${(updatedShift.difference ?? 0).toLocaleString('fr-FR')} FCFA.`,
+                });
+            }
+            catch (notificationError) {
+            }
             // Envoi automatique d'un email à l'admin avec résumé complet du shift
             try {
                 const dbInstance = await getDB();

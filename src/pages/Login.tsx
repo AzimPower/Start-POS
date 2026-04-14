@@ -72,7 +72,7 @@ export default function Login() {
           <div>
             <CardTitle className="text-3xl font-bold">Système POS</CardTitle>
             <CardDescription className="text-base mt-2">
-              Connectez-vous pour accéder à votre caisse
+              Connectez-vous pour accéder à votre mogasin.
             </CardDescription>
           </div>
         </CardHeader>

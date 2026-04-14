@@ -11,6 +11,7 @@ export class VersionManager {
     private static instance: VersionManager;
     private currentVersion: AppVersion;
     private storageKey = 'app_version_info';
+    private refreshKey = 'app_version_refresh_marker';
     private versionCheckInterval: number | null = null;
     private constructor() {
         this.currentVersion = this.generateCurrentVersion();
@@ -52,8 +53,8 @@ export class VersionManager {
         catch {
             buildTime = 0;
         }
-        // Hash basé uniquement sur la version et l'environnement (stable)
-        const hashInput = `${version}-${environment}`;
+        // Le hash doit changer à chaque build de production pour invalider les shells PWA obsolètes.
+        const hashInput = `${version}-${environment}-${buildTime}`;
         const hash = this.simpleHash(hashInput);
         return {
             version,
@@ -93,15 +94,12 @@ export class VersionManager {
             return false;
         }
         return (stored.version !== this.currentVersion.version ||
-            stored.environment !== this.currentVersion.environment);
+            stored.environment !== this.currentVersion.environment ||
+            stored.buildTime !== this.currentVersion.buildTime ||
+            stored.hash !== this.currentVersion.hash);
     }
     public forceRefresh(): void {
-        // Nettoyer le cache du navigateur
-        this.clearApplicationCache();
-        // Sauvegarder la nouvelle version
-        this.saveCurrentVersion();
-        // Recharger la page avec cache bypass
-        window.location.reload();
+        void this.reloadAfterCacheReset();
     }
     public clearApplicationCache(): void {
         try {
@@ -120,11 +118,18 @@ export class VersionManager {
             });
             // Nettoyer sessionStorage
             sessionStorage.clear();
-            // Nettoyer le cache des requêtes si disponible
+            // Nettoyer largement les caches PWA/runtime pour éviter de conserver un shell obsolète.
             if ('caches' in window) {
                 caches.keys().then(names => {
                     names.forEach(name => {
-                        if (name.includes('static-assets') || name.includes('workbox')) {
+                        if (name.includes('workbox') ||
+                            name.includes('precache') ||
+                            name.includes('runtime') ||
+                            name.includes('static-assets') ||
+                            name.includes('api-cache') ||
+                            name.includes('image-cache') ||
+                            name.includes('external-api-cache') ||
+                            name.includes('google-fonts')) {
                             caches.delete(name);
                         }
                     });
@@ -137,7 +142,7 @@ export class VersionManager {
     private initializeVersionCheck(): void {
         // Vérifier la version au démarrage seulement en production
         if (this.currentVersion.environment === 'production' && this.hasVersionChanged()) {
-            this.handleVersionChange();
+            void this.handleVersionChange();
         }
         else {
             // Sauvegarder la version courante si pas encore fait
@@ -152,7 +157,7 @@ export class VersionManager {
             }, 30 * 60 * 1000);
         }
     }
-    private handleVersionChange(): void {
+    private async handleVersionChange(): Promise<void> {
         const stored = this.getStoredVersion();
         // Émettre un événement pour notifier les composants
         window.dispatchEvent(new CustomEvent('app:version-changed', {
@@ -161,6 +166,15 @@ export class VersionManager {
                 previous: stored
             }
         }));
+
+        const refreshMarker = `${this.currentVersion.hash}:${this.currentVersion.buildTime}`;
+        if (sessionStorage.getItem(this.refreshKey) === refreshMarker) {
+            this.saveCurrentVersion();
+            return;
+        }
+
+        sessionStorage.setItem(this.refreshKey, refreshMarker);
+        await this.reloadAfterCacheReset();
     }
     private async checkForUpdates(): Promise<void> {
         try {
@@ -211,6 +225,22 @@ export class VersionManager {
         // Considérer comme obsolète si plus de 24h
         const oneDayMs = 24 * 60 * 60 * 1000;
         return (Date.now() - stored.buildTime) > oneDayMs;
+    }
+
+    private async reloadAfterCacheReset(): Promise<void> {
+        try {
+            this.clearApplicationCache();
+
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(registrations.map((registration) => registration.update().catch(() => undefined)));
+            }
+        }
+        catch (error) {
+        }
+
+        this.saveCurrentVersion();
+        window.location.reload();
     }
 }
 // Export de l'instance singleton

@@ -14,6 +14,8 @@ import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNetwork } from '@/hooks/useNetwork';
+import { hasPendingStockOperations } from '@/lib/sync';
+import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -245,23 +247,24 @@ export default function Products() {
                     ]);
                     if (productsResponse.ok) {
                         const backendProducts = await productsResponse.json();
-                        // Mettre à jour l'UI avec les données backend
                         const normalizedBackendProducts = (backendProducts || []).map((p: any) => ({
                             ...p,
                             stock: p.stock || {},
                             imageUrl: normalizeImageUrl(p.imageUrl)
                         }));
+                      const pendingStockOperations = await hasPendingStockOperations(user.storeId);
+                      if (!pendingStockOperations) {
                         setProducts(normalizedBackendProducts);
-                        // Stocker en local pour usage hors-ligne
                         try {
-                            const tx = db.transaction('products', 'readwrite');
-                            await tx.store.clear();
-                            for (const p of normalizedBackendProducts) {
-                                await tx.store.put(p);
-                            }
-                            await tx.done;
+                          const tx = db.transaction('products', 'readwrite');
+                          await tx.store.clear();
+                          for (const p of normalizedBackendProducts) {
+                            await tx.store.put(p);
+                          }
+                          await tx.done;
                         }
                         catch (e) {
+                        }
                         }
                     }
                     if (categoriesResponse.ok) {
@@ -662,7 +665,29 @@ export default function Products() {
                     adjustments: cleaned
                 }
             });
-            toast.success('Ajustements envoyés. Un email résumé a été notifié à l\'admin.');
+                void Promise.all(cleaned.map((line) => {
+                  const snapshotLine = adjustments.find((entry) => entry.productId === line.productId);
+                  const product = products.find((entry) => entry.id === line.productId);
+                  if (!snapshotLine || !product) {
+                    return Promise.resolve();
+                  }
+                  const previousStock = Number(snapshotLine.oldStock ?? product.stock?.[user.storeId] ?? 0);
+                  const nextStock = previousStock + line.delta;
+                  return notifyStockThresholdChange({
+                    senderUserId: user.id,
+                    storeId: user.storeId,
+                    productId: product.id,
+                    productName: product.name,
+                    unit: product.unit,
+                    minStock: product.minStock,
+                    previousStock,
+                    nextStock,
+                    actorName: user.username,
+                    contextLabel: 'Après un ajustement de stock',
+                  });
+                })).catch(() => {
+                });
+                toast.success('Ajustements envoyés. Les admins seront notifiés selon les paramètres actifs.');
             setAdjustments([]);
             setAdjustGlobalReason('');
             setDraftProductId('');

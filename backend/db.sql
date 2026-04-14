@@ -67,6 +67,13 @@ CREATE TABLE `email_settings` (
   `expenses` tinyint(1) DEFAULT 1,
   `logins` tinyint(1) DEFAULT 1,
   `refunds` tinyint(1) DEFAULT 1,
+  `inbox_shifts` tinyint(1) DEFAULT 1,
+  `inbox_stock_signals` tinyint(1) DEFAULT 1,
+  `inbox_expenses` tinyint(1) DEFAULT 1,
+  `inbox_logins` tinyint(1) DEFAULT 1,
+  `inbox_refunds` tinyint(1) DEFAULT 1,
+  `inbox_low_stock` tinyint(1) DEFAULT 1,
+  `inbox_out_of_stock` tinyint(1) DEFAULT 1,
   `updated_at` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

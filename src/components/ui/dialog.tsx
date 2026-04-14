@@ -2,16 +2,15 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-// Wrap DialogPrimitive.Root to prevent it from closing while the PIN overlay is active.
-// A tiny global registry so other code (like the PIN overlay) can force-close
-// all dialogs when needed. We attach it to window to avoid extra exports.
+
+// Keep a tiny global registry so the PIN overlay can dismiss open dialogs once
+// it is mounted. This centralizes dialog teardown in one place instead of
+// mutating dialog state from multiple unrelated effects.
 const REGISTRY_KEY = '__radix_dialog_registry_v1';
 if (typeof window !== 'undefined' && !(window as any)[REGISTRY_KEY]) {
     (window as any)[REGISTRY_KEY] = new Set<any>();
 }
 const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
-    // Fully controlled wrapper: keep an internal open state and refuse any
-    // attempt to close the dialog while the PIN overlay is active.
     const { open: openProp, defaultOpen, onOpenChange, ...rest } = props as any;
     const computeInitial = () => {
         if (typeof openProp !== 'undefined')
@@ -21,14 +20,24 @@ const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
         return false;
     };
     const [openState, setOpenState] = React.useState<boolean>(computeInitial);
-    // Register this dialog so others can force-close it when PIN appears.
+    const onOpenChangeRef = React.useRef(onOpenChange);
+
+    React.useEffect(() => {
+        onOpenChangeRef.current = onOpenChange;
+    }, [onOpenChange]);
+
+    React.useEffect(() => {
+        if (typeof openProp === 'undefined')
+            return;
+        setOpenState(!!openProp);
+    }, [openProp]);
+
     React.useEffect(() => {
         const entry = { forceClose: () => {
-                // Force close regardless of PIN state
                 setOpenState(false);
                 try {
-                    if (typeof props.onOpenChange === 'function')
-                        props.onOpenChange(false);
+                    if (typeof onOpenChangeRef.current === 'function')
+                        onOpenChangeRef.current(false);
                 }
                 catch (e) { }
             } };
@@ -45,29 +54,13 @@ const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
             catch (e) { }
         };
     }, []);
-    // Keep in sync with incoming open prop unless PIN is active and the
-    // incoming prop requests closure — in that case ignore the change.
-    React.useEffect(() => {
-        if (typeof openProp === 'undefined')
-            return;
-        const pinActiveNow = typeof document !== 'undefined' && document.body.getAttribute('data-pin-active') === 'true';
-        if (pinActiveNow && openProp === false) {
-            // ignore attempts from parent to close while PIN is active
-            return;
-        }
-        setOpenState(!!openProp);
-    }, [openProp]);
+
     const handleOpenChange = (nextOpen: boolean) => {
-        const pinActiveNow = typeof document !== 'undefined' && document.body.getAttribute('data-pin-active') === 'true';
-        if (pinActiveNow && nextOpen === false) {
-            // refuse to close while PIN overlay is active
-            setOpenState(true);
-            return;
-        }
         setOpenState(nextOpen);
         if (typeof onOpenChange === 'function')
             onOpenChange(nextOpen);
     };
+
     return <DialogPrimitive.Root open={openState} onOpenChange={handleOpenChange} {...(rest as any)}/>;
 };
 const DialogTrigger = DialogPrimitive.Trigger;

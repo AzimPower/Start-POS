@@ -13,6 +13,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+function format_settings_row(array $row) {
+    return [
+        'id' => $row['id'] ?? null,
+        'storeId' => $row['store_id'] ?? null,
+        'shifts' => !empty($row['shifts']),
+        'stockSignals' => !empty($row['stock_signals']),
+        'expenses' => !empty($row['expenses']),
+        'logins' => !empty($row['logins']),
+        'refunds' => !empty($row['refunds']),
+        'inboxShifts' => !array_key_exists('inbox_shifts', $row) || !empty($row['inbox_shifts']),
+        'inboxStockSignals' => !array_key_exists('inbox_stock_signals', $row) || !empty($row['inbox_stock_signals']),
+        'inboxExpenses' => !array_key_exists('inbox_expenses', $row) || !empty($row['inbox_expenses']),
+        'inboxLogins' => !array_key_exists('inbox_logins', $row) || !empty($row['inbox_logins']),
+        'inboxRefunds' => !array_key_exists('inbox_refunds', $row) || !empty($row['inbox_refunds']),
+        'inboxLowStock' => !array_key_exists('inbox_low_stock', $row) || !empty($row['inbox_low_stock']),
+        'inboxOutOfStock' => !array_key_exists('inbox_out_of_stock', $row) || !empty($row['inbox_out_of_stock']),
+        'updatedAt' => isset($row['updated_at']) ? (int)$row['updated_at'] : (time() * 1000),
+    ];
+}
+
+function default_settings_payload($storeId) {
+    return [
+        'id' => null,
+        'storeId' => $storeId,
+        'shifts' => true,
+        'stockSignals' => true,
+        'expenses' => true,
+        'logins' => true,
+        'refunds' => true,
+        'inboxShifts' => true,
+        'inboxStockSignals' => true,
+        'inboxExpenses' => true,
+        'inboxLogins' => true,
+        'inboxRefunds' => true,
+        'inboxLowStock' => true,
+        'inboxOutOfStock' => true,
+        'updatedAt' => time() * 1000,
+    ];
+}
+
 try {
     switch ($method) {
         case 'GET':
@@ -22,45 +62,15 @@ try {
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($result) {
-                    echo json_encode([
-                        'id' => $result['id'],
-                        'storeId' => $result['store_id'],
-                        'shifts' => (bool)$result['shifts'],
-                        'stockSignals' => (bool)$result['stock_signals'],
-                        'expenses' => (bool)$result['expenses'],
-                        'logins' => (bool)$result['logins'],
-                        'refunds' => (bool)$result['refunds'],
-                        'updatedAt' => $result['updated_at']
-                    ]);
+                    echo json_encode(format_settings_row($result));
                 } else {
-                    // Return default settings if none exist
-                    echo json_encode([
-                        'id' => null,
-                        'storeId' => $_GET['storeId'],
-                        'shifts' => true,
-                        'stockSignals' => true,
-                        'expenses' => true,
-                        'logins' => true,
-                        'refunds' => true,
-                        'updatedAt' => time() * 1000
-                    ]);
+                    echo json_encode(default_settings_payload($_GET['storeId']));
                 }
             } else {
                 $stmt = $pdo->query("SELECT * FROM email_settings ORDER BY updated_at DESC");
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                $formatted = array_map(function($row) {
-                    return [
-                        'id' => $row['id'],
-                        'storeId' => $row['store_id'],
-                        'shifts' => (bool)$row['shifts'],
-                        'stockSignals' => (bool)$row['stock_signals'],
-                        'expenses' => (bool)$row['expenses'],
-                        'logins' => (bool)$row['logins'],
-                        'refunds' => (bool)$row['refunds'],
-                        'updatedAt' => $row['updated_at']
-                    ];
-                }, $results);
+                $formatted = array_map('format_settings_row', $results);
                 
                 echo json_encode($formatted);
             }
@@ -82,6 +92,13 @@ try {
             $expenses = isset($input['expenses']) ? (int)$input['expenses'] : 1;
             $logins = isset($input['logins']) ? (int)$input['logins'] : 1;
             $refunds = isset($input['refunds']) ? (int)$input['refunds'] : 1;
+            $inboxShifts = isset($input['inboxShifts']) ? (int)$input['inboxShifts'] : 1;
+            $inboxStockSignals = isset($input['inboxStockSignals']) ? (int)$input['inboxStockSignals'] : 1;
+            $inboxExpenses = isset($input['inboxExpenses']) ? (int)$input['inboxExpenses'] : 1;
+            $inboxLogins = isset($input['inboxLogins']) ? (int)$input['inboxLogins'] : 1;
+            $inboxRefunds = isset($input['inboxRefunds']) ? (int)$input['inboxRefunds'] : 1;
+            $inboxLowStock = isset($input['inboxLowStock']) ? (int)$input['inboxLowStock'] : 1;
+            $inboxOutOfStock = isset($input['inboxOutOfStock']) ? (int)$input['inboxOutOfStock'] : 1;
             $updatedAt = $input['updatedAt'] ?? (time() * 1000);
             
             // Check if settings already exist for this store
@@ -93,19 +110,56 @@ try {
                 // Update existing record
                 $stmt = $pdo->prepare("
                     UPDATE email_settings 
-                    SET shifts = ?, stock_signals = ?, expenses = ?, logins = ?, refunds = ?, updated_at = ?
+                    SET shifts = ?, stock_signals = ?, expenses = ?, logins = ?, refunds = ?,
+                        inbox_shifts = ?, inbox_stock_signals = ?, inbox_expenses = ?, inbox_logins = ?, inbox_refunds = ?,
+                        inbox_low_stock = ?, inbox_out_of_stock = ?, updated_at = ?
                     WHERE store_id = ?
                 ");
-                $stmt->execute([$shifts, $stockSignals, $expenses, $logins, $refunds, $updatedAt, $storeId]);
+                $stmt->execute([
+                    $shifts,
+                    $stockSignals,
+                    $expenses,
+                    $logins,
+                    $refunds,
+                    $inboxShifts,
+                    $inboxStockSignals,
+                    $inboxExpenses,
+                    $inboxLogins,
+                    $inboxRefunds,
+                    $inboxLowStock,
+                    $inboxOutOfStock,
+                    $updatedAt,
+                    $storeId,
+                ]);
                 $id = $existing['id'];
             } else {
                 // Insert new record
                 $id = uniqid();
                 $stmt = $pdo->prepare("
-                    INSERT INTO email_settings (id, store_id, shifts, stock_signals, expenses, logins, refunds, updated_at) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO email_settings (
+                        id, store_id, shifts, stock_signals, expenses, logins, refunds,
+                        inbox_shifts, inbox_stock_signals, inbox_expenses, inbox_logins, inbox_refunds,
+                        inbox_low_stock, inbox_out_of_stock, updated_at
+                    ) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ");
-                $stmt->execute([$id, $storeId, $shifts, $stockSignals, $expenses, $logins, $refunds, $updatedAt]);
+                $stmt->execute([
+                    $id,
+                    $storeId,
+                    $shifts,
+                    $stockSignals,
+                    $expenses,
+                    $logins,
+                    $refunds,
+                    $inboxShifts,
+                    $inboxStockSignals,
+                    $inboxExpenses,
+                    $inboxLogins,
+                    $inboxRefunds,
+                    $inboxLowStock,
+                    $inboxOutOfStock,
+                    $updatedAt,
+                ]);
             }
             
             echo json_encode([
@@ -116,6 +170,13 @@ try {
                 'expenses' => (bool)$expenses,
                 'logins' => (bool)$logins,
                 'refunds' => (bool)$refunds,
+                'inboxShifts' => (bool)$inboxShifts,
+                'inboxStockSignals' => (bool)$inboxStockSignals,
+                'inboxExpenses' => (bool)$inboxExpenses,
+                'inboxLogins' => (bool)$inboxLogins,
+                'inboxRefunds' => (bool)$inboxRefunds,
+                'inboxLowStock' => (bool)$inboxLowStock,
+                'inboxOutOfStock' => (bool)$inboxOutOfStock,
                 'updatedAt' => $updatedAt
             ]);
             break;

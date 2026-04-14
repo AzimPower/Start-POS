@@ -56,7 +56,7 @@ import { Switch } from '@/components/ui/switch';
 import { Printer, ImageIcon, Trash, Check, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
-import { invalidateEmailSettingsCache } from '@/lib/emailSettingsCache';
+import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
 const elevatedCardClassName = 'overflow-hidden rounded-[1.75rem] border border-border/60 bg-card/95 shadow-sm shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90';
 function SettingsSectionHeading({ icon: Icon, title, description, action }: {
@@ -88,13 +88,7 @@ export default function Settings() {
     const [note, setNote] = useState<string>('');
     const [confirmOpen, setConfirmOpen] = useState(false);
     // Email notification settings
-    const [emailSettings, setEmailSettings] = useState({
-        shifts: true,
-        stockSignals: true,
-        expenses: true,
-        logins: true,
-        refunds: true
-    });
+    const [emailSettings, setEmailSettings] = useState<StoreAlertSettings>(DEFAULT_STORE_ALERT_SETTINGS);
     const [loadingEmailSettings, setLoadingEmailSettings] = useState(false);
     // Fond de roulement dialog state
     const [fondDialogOpen, setFondDialogOpen] = useState(false);
@@ -115,43 +109,24 @@ export default function Settings() {
     }
     // Load email notification settings
     const loadEmailSettings = async () => {
+        if (!user?.storeId) {
+            setEmailSettings(DEFAULT_STORE_ALERT_SETTINGS);
+            return;
+        }
+
         try {
-            const db = await getDB();
-            // Charger depuis le backend en priorité (source de vérité partagée entre appareils)
-            let remoteSettings: any = null;
-            try {
-                const res = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php?storeId=${encodeURIComponent(user?.storeId || '')}`);
-                if (res.ok) {
-                    remoteSettings = await res.json();
-                }
-            }
-            catch (e) {
-            }
-            const settings = remoteSettings || await db.get('emailSettings', user?.storeId);
-            if (settings) {
-                // Mettre à jour le cache local avec les données du backend
-                if (remoteSettings) {
-                    await db.put('emailSettings', {
-                        id: user?.storeId,
-                        storeId: user?.storeId,
-                        ...remoteSettings,
-                        updatedAt: Date.now()
-                    });
-                }
-                setEmailSettings({
-                    shifts: settings.shifts !== false,
-                    stockSignals: settings.stockSignals !== false,
-                    expenses: settings.expenses !== false,
-                    logins: settings.logins !== false,
-                    refunds: settings.refunds !== false
-                });
-            }
+            setLoadingEmailSettings(true);
+            const settings = await getEmailSettings(user.storeId);
+            setEmailSettings(settings);
         }
         catch (e) {
         }
+        finally {
+            setLoadingEmailSettings(false);
+        }
     };
     // Save email notification settings
-    const saveEmailSettings = async (newSettings: any) => {
+    const saveEmailSettings = async (newSettings: StoreAlertSettings) => {
         try {
             setLoadingEmailSettings(true);
             const db = await getDB();
@@ -165,18 +140,19 @@ export default function Settings() {
             // Sauvegarder localement (put remplace si existe déjà)
             await db.put('emailSettings', settingsData);
             // Sync with backend if online
-            try {
-                await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php',
-                    method: 'PUT',
-                    data: settingsData
-                });
-            }
-            catch (e) {
-            }
+            const syncResult = await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php',
+                method: 'PUT',
+                data: settingsData
+            });
             setEmailSettings(newSettings);
             invalidateEmailSettingsCache(user?.storeId || '');
-            toast.success('Paramètres d\'email sauvegardés');
+            if (syncResult.queued) {
+                toast.info('Paramètres enregistrés localement. Synchronisation en attente.');
+            }
+            else {
+                toast.success('Paramètres de notifications sauvegardés');
+            }
         }
         catch (e) {
             toast.error('Erreur lors de la sauvegarde');
@@ -184,6 +160,9 @@ export default function Settings() {
         finally {
             setLoadingEmailSettings(false);
         }
+    };
+    const toggleStoreAlertSetting = (key: keyof StoreAlertSettings, checked: boolean) => {
+        void saveEmailSettings({ ...emailSettings, [key]: checked });
     };
     // Fetch store info for admin
     const fetchStore = async () => {
@@ -1426,7 +1405,7 @@ export default function Settings() {
                           <h3 className="font-semibold text-yellow-900 mb-1">
                             {storeError || 'Impossible de charger les informations du magasin'}
                           </h3>
-                          <p className="text-sm text-yellow-800">
+                                                    <div className="text-sm text-yellow-800">
                             {storeError?.includes('serveur') || storeError?.includes('connexion') ? (<>
                                 Assurez-vous que :
                                 <ul className="list-disc list-inside mt-2 space-y-1">
@@ -1442,7 +1421,7 @@ export default function Settings() {
                                   <li>Valider vos permissions d'accès</li>
                                 </ul>
                               </>)}
-                          </p>
+                                                    </div>
                           <p className="text-xs text-yellow-700 mt-3">
                           </p>
                         </div>
@@ -1838,18 +1817,20 @@ export default function Settings() {
           {/* Email Notifications Configuration card */}
                     {canEditEmailSettings && (<Card className={`${elevatedCardClassName} 2xl:col-span-5`}>
                             <CardHeader className="space-y-4 pb-4">
-                                <SettingsSectionHeading icon={BellRing} title="Notifications Email" description="Choisissez quels événements doivent déclencher un email automatique pour le magasin." action={<Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700">Synchronisé</Badge>}/>
+                                                                <SettingsSectionHeading icon={BellRing} title="Notifications automatiques" description="Choisissez quels événements doivent déclencher un email ou une alerte dans la boîte de réception du magasin." action={<Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700">Synchronisé</Badge>}/>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                                    <div>
+                                        <p className="text-sm font-semibold text-foreground">Emails</p>
+                                        <p className="text-xs text-muted-foreground">Ces alertes sont envoyées par email aux admins du magasin.</p>
+                                    </div>
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium">Fermetures de services</p>
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque fermeture de shift</p>
                     </div>
-                    <Switch checked={emailSettings.shifts} onCheckedChange={(checked) => {
-                saveEmailSettings({ ...emailSettings, shifts: checked });
-            }} disabled={loadingEmailSettings}/>
+                                        <Switch checked={emailSettings.shifts} onCheckedChange={(checked) => toggleStoreAlertSetting('shifts', checked)} disabled={loadingEmailSettings}/>
                   </div>
                   
                   <div className="flex items-center justify-between">
@@ -1857,9 +1838,7 @@ export default function Settings() {
                       <p className="text-sm font-medium">Signalements de stock</p>
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque signalement de performance stock</p>
                     </div>
-                    <Switch checked={emailSettings.stockSignals} onCheckedChange={(checked) => {
-                saveEmailSettings({ ...emailSettings, stockSignals: checked });
-            }} disabled={loadingEmailSettings}/>
+                                        <Switch checked={emailSettings.stockSignals} onCheckedChange={(checked) => toggleStoreAlertSetting('stockSignals', checked)} disabled={loadingEmailSettings}/>
                   </div>
                   
                   <div className="flex items-center justify-between">
@@ -1867,9 +1846,7 @@ export default function Settings() {
                       <p className="text-sm font-medium">Dépenses</p>
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque ajout/modification de dépense</p>
                     </div>
-                    <Switch checked={emailSettings.expenses} onCheckedChange={(checked) => {
-                saveEmailSettings({ ...emailSettings, expenses: checked });
-            }} disabled={loadingEmailSettings}/>
+                                        <Switch checked={emailSettings.expenses} onCheckedChange={(checked) => toggleStoreAlertSetting('expenses', checked)} disabled={loadingEmailSettings}/>
                   </div>
                   
                   <div className="flex items-center justify-between">
@@ -1877,9 +1854,7 @@ export default function Settings() {
                       <p className="text-sm font-medium">Connexions utilisateurs</p>
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque connexion d'utilisateur</p>
                     </div>
-                    <Switch checked={emailSettings.logins} onCheckedChange={(checked) => {
-                saveEmailSettings({ ...emailSettings, logins: checked });
-            }} disabled={loadingEmailSettings}/>
+                                        <Switch checked={emailSettings.logins} onCheckedChange={(checked) => toggleStoreAlertSetting('logins', checked)} disabled={loadingEmailSettings}/>
                   </div>
                   
                   <div className="flex items-center justify-between">
@@ -1887,10 +1862,71 @@ export default function Settings() {
                       <p className="text-sm font-medium">Remboursements</p>
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque remboursement de vente</p>
                     </div>
-                    <Switch checked={emailSettings.refunds} onCheckedChange={(checked) => {
-                saveEmailSettings({ ...emailSettings, refunds: checked });
-            }} disabled={loadingEmailSettings}/>
+                                        <Switch checked={emailSettings.refunds} onCheckedChange={(checked) => toggleStoreAlertSetting('refunds', checked)} disabled={loadingEmailSettings}/>
                   </div>
+
+                                    <Separator />
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-foreground">Boîte de réception</p>
+                                        <p className="text-xs text-muted-foreground">Ces alertes apparaissent dans la page Notifications pour les admins du magasin.</p>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Fermetures de services</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification à chaque fermeture de shift</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxShifts} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxShifts', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Signalements de stock</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification quand un signalement de stock est envoyé</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxStockSignals} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxStockSignals', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Dépenses</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification après ajout ou modification d'une dépense</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxExpenses} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxExpenses', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Connexions utilisateurs</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification à chaque connexion d'utilisateur</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxLogins} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxLogins', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Remboursements</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification à chaque remboursement de vente</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxRefunds} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxRefunds', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Stock faible</p>
+                                            <p className="text-xs text-muted-foreground">Créer une alerte quand un produit passe sous son seuil minimum</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxLowStock} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxLowStock', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Rupture de stock</p>
+                                            <p className="text-xs text-muted-foreground">Créer une alerte critique quand un produit tombe à zéro</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxOutOfStock} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxOutOfStock', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
                 </div>
               </CardContent>
             </Card>)}

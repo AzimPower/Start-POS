@@ -109,3 +109,90 @@ export async function mergeBackendSalesIntoLocalDb(db: any, backendSales: any[],
     ]);
     return mergedSales;
 }
+
+function isSalesQueueEntry(entry: any) {
+    const url = String(entry?.url || '');
+    const table = String(entry?.table || '');
+
+    return table === 'sales' || url.includes(SALES_API_PATH);
+}
+
+function getQueueEntryMethod(entry: any) {
+    const explicitMethod = String(entry?.method || '').toUpperCase();
+    if (explicitMethod) {
+        return explicitMethod;
+    }
+
+    const operation = String(entry?.operation || '').toLowerCase();
+    if (operation === 'create') {
+        return 'POST';
+    }
+    if (operation === 'update') {
+        return 'PUT';
+    }
+    if (operation === 'delete') {
+        return 'DELETE';
+    }
+
+    return 'POST';
+}
+
+function shouldIncludeSaleForStore(sale: any, storeId?: string) {
+    if (!sale?.id) {
+        return false;
+    }
+
+    if (!storeId) {
+        return true;
+    }
+
+    return String(sale.storeId || '') === String(storeId);
+}
+
+export async function buildProjectedLocalSales(db: any, options?: { storeId?: string; }) {
+    const localSales = await db.getAll('sales');
+    const salesById = new Map<string, any>(localSales
+        .filter((sale: any) => shouldIncludeSaleForStore(sale, options?.storeId))
+        .map((sale: any) => [String(sale.id), sale]));
+
+    const queueEntries: any[] = [];
+
+    try {
+        queueEntries.push(...await getPendingSyncOps());
+    }
+    catch (error) {
+    }
+
+    try {
+        queueEntries.push(...await db.getAll('syncQueue'));
+    }
+    catch (error) {
+    }
+
+    for (const entry of queueEntries) {
+        if (!isSalesQueueEntry(entry)) {
+            continue;
+        }
+
+        const sale = entry?.data;
+        if (!shouldIncludeSaleForStore(sale, options?.storeId)) {
+            continue;
+        }
+
+        const saleId = String(sale.id || '');
+        if (!saleId) {
+            continue;
+        }
+
+        const method = getQueueEntryMethod(entry);
+        if (method === 'DELETE') {
+            salesById.delete(saleId);
+            continue;
+        }
+
+        const currentSale = salesById.get(saleId);
+        salesById.set(saleId, currentSale ? mergeLocalSale(sale, currentSale) : sale);
+    }
+
+    return Array.from(salesById.values()).sort((a: any, b: any) => toTimestamp(b?.createdAt) - toTimestamp(a?.createdAt));
+}

@@ -120,6 +120,13 @@ interface POSDB extends DBSchema {
             expenses: boolean;
             logins: boolean;
             refunds: boolean;
+            inboxShifts: boolean;
+            inboxStockSignals: boolean;
+            inboxExpenses: boolean;
+            inboxLogins: boolean;
+            inboxRefunds: boolean;
+            inboxLowStock: boolean;
+            inboxOutOfStock: boolean;
             updatedAt: number;
         };
         indexes: {
@@ -434,6 +441,7 @@ interface POSDB extends DBSchema {
                 id: string;
                 username: string;
                 email: string;
+                storeId?: string;
             }>;
         };
     };

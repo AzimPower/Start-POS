@@ -19,6 +19,7 @@ import './expenses.css';
 import { toast } from 'sonner';
 import { emailService } from '@/lib/emailService';
 import { pendingEmailService } from '@/lib/pendingEmailService';
+import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -777,6 +778,15 @@ export default function Expenses() {
                             // Récupérer le nom du magasin depuis la base locale
                             const store = await dbInstance.get('stores', user?.storeId);
                             const storeName = store?.name || user?.storeId || '';
+                          await sendStoreAdminNotification({
+                            event: 'expense',
+                            senderUserId: user?.id || '',
+                            storeId: user?.storeId || '',
+                            relatedId: finalExpense.id,
+                            type: 'warning',
+                            title: `${isEdit ? 'Dépense modifiée' : 'Nouvelle dépense'}: ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA`,
+                            message: `${user?.username || 'Un utilisateur'} a ${isEdit ? 'modifié' : 'enregistré'} une dépense ${getExpenseTypeLabel(finalExpense.type).toLowerCase()} de ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA dans ${storeName || 'le magasin'}. Description: ${finalExpense.description || '-'}.`,
+                          });
                             // Construction du résumé HTML
                             const resume = `
 <div style="margin: 20px 0;">

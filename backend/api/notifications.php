@@ -63,18 +63,121 @@ function normalize_store_ids($value) {
     return array_keys($normalized);
 }
 
-function require_super_admin_sender(PDO $pdo, $senderUserId) {
+function require_active_sender(PDO $pdo, $senderUserId) {
     if (!$senderUserId) {
         json_error('senderUserId requis');
     }
 
-    $stmt = $pdo->prepare('SELECT id, role, active FROM users WHERE id = ? LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, role, active, storeId FROM users WHERE id = ? LIMIT 1');
     $stmt->execute([$senderUserId]);
     $sender = $stmt->fetch();
 
     if (!$sender || (int)($sender['active'] ?? 0) !== 1) {
         json_error('Expéditeur introuvable ou inactif', 403);
     }
+
+    return $sender;
+}
+
+function get_user_store_ids(PDO $pdo, $userId) {
+    $storeIds = [];
+
+    $stmt = $pdo->prepare('SELECT storeId FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch();
+    if ($user && !empty($user['storeId'])) {
+        $storeIds[] = trim((string)$user['storeId']);
+    }
+
+    $mappingStmt = $pdo->prepare('SELECT storeId FROM user_stores WHERE userId = ?');
+    $mappingStmt->execute([$userId]);
+    foreach ($mappingStmt->fetchAll(PDO::FETCH_COLUMN) as $storeId) {
+        $trimmed = trim((string)$storeId);
+        if ($trimmed !== '') {
+            $storeIds[] = $trimmed;
+        }
+    }
+
+    return array_values(array_unique($storeIds));
+}
+
+function sender_can_target_store(PDO $pdo, array $sender, $targetStoreId) {
+    if (($sender['role'] ?? '') === 'super_admin') {
+        return true;
+    }
+
+    return in_array((string)$targetStoreId, get_user_store_ids($pdo, $sender['id']), true);
+}
+
+function get_store_admin_recipients(PDO $pdo, $storeId) {
+    if (!$storeId) {
+        return [];
+    }
+
+    $stmt = $pdo->prepare(
+        "SELECT DISTINCT u.id
+         FROM users u
+         LEFT JOIN user_stores us ON us.userId = u.id
+         WHERE u.active = 1
+           AND u.role = 'admin'
+           AND (u.storeId = ? OR us.storeId = ?)"
+    );
+    $stmt->execute([$storeId, $storeId]);
+
+    return array_values(array_unique(array_filter(array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN)))));
+}
+
+function build_scoped_notification_id($baseId, $targetUserId) {
+    return 'notif_' . substr(md5((string)$baseId . '|' . (string)$targetUserId), 0, 30);
+}
+
+function create_store_admin_notifications(PDO $pdo, array $sender, array $payload, $baseId, $createdAt) {
+    $recipientIds = get_store_admin_recipients($pdo, $payload['targetStoreId']);
+    if (empty($recipientIds)) {
+        return [];
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO notifications (id, title, message, type, targetType, targetRole, targetStoreId, targetUserId, senderUserId, active, createdAt, expiresAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            title = VALUES(title),
+            message = VALUES(message),
+            type = VALUES(type),
+            targetType = VALUES(targetType),
+            targetRole = VALUES(targetRole),
+            targetStoreId = VALUES(targetStoreId),
+            targetUserId = VALUES(targetUserId),
+            senderUserId = VALUES(senderUserId),
+            active = VALUES(active),
+            createdAt = VALUES(createdAt),
+            expiresAt = VALUES(expiresAt)'
+    );
+
+    $createdIds = [];
+    foreach ($recipientIds as $recipientId) {
+        $notificationId = build_scoped_notification_id($baseId, $recipientId);
+        $stmt->execute([
+            $notificationId,
+            $payload['title'],
+            $payload['message'],
+            $payload['type'],
+            'user',
+            null,
+            $payload['targetStoreId'],
+            $recipientId,
+            $sender['id'],
+            $createdAt,
+            $payload['expiresAt'],
+        ]);
+        $createdIds[] = $notificationId;
+    }
+
+    return $createdIds;
+}
+
+function require_super_admin_sender(PDO $pdo, $senderUserId) {
+    $sender = require_active_sender($pdo, $senderUserId);
 
     if (($sender['role'] ?? '') !== 'super_admin') {
         json_error('Seul le super admin peut envoyer des notifications globales', 403);
@@ -103,7 +206,7 @@ function require_notification_sender(PDO $pdo, $notificationId, $senderUserId) {
 
 function validate_notification_payload($data) {
     $allowedTypes = ['info', 'success', 'warning', 'critical'];
-    $allowedTargets = ['all', 'role', 'store', 'user'];
+    $allowedTargets = ['all', 'role', 'store', 'user', 'store_admins'];
     $allowedRoles = ['super_admin', 'admin', 'cashier', 'manager'];
 
     $title = trim((string)($data['title'] ?? ''));
@@ -140,6 +243,14 @@ function validate_notification_payload($data) {
     }
 
     if ($targetType === 'store') {
+        if (!$targetStoreId) {
+            json_error('Le magasin cible est requis');
+        }
+        $targetRole = null;
+        $targetUserId = null;
+    }
+
+    if ($targetType === 'store_admins') {
         if (!$targetStoreId) {
             json_error('Le magasin cible est requis');
         }
@@ -258,8 +369,33 @@ try {
         case 'POST':
             $data = read_json_body();
             $senderUserId = trim((string)($data['senderUserId'] ?? ''));
-            require_super_admin_sender($pdo, $senderUserId);
+            $sender = require_active_sender($pdo, $senderUserId);
             $payload = validate_notification_payload($data);
+
+            if ($payload['targetType'] === 'store_admins') {
+                if (!sender_can_target_store($pdo, $sender, $payload['targetStoreId'])) {
+                    json_error('Vous ne pouvez notifier que les admins de votre magasin', 403);
+                }
+
+                $baseId = trim((string)($data['id'] ?? ''));
+                if ($baseId === '') {
+                    $baseId = generate_entity_id('notif_');
+                }
+                $createdAt = isset($data['createdAt']) ? (int)$data['createdAt'] : (int)round(microtime(true) * 1000);
+                $createdIds = create_store_admin_notifications($pdo, $sender, $payload, $baseId, $createdAt);
+
+                echo json_encode([
+                    'success' => true,
+                    'id' => $baseId,
+                    'ids' => $createdIds,
+                    'count' => count($createdIds),
+                ]);
+                break;
+            }
+
+            if (($sender['role'] ?? '') !== 'super_admin') {
+                json_error('Seul le super admin peut envoyer des notifications globales', 403);
+            }
 
             $id = $data['id'] ?? generate_entity_id('notif_');
             $createdAt = isset($data['createdAt']) ? (int)$data['createdAt'] : (int)round(microtime(true) * 1000);
@@ -277,7 +413,7 @@ try {
                 $payload['targetRole'],
                 $payload['targetStoreId'],
                 $payload['targetUserId'],
-                $senderUserId,
+                $sender['id'],
                 $createdAt,
                 $payload['expiresAt'],
             ]);

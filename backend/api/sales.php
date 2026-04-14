@@ -23,6 +23,47 @@ function is_draft_sale_flag($value) {
     return $value === true || $value === 1 || $value === '1' || $value === 'true';
 }
 
+function should_sync_sale_stock($sale) {
+    return !is_draft_sale_flag($sale['draft'] ?? false)
+        && !is_refunded_sale_flag($sale['refunded'] ?? false);
+}
+
+function apply_sale_stock_delta($pdo, $storeId, $items, $deltaSign) {
+    if (!$storeId || !is_array($items) || empty($items) || intval($deltaSign) === 0) {
+        return;
+    }
+
+    $loadStockStmt = $pdo->prepare(
+        'SELECT stock FROM product_stock WHERE productId = ? AND storeId = ? LIMIT 1 FOR UPDATE'
+    );
+    $updateStockStmt = $pdo->prepare(
+        'UPDATE product_stock SET stock = ? WHERE productId = ? AND storeId = ?'
+    );
+
+    foreach ($items as $item) {
+        $productId = isset($item['productId']) ? trim((string) $item['productId']) : '';
+        $quantity = intval($item['quantity'] ?? 0);
+
+        if ($productId === '' || $quantity === 0) {
+            continue;
+        }
+
+        $loadStockStmt->execute([$productId, $storeId]);
+        $currentStock = $loadStockStmt->fetchColumn();
+
+        if ($currentStock === false) {
+            continue;
+        }
+
+        $newStock = intval($currentStock) + ($quantity * intval($deltaSign));
+        $updateStockStmt->execute([$newStock, $productId, $storeId]);
+    }
+}
+
+function is_duplicate_key_error($exception) {
+    return $exception instanceof PDOException && (string) $exception->getCode() === '23000';
+}
+
 function has_receipt_metadata($sale) {
     $receiptNumber = isset($sale['receiptNumber']) ? trim((string) $sale['receiptNumber']) : '';
     $receiptSequence = isset($sale['receiptSequence']) ? intval($sale['receiptSequence']) : 0;
@@ -253,143 +294,165 @@ switch ($method) {
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        $id = $data['id'] ?? uniqid();
         $sql = 'INSERT INTO sales (id, shiftId, userId, storeId, customerId, subtotal, tax, total, paymentMethod, cashAmount, mobileMoneyAmount, otherAmount, createdAt, refunded, refundedAt, draft, completedAt, receiptSequence, receiptNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
-        $id = $data['id'] ?? uniqid();
-        $stmt->execute([
-            $id,
-            $data['shiftId'],
-            $data['userId'],
-            $data['storeId'],
-            $data['customerId'],
-            $data['subtotal'],
-            $data['tax'],
-            $data['total'],
-            $data['paymentMethod'],
-            $data['cashAmount'] ?? null,
-            $data['mobileMoneyAmount'] ?? null,
-            $data['otherAmount'] ?? null,
-            $data['createdAt'] ?? time()*1000,
-            $data['refunded'] ?? false,
-            $data['refundedAt'],
-            $data['draft'] ?? false,
-            $data['completedAt'],
-            $data['receiptSequence'] ?? null,
-            $data['receiptNumber'] ?? null,
-        ]);
-        
-        // Insérer les items de la vente
-        if (isset($data['items']) && is_array($data['items'])) {
-            $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
-            $itemStmt = $pdo->prepare($itemSql);
-            foreach ($data['items'] as $item) {
-                $itemStmt->execute([
-                    $id,
-                    $item['productId'],
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['tax'],
-                    $item['total']
-                ]);
+
+        try {
+            $pdo->beginTransaction();
+
+            $existingSaleStmt = $pdo->prepare('SELECT id FROM sales WHERE id = ? LIMIT 1 FOR UPDATE');
+            $existingSaleStmt->execute([$id]);
+            if ($existingSaleStmt->fetch(PDO::FETCH_ASSOC)) {
+                $pdo->commit();
+                echo json_encode(['success' => true, 'id' => $id, 'alreadyExists' => true]);
+                break;
             }
+
+            $stmt->execute([
+                $id,
+                $data['shiftId'],
+                $data['userId'],
+                $data['storeId'],
+                $data['customerId'],
+                $data['subtotal'],
+                $data['tax'],
+                $data['total'],
+                $data['paymentMethod'],
+                $data['cashAmount'] ?? null,
+                $data['mobileMoneyAmount'] ?? null,
+                $data['otherAmount'] ?? null,
+                $data['createdAt'] ?? time() * 1000,
+                $data['refunded'] ?? false,
+                $data['refundedAt'] ?? null,
+                $data['draft'] ?? false,
+                $data['completedAt'] ?? null,
+                $data['receiptSequence'] ?? null,
+                $data['receiptNumber'] ?? null,
+            ]);
+
+            if (isset($data['items']) && is_array($data['items'])) {
+                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
+                $itemStmt = $pdo->prepare($itemSql);
+                foreach ($data['items'] as $item) {
+                    $itemStmt->execute([
+                        $id,
+                        $item['productId'],
+                        $item['name'],
+                        $item['quantity'],
+                        $item['price'],
+                        $item['tax'],
+                        $item['total']
+                    ]);
+                }
+            }
+
+            if (should_sync_sale_stock($data)) {
+                apply_sale_stock_delta($pdo, $data['storeId'] ?? null, $data['items'] ?? [], -1);
+            }
+
+            $pdo->commit();
+            echo json_encode(['success' => true, 'id' => $id]);
+        } catch (Exception $exception) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            if (is_duplicate_key_error($exception)) {
+                echo json_encode(['success' => true, 'id' => $id, 'alreadyExists' => true]);
+                break;
+            }
+
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Erreur lors de l\'enregistrement de la vente',
+            ]);
         }
-        
-        echo json_encode(['success' => true, 'id' => $id]);
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
-
-        $existingSaleStmt = $pdo->prepare('SELECT refunded, refundedAt FROM sales WHERE id = ? LIMIT 1');
-        $existingSaleStmt->execute([$data['id'] ?? '']);
-        $existingSale = $existingSaleStmt->fetch(PDO::FETCH_ASSOC);
-        $wasRefunded = $existingSale ? is_refunded_sale_flag($existingSale['refunded'] ?? false) : false;
-        
-        // Vérifier si c'est un remboursement (refunded = true et refundedAt défini)
-        $isRefund = isset($data['refunded']) && $data['refunded'] === true && isset($data['refundedAt']);
-        $shouldRestoreStock = $isRefund && !$wasRefunded;
-        
-        // Si c'est un remboursement, restaurer le stock des produits
-        if ($shouldRestoreStock && isset($data['items']) && is_array($data['items'])) {
-            foreach ($data['items'] as $item) {
-                try {
-                    // Récupérer le stock actuel du produit pour ce magasin
-                    $stockStmt = $pdo->prepare('SELECT stock FROM product_stock WHERE productId = ? AND storeId = ?');
-                    $stockStmt->execute([$item['productId'], $data['storeId']]);
-                    $currentStock = $stockStmt->fetchColumn();
-                    
-                    if ($currentStock !== false) {
-                        // Le produit a un suivi de stock, restaurer la quantité vendue
-                        $newStock = intval($currentStock) + intval($item['quantity']);
-                        $updateStockStmt = $pdo->prepare('UPDATE product_stock SET stock = ? WHERE productId = ? AND storeId = ?');
-                        $updateStockStmt->execute([$newStock, $item['productId'], $data['storeId']]);
-                        
-                        error_log("Stock restauré pour produit {$item['productId']}: {$currentStock} + {$item['quantity']} = {$newStock}");
-                    } else {
-                        error_log("Produit {$item['productId']} sans suivi de stock - pas de restauration");
-                    }
-                } catch (Exception $e) {
-                    error_log("Erreur lors de la restauration du stock pour le produit {$item['productId']}: " . $e->getMessage());
-                }
-            }
-        }
-        
         $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=?, receiptSequence=?, receiptNumber=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-            $data['shiftId'],
-            $data['userId'],
-            $data['storeId'],
-            $data['customerId'],
-            $data['subtotal'],
-            $data['tax'],
-            $data['total'],
-            $data['paymentMethod'],
-            $data['cashAmount'] ?? null,
-            $data['mobileMoneyAmount'] ?? null,
-            $data['otherAmount'] ?? null,
-            $data['createdAt'],
-            $data['refunded'] ?? false,
-            $data['refundedAt'] ?? null,
-            $data['draft'] ?? false,
-            $data['completedAt'] ?? null,
-            $data['receiptSequence'] ?? null,
-            $data['receiptNumber'] ?? null,
-            $data['id']
-        ]);
-        
-        // Mettre à jour les items si fournis
-        if (isset($data['items']) && is_array($data['items'])) {
-            // Supprimer les anciens items
-            $deleteStmt = $pdo->prepare('DELETE FROM sale_items WHERE saleId = ?');
-            $deleteStmt->execute([$data['id']]);
-            
-            // Insérer les nouveaux items
-            $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
-            $itemStmt = $pdo->prepare($itemSql);
-            foreach ($data['items'] as $item) {
-                $itemStmt->execute([
-                    $data['id'],
-                    $item['productId'],
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['tax'],
-                    $item['total']
-                ]);
+        try {
+            $pdo->beginTransaction();
+
+            $existingSaleStmt = $pdo->prepare('SELECT refunded, refundedAt FROM sales WHERE id = ? LIMIT 1 FOR UPDATE');
+            $existingSaleStmt->execute([$data['id'] ?? '']);
+            $existingSale = $existingSaleStmt->fetch(PDO::FETCH_ASSOC);
+            $wasRefunded = $existingSale ? is_refunded_sale_flag($existingSale['refunded'] ?? false) : false;
+
+            $isRefund = isset($data['refunded']) && $data['refunded'] === true && isset($data['refundedAt']);
+            $shouldRestoreStock = $isRefund && !$wasRefunded;
+
+            if ($shouldRestoreStock) {
+                apply_sale_stock_delta($pdo, $data['storeId'] ?? null, $data['items'] ?? [], 1);
             }
+
+            $stmt->execute([
+                $data['shiftId'],
+                $data['userId'],
+                $data['storeId'],
+                $data['customerId'],
+                $data['subtotal'],
+                $data['tax'],
+                $data['total'],
+                $data['paymentMethod'],
+                $data['cashAmount'] ?? null,
+                $data['mobileMoneyAmount'] ?? null,
+                $data['otherAmount'] ?? null,
+                $data['createdAt'],
+                $data['refunded'] ?? false,
+                $data['refundedAt'] ?? null,
+                $data['draft'] ?? false,
+                $data['completedAt'] ?? null,
+                $data['receiptSequence'] ?? null,
+                $data['receiptNumber'] ?? null,
+                $data['id']
+            ]);
+
+            if (isset($data['items']) && is_array($data['items'])) {
+                $deleteStmt = $pdo->prepare('DELETE FROM sale_items WHERE saleId = ?');
+                $deleteStmt->execute([$data['id']]);
+
+                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
+                $itemStmt = $pdo->prepare($itemSql);
+                foreach ($data['items'] as $item) {
+                    $itemStmt->execute([
+                        $data['id'],
+                        $item['productId'],
+                        $item['name'],
+                        $item['quantity'],
+                        $item['price'],
+                        $item['tax'],
+                        $item['total']
+                    ]);
+                }
+            }
+
+            $pdo->commit();
+
+            $response = ['success' => true];
+            if ($isRefund) {
+                $response['stockRestored'] = $shouldRestoreStock;
+                $response['alreadyRefunded'] = $wasRefunded;
+                $response['message'] = $shouldRestoreStock
+                    ? 'Vente remboursée et stock restauré'
+                    : 'Vente déjà remboursée, aucune restauration supplémentaire appliquée';
+            }
+
+            echo json_encode($response);
+        } catch (Exception $exception) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Erreur lors de la mise à jour de la vente',
+            ]);
         }
-        
-        $response = ['success' => true];
-        if ($isRefund) {
-            $response['stockRestored'] = $shouldRestoreStock;
-            $response['alreadyRefunded'] = $wasRefunded;
-            $response['message'] = $shouldRestoreStock
-                ? 'Vente remboursée et stock restauré'
-                : 'Vente déjà remboursée, aucune restauration supplémentaire appliquée';
-        }
-        
-        echo json_encode($response);
         break;
     case 'DELETE':
         $id = $_GET['id'] ?? null;

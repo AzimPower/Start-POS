@@ -6,6 +6,7 @@ import { refreshAllFromBackend } from '@/lib/sync';
 import { backendAvailable } from '@/lib/backend';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { isActiveFlag } from '@/lib/status';
+import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 function resolvePrimaryStoreId(storeId?: string | null, storeIds?: Array<string | null | undefined>): string {
     const candidates = [storeId, ...(storeIds || [])];
     for (const candidate of candidates) {
@@ -317,6 +318,42 @@ const sendLoginNotificationEmail = async (userData: User) => {
     catch (e) {
     }
 };
+
+const sendLoginInboxNotification = async (userData: User) => {
+    try {
+        const primaryStoreId = resolvePrimaryStoreId(userData.storeId, userData.storeIds);
+        if (!primaryStoreId) {
+            return;
+        }
+
+        const db = await getDB();
+        const store = await db.get('stores', primaryStoreId);
+        const storeName = store?.name || primaryStoreId || 'Magasin';
+        const loginTime = new Date().toLocaleString('fr-FR', {
+            dateStyle: 'full',
+            timeStyle: 'medium',
+        });
+        const roleLabel = userData.role === 'admin'
+            ? 'Administrateur'
+            : userData.role === 'cashier'
+                ? 'Caissier'
+                : userData.role === 'manager'
+                    ? 'Gestionnaire'
+                    : 'Super Admin';
+
+        await sendStoreAdminNotification({
+            event: 'login',
+            senderUserId: userData.id,
+            storeId: primaryStoreId,
+            relatedId: userData.id,
+            type: 'info',
+            title: `Connexion utilisateur: ${userData.username}`,
+            message: `${userData.username} (${roleLabel}) s'est connecté au magasin ${storeName} le ${loginTime}. Téléphone: ${userData.phone}.`,
+        });
+    }
+    catch (e) {
+    }
+};
 interface User {
     id: string;
     username: string;
@@ -417,27 +454,7 @@ export function AuthProvider({ children }: {
                         setPendingUser(null);
                         // Only lock if PIN is enabled for this user
                         if (hasPinEnabled) {
-                            // Activate PIN mode: set flag and proactively close existing dialogs so
-                            // they don't intercept the first PIN click. Also set body attribute
-                            // so CSS can immediately disable pointer-events on underlying overlays.
-                            try {
-                                document.body.setAttribute('data-pin-active', 'true');
-                            }
-                            catch (e) { }
-                            try {
-                                const REGISTRY_KEY = '__radix_dialog_registry_v1';
-                                const reg = (window as any)[REGISTRY_KEY];
-                                if (reg && typeof reg.forEach === 'function') {
-                                    reg.forEach((entry: any) => {
-                                        try {
-                                            if (entry && typeof entry.forceClose === 'function')
-                                                entry.forceClose();
-                                        }
-                                        catch (e) { }
-                                    });
-                                }
-                            }
-                            catch (e) { }
+                            // Let the mounted PIN overlay own body mutations and dialog dismissal.
                             setIsLocked(true);
                         }
                         else {
@@ -586,6 +603,11 @@ export function AuthProvider({ children }: {
                             }
                             catch (e) {
                             }
+                            try {
+                                await sendLoginInboxNotification(userData);
+                            }
+                            catch (e) {
+                            }
                             return true;
                         }
                     }
@@ -653,6 +675,11 @@ export function AuthProvider({ children }: {
                         // Mise en cache de l'admin pour les futurs emails (offline)
                         try {
                             await cleanupAdminCache();
+                        }
+                        catch (e) {
+                        }
+                        try {
+                            await sendLoginInboxNotification(userData);
                         }
                         catch (e) {
                         }
@@ -885,25 +912,6 @@ export function AuthProvider({ children }: {
                         // keep the user object but mark session as locked so overlay appears
                         setUser(parsed);
                         setPendingUser(null);
-                        // Activate PIN mode early: set body attribute and force-close any dialogs
-                        try {
-                            document.body.setAttribute('data-pin-active', 'true');
-                        }
-                        catch (e) { }
-                        try {
-                            const REGISTRY_KEY = '__radix_dialog_registry_v1';
-                            const reg = (window as any)[REGISTRY_KEY];
-                            if (reg && typeof reg.forEach === 'function') {
-                                reg.forEach((entry: any) => {
-                                    try {
-                                        if (entry && typeof entry.forceClose === 'function')
-                                            entry.forceClose();
-                                    }
-                                    catch (e) { }
-                                });
-                            }
-                        }
-                        catch (e) { }
                         setIsLocked(true);
                     }
                     catch (e) {

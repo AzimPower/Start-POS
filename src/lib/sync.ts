@@ -65,6 +65,47 @@ export async function getPendingSyncCount() {
     const db = await getSyncDB();
     return db.count(SYNC_STORE);
 }
+
+function isStockMutationOp(op: any, storeId?: string) {
+    const url = String(op?.url || '');
+    const table = String(op?.table || '');
+    const targetStoreId = op?.storeId ?? op?.data?.storeId ?? op?.data?.store_id ?? null;
+
+    const touchesStock = url.includes('sales.php')
+        || url.includes('products.php')
+        || url.includes('stock_adjust.php')
+        || table === 'sales'
+        || table === 'products'
+        || table === 'stockAdjustments';
+
+    if (!touchesStock) {
+        return false;
+    }
+
+    if (!storeId || !targetStoreId) {
+        return true;
+    }
+
+    return String(targetStoreId) === String(storeId);
+}
+
+export async function hasPendingStockOperations(storeId?: string) {
+    const pendingOps = await getPendingSyncOps();
+    if (pendingOps.some((op) => isStockMutationOp(op, storeId))) {
+        return true;
+    }
+
+    try {
+        const { getDB } = await import('./db');
+        const db = await getDB();
+        const queueOps = await db.getAll('syncQueue');
+
+        return queueOps.some((op) => isStockMutationOp(op, storeId));
+    }
+    catch (error) {
+        return false;
+    }
+}
 // Supprimer une opération synchronisée
 export async function removeSyncOp(id) {
     const db = await getSyncDB();

@@ -16,6 +16,7 @@ export default function Pin({ overlay = false }: {
     const [showAttempts, setShowAttempts] = useState(false);
     const [storedPinDigits, setStoredPinDigits] = useState<string | null>(null);
     const [bearEmotion, setBearEmotion] = useState<'neutral' | 'happy' | 'close' | 'sad' | 'scared'>('neutral');
+    const [portalHost, setPortalHost] = useState<HTMLDivElement | null>(null);
     const navigate = useNavigate();
     useEffect(() => {
         setLocked(isPinLocked());
@@ -231,10 +232,29 @@ export default function Pin({ overlay = false }: {
             document.body.style.overflow = prev;
         };
     }, [overlay]);
+
+    useEffect(() => {
+        if (!overlay || typeof document === 'undefined') {
+            setPortalHost(null);
+            return;
+        }
+
+        const host = document.createElement('div');
+        host.setAttribute('data-pin-overlay-host', 'true');
+        document.body.appendChild(host);
+        setPortalHost(host);
+
+        return () => {
+            if (host.parentNode) {
+                host.parentNode.removeChild(host);
+            }
+        };
+    }, [overlay]);
+
     // Portal & focus-trap logic when overlay is active
     const containerRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
-        if (!overlay)
+        if (!overlay || !portalHost)
             return;
         const appRoot = document.getElementById('root');
         const prevAria = appRoot?.getAttribute('aria-hidden');
@@ -254,21 +274,6 @@ export default function Pin({ overlay = false }: {
         }
         try {
             document.body.setAttribute('data-pin-active', 'true');
-        }
-        catch (e) { }
-        // Force-close any open dialogs so they don't interfere with the PIN input.
-        try {
-            const REGISTRY_KEY = '__radix_dialog_registry_v1';
-            const reg = (window as any)[REGISTRY_KEY];
-            if (reg && typeof reg.forEach === 'function') {
-                reg.forEach((entry: any) => {
-                    try {
-                        if (entry && typeof entry.forceClose === 'function')
-                            entry.forceClose();
-                    }
-                    catch (e) { }
-                });
-            }
         }
         catch (e) { }
         const prevFocused = document.activeElement as HTMLElement | null;
@@ -344,7 +349,7 @@ export default function Pin({ overlay = false }: {
             }
             catch (e) { }
         };
-    }, [overlay]);
+    }, [overlay, portalHost]);
     const containerClass = overlay
         ? 'fixed inset-0 z-[99999] flex items-center justify-center p-4'
         : 'min-h-screen flex flex-col items-center justify-center bg-white p-4';
@@ -401,10 +406,13 @@ export default function Pin({ overlay = false }: {
         </div>
       </div>
     </div>);
-    if (overlay && typeof document !== 'undefined') {
-        // Render overlay in a portal so it's outside normal app stacking context
+    if (overlay) {
+        if (!portalHost) {
+            return null;
+        }
+
         try {
-            return createPortal(overlayMarkup, document.body);
+            return createPortal(overlayMarkup, portalHost);
         }
         catch (e) {
             return overlayMarkup;

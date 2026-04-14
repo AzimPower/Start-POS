@@ -18,7 +18,8 @@ import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { assignReceiptMetadata, formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
-import { mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
+import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
+import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -32,6 +33,7 @@ interface Product {
     stock?: {
         [storeId: string]: number;
     };
+    minStock?: number;
     unit: string;
     imageUrl?: string;
     trackStock?: boolean;
@@ -379,21 +381,23 @@ export default function POS() {
                     if (productsResponse.ok) {
                         const backendProducts = await productsResponse.json();
                         const normalizedBackendProducts = backendProducts.map((p: any) => ({ ...p, stock: p.stock || {} }));
-                        const tx = db.transaction('products', 'readwrite');
-                        await Promise.all([
-                            ...normalizedBackendProducts.map((p: any) => tx.store.put(p)),
-                            tx.done
-                        ]);
-                        // Ne pas afficher tous les produits backend : filtrer pour la boutique
-                        const uid = user?.storeId;
-                        const filteredBackendProducts = normalizedBackendProducts.filter((p: any) => {
-                            if (uid && p.storeId && p.storeId === uid)
-                                return true;
-                            if (uid && p.stock && Object.prototype.hasOwnProperty.call(p.stock, uid))
-                                return true;
-                            return false;
-                        });
-                        setProducts(filteredBackendProducts);
+                        const pendingStockOperations = await hasPendingStockOperations(user?.storeId);
+                        if (!pendingStockOperations) {
+                            const tx = db.transaction('products', 'readwrite');
+                            await Promise.all([
+                                ...normalizedBackendProducts.map((p: any) => tx.store.put(p)),
+                                tx.done
+                            ]);
+                            const uid = user?.storeId;
+                            const filteredBackendProducts = normalizedBackendProducts.filter((p: any) => {
+                                if (uid && p.storeId && p.storeId === uid)
+                                    return true;
+                                if (uid && p.stock && Object.prototype.hasOwnProperty.call(p.stock, uid))
+                                    return true;
+                                return false;
+                            });
+                            setProducts(filteredBackendProducts);
+                        }
                     }
                     // Ventes - Synchroniser TOUTES les ventes sans pagination pour POS
                     try {
@@ -727,18 +731,40 @@ export default function POS() {
                 sale = await assignReceiptMetadata(db, sale);
             }
             // 2. Mise à jour du stock local AVANT affichage du reçu (seulement si ce n'est pas un brouillon)
-            const productsToUpdate = [];
+            const stockTransitions: Array<{
+                productId: string;
+                productName: string;
+                unit?: string;
+                minStock?: number;
+                previousStock: number;
+                nextStock: number;
+            }> = [];
+            const updatedProducts: Product[] = [];
             if (!opts?.draft) {
+                const soldQuantities = new Map<string, number>();
                 for (const item of cart) {
-                    let product = await db.get('products', item.product.id);
+                    soldQuantities.set(item.product.id, (soldQuantities.get(item.product.id) || 0) + item.quantity);
+                }
+                for (const [productId, soldQuantity] of soldQuantities.entries()) {
+                    const product = await db.get('products', productId);
                     if (product && product.stock && user!.storeId in product.stock) {
-                        product.stock[user!.storeId] = (product.stock[user!.storeId] || 0) - item.quantity;
+                        const previousStock = Number(product.stock[user!.storeId] || 0);
+                        const nextStock = previousStock - soldQuantity;
+                        product.stock[user!.storeId] = nextStock;
                         await db.put('products', product);
-                        productsToUpdate.push(product);
+                        updatedProducts.push(product as Product);
+                        stockTransitions.push({
+                            productId: product.id,
+                            productName: product.name,
+                            unit: product.unit,
+                            minStock: product.minStock,
+                            previousStock,
+                            nextStock,
+                        });
                     }
                 }
                 setProducts(prevProducts => prevProducts.map(p => {
-                    const updated = productsToUpdate.find(upd => upd.id === p.id);
+                    const updated = updatedProducts.find(upd => upd.id === p.id);
                     return updated ? updated : p;
                 }));
                 setProductSalesCount(prevCounts => {
@@ -799,6 +825,16 @@ export default function POS() {
             }
             catch (e) { }
             setShowReceipt(true);
+            if (!opts?.draft && stockTransitions.length > 0) {
+                void Promise.all(stockTransitions.map((transition) => notifyStockThresholdChange({
+                    ...transition,
+                    senderUserId: user.id,
+                    storeId: user.storeId,
+                    actorName: user.username,
+                    contextLabel: 'Après une vente',
+                }))).catch(() => {
+                });
+            }
             // Impression automatique (inchangée)
             try {
                 const autoPrintSetting = localStorage.getItem('auto_print');
@@ -891,87 +927,16 @@ export default function POS() {
             }
             catch (err) {
             }
-            // 4. Synchronisation réseau en arrière-plan (hors UI)
-            (async () => {
-                // Si backend reachable, synchroniser immédiatement avec le backend
-                if (isBackendReachable) {
-                    try {
-                        // Synchroniser la vente
-                        const salesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(sale)
-                        });
-                        if (!salesResponse.ok) {
-                            throw new Error(`Erreur backend vente: ${salesResponse.status}`);
-                        }
-                        // Synchroniser les mises à jour de stock (pas pour les brouillons)
-                        if (!opts?.draft) {
-                            for (const product of productsToUpdate) {
-                                const productDataForBackend = {
-                                    ...product,
-                                    stock: product.stock[user!.storeId],
-                                    trackStock: true
-                                };
-                                await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
-                                    method: 'PUT',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                    },
-                                    body: JSON.stringify(productDataForBackend)
-                                });
-                            }
-                        }
-                    }
-                    catch (error) {
-                        // Si erreur, queue pour sync plus tard
-                        await performSyncOp({
-                            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-                            method: 'POST',
-                            data: sale,
-                        });
-                        if (!opts?.draft) {
-                            for (const product of productsToUpdate) {
-                                const productDataForBackend = {
-                                    ...product,
-                                    stock: product.stock[user!.storeId],
-                                    trackStock: true
-                                };
-                                await performSyncOp({
-                                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-                                    method: 'PUT',
-                                    data: productDataForBackend,
-                                });
-                            }
-                        }
-                    }
-                }
-                else {
-                    // Hors ligne: queue sale and product updates via performSyncOp
-                    await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-                        method: 'POST',
-                        data: sale,
-                    });
-                    if (!opts?.draft) {
-                        for (const product of productsToUpdate) {
-                            const productDataForBackend = {
-                                ...product,
-                                stock: product.stock[user!.storeId],
-                                trackStock: true
-                            };
-                            await performSyncOp({
-                                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
-                                method: 'PUT',
-                                data: productDataForBackend,
-                            });
-                        }
-                    }
-                }
-            })();
-            toast.success(opts?.draft ? 'Brouillon enregistré' : (isBackendReachable ? 'Vente validée et synchronisée' : 'Vente validée (mode hors ligne)'));
+            const syncResult = await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
+                method: 'POST',
+                data: sale,
+            });
+            toast.success(opts?.draft
+                ? 'Brouillon enregistré'
+                : syncResult.success
+                    ? 'Vente validée et synchronisée'
+                    : 'Vente validée (synchronisation en attente)');
         }
         catch (error) {
             toast.error('Erreur lors de l\'enregistrement de la vente');
