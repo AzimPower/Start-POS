@@ -104,7 +104,7 @@ const ShiftCard = React.memo(({ shift, encaissé, computed, cashierName, isAdmin
         <div className="shrink-0">{statusIcon}</div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px] sm:text-base text-gray-800 truncate">
-            {isOpen ? 'Shift en cours' : 'Shift terminé'}
+            {isOpen ? 'Service en cours' : 'Service terminé'}
           </div>
           <div className="text-xs text-gray-500 mt-0.5">Ouvert le {formatDateFn(shift.openedAt)}</div>
         </div>
@@ -1318,7 +1318,7 @@ export default function Shifts() {
                     relatedId: updatedShift.id,
                     type: (updatedShift.difference ?? 0) < 0 ? 'warning' : 'success',
                     title: (updatedShift.difference ?? 0) < 0 ? 'Fermeture de service avec écart' : 'Fermeture de service',
-                    message: `${user?.username || 'Un utilisateur'} a fermé le service ${updatedShift.id} du magasin ${storeName}. Fermeture: ${(updatedShift.closingAmount ?? 0).toLocaleString('fr-FR')} FCFA. Attendu: ${(updatedShift.expectedAmount ?? 0).toLocaleString('fr-FR')} FCFA. Écart: ${(updatedShift.difference ?? 0).toLocaleString('fr-FR')} FCFA.`,
+                    message: `${user?.username || 'Un utilisateur'} a fermé le service du magasin ${storeName}. Ouverture: ${formatDateFn(updatedShift.openedAt)}. Fermeture: ${formatDateFn(updatedShift.closedAt ?? Date.now())}. Montant de fermeture: ${(updatedShift.closingAmount ?? 0).toLocaleString('fr-FR')} FCFA. Attendu: ${(updatedShift.expectedAmount ?? 0).toLocaleString('fr-FR')} FCFA. Écart: ${(updatedShift.difference ?? 0).toLocaleString('fr-FR')} FCFA.`,
                 });
             }
             catch (notificationError) {
@@ -1507,12 +1507,12 @@ export default function Shifts() {
             <DialogTrigger asChild>
               <Button className="w-full sm:w-auto">
                 <Clock className="w-4 h-4 mr-2"/>
-                Ouvrir un shift
+                Ouvrir un service
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Ouvrir un shift</DialogTitle>
+                <DialogTitle>Ouvrir un service</DialogTitle>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -1534,7 +1534,7 @@ export default function Shifts() {
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <CardTitle className="text-success">Shift en cours</CardTitle>
+                <CardTitle className="text-success">Service en cours</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
                   Ouvert le {formatDate(activeShift.openedAt)}
                 </p>
@@ -1558,12 +1558,12 @@ export default function Shifts() {
             <Dialog open={showCloseDialog} onOpenChange={setShowCloseDialog}>
               <DialogTrigger asChild>
                 <Button variant="outline" className="w-full">
-                  Fermer le shift
+                  Fermer le service
                 </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Fermer le shift</DialogTitle>
+                  <DialogTitle>Fermer le service</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="p-4 bg-muted rounded-lg space-y-2">
@@ -1594,7 +1594,7 @@ export default function Shifts() {
                     <p className="text-sm text-muted-foreground">Somme des montants par mode de paiement</p>
                   </div>
                   <Button className="w-full" onClick={handleCloseShift} disabled={loading}>
-                    {loading ? 'Fermeture...' : 'Fermer le shift'}
+                    {loading ? 'Fermeture...' : 'Fermer le service'}
                   </Button>
                 </div>
               </DialogContent>
@@ -1719,7 +1719,7 @@ export default function Shifts() {
                     ? 'bg-primary text-white hover:bg-primary/90'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`} onClick={() => dataLoaded && setShowOpenDialog(true)} disabled={!dataLoaded}>
                       <Clock className="w-5 h-5 inline-block mr-2 align-middle"/>
-                      {dataLoaded ? 'Ouvrir un shift' : 'Chargement...'}
+                      {dataLoaded ? 'Ouvrir un service' : 'Chargement...'}
                     </button>
                   </div>) : (filteredShifts.map(shift => {
                 const cashierName = cashierById.get(String(shift.userId))?.username || 'Inconnu';
@@ -1818,7 +1818,7 @@ export default function Shifts() {
         <Dialog open={showDetails} onOpenChange={setShowDetails}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Détails du shift</DialogTitle>
+              <DialogTitle>Détails du services</DialogTitle>
             </DialogHeader>
             {selectedShift && (<div className="space-y-2">
                 <ShiftReceiptDetails selectedShift={selectedShift} cashiers={cashiers}/>

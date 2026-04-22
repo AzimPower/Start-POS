@@ -114,13 +114,28 @@ try {
 
     // Déterminer le type de notification basé sur le contenu
     $isStockSignal = strpos($message, 'Détails du Stock') !== false || strpos($message, 'ID du Signalement') !== false || strpos($message, 'Performance:') !== false;
+    $isStockAdjustment = strpos($message, '📦 Ajustement de stock') !== false || strpos($message, 'Produits ajustés') !== false;
+    $isLowStock = strpos($message, '⚠️ Stock faible') !== false || strpos($message, 'Stock faible') !== false;
+    $isOutOfStock = strpos($message, '🚨 Rupture de stock') !== false || strpos($message, 'Rupture de stock') !== false;
     $isExpense = strpos($message, '💸 Dépense') !== false || strpos($message, 'ID de la dépense') !== false;
     $isLogin = strpos($message, '🔐 Connexion Utilisateur') !== false || strpos($message, 'ID Utilisateur') !== false;
     $isRefund = strpos($message, '↩️ Remboursement de Vente') !== false || strpos($message, 'ID de la Vente') !== false || strpos($message, 'Articles Remboursés') !== false;
 
     $storeSuffix = $storeName ? " [" . htmlspecialchars($storeName) . "]" : "";
     $storeSuffixHtml = $storeName ? " <span style='font-size:15px;color:#fff;opacity:0.85;'>[" . htmlspecialchars($storeName) . "]</span>" : "";
-    if ($isStockSignal) {
+    if ($isOutOfStock) {
+        $subject = "Rupture de Stock - $name" . $storeSuffix;
+        $headerTitle = "🚨 Alerte de Rupture de Stock" . $storeSuffixHtml;
+        $headerSubtitle = "Notification critique de stock du système POS";
+    } elseif ($isLowStock) {
+        $subject = "Stock Faible - $name" . $storeSuffix;
+        $headerTitle = "⚠️ Alerte de Stock Faible" . $storeSuffixHtml;
+        $headerSubtitle = "Notification automatique de seuil de stock";
+    } elseif ($isStockAdjustment) {
+        $subject = "Ajustement de Stock - $name" . $storeSuffix;
+        $headerTitle = "📦 Notification d'Ajustement de Stock" . $storeSuffixHtml;
+        $headerSubtitle = "Résumé automatique d'un ajustement manuel de stock";
+    } elseif ($isStockSignal) {
         $subject = "Signalement de Stock - $name" . $storeSuffix;
         $headerTitle = "📦 Notification de Signalement de Stock" . $storeSuffixHtml;
         $headerSubtitle = "Rapport automatique de performance stock";

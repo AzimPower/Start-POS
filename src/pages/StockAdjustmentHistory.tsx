@@ -369,7 +369,7 @@ export default function StockAdjustmentHistory() {
                           <TableCell className="text-sm">
                             {h.userName || h.userId || '—'}
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">
+                          <TableCell className="max-w-[320px] text-xs text-muted-foreground whitespace-normal break-words leading-relaxed align-top">
                             {h.reason || h.globalReason || '—'}
                           </TableCell>
                         </TableRow>);
@@ -393,7 +393,7 @@ export default function StockAdjustmentHistory() {
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium truncate">{h.productName || '—'}</div>
                             {h.sku && <div className="text-xs text-muted-foreground">{h.sku}</div>}
-                            <div className="text-xs text-muted-foreground mt-1 truncate">{h.reason || h.globalReason || '—'}</div>
+                            <div className="mt-1 text-xs text-muted-foreground whitespace-normal break-words leading-relaxed">{h.reason || h.globalReason || '—'}</div>
                           </div>
                           <div className="text-right ml-2">
                             <div className="text-xs text-muted-foreground">{date}</div>

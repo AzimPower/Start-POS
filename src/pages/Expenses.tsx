@@ -620,6 +620,7 @@ export default function Expenses() {
                             ...selectedProduct.stock,
                             [user.storeId]: newStock,
                         },
+                    createdAt: selectedProduct.createdAt ?? Date.now(),
                         updatedAt: Date.now(),
                     };
                     await db.put('products', updatedProduct);
@@ -769,24 +770,33 @@ export default function Expenses() {
                 (async () => {
                     try {
                         const dbInstance = await getDB();
-                        // Vérifier les paramètres d'email pour les dépenses (lit depuis le backend = source de vérité)
-                        const emailSettings = await getEmailSettings(user?.storeId || '');
-                        const shouldSendEmail = emailSettings.expenses;
-                        if (!shouldSendEmail) {
-                        }
-                        else {
-                            // Récupérer le nom du magasin depuis la base locale
-                            const store = await dbInstance.get('stores', user?.storeId);
-                            const storeName = store?.name || user?.storeId || '';
-                          await sendStoreAdminNotification({
+                        // La notification inbox suit son propre réglage (inboxExpenses), indépendamment de l'email.
+                        const store = await dbInstance.get('stores', user?.storeId);
+                        const storeName = store?.name || user?.storeId || '';
+                        const expenseDetailLabel = finalExpense.type === 'direct'
+                          ? (finalExpense.directProduct?.productId ? getProductName(finalExpense.directProduct.productId) : '')
+                          : (finalExpense.categoryId ? getCategoryName(finalExpense.categoryId) : '');
+                        const expenseDetailText = expenseDetailLabel
+                          ? `${finalExpense.type === 'direct' ? 'Produit' : 'Catégorie'}: ${expenseDetailLabel}. `
+                          : '';
+                        const trimmedDescription = finalExpense.description?.trim() || '';
+                        const expenseDescriptionText = trimmedDescription
+                          ? `Description: ${trimmedDescription}.`
+                          : '';
+                        await sendStoreAdminNotification({
                             event: 'expense',
                             senderUserId: user?.id || '',
                             storeId: user?.storeId || '',
                             relatedId: finalExpense.id,
                             type: 'warning',
-                            title: `${isEdit ? 'Dépense modifiée' : 'Nouvelle dépense'}: ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA`,
-                            message: `${user?.username || 'Un utilisateur'} a ${isEdit ? 'modifié' : 'enregistré'} une dépense ${getExpenseTypeLabel(finalExpense.type).toLowerCase()} de ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA dans ${storeName || 'le magasin'}. Description: ${finalExpense.description || '-'}.`,
-                          });
+                          title: `${isEdit ? 'Dépense modifiée' : 'Nouvelle dépense'}${expenseDetailLabel ? ` - ${expenseDetailLabel}` : ''}: ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA`,
+                          message: `${user?.username || 'Un utilisateur'} a ${isEdit ? 'modifié' : 'enregistré'} une dépense ${getExpenseTypeLabel(finalExpense.type).toLowerCase()} de ${Number(finalExpense.amount).toLocaleString('fr-FR')} FCFA dans ${storeName || 'le magasin'}. ${expenseDetailText}${expenseDescriptionText}`.trim(),
+                        });
+
+                        // Vérifier les paramètres d'email pour les dépenses (lit depuis le backend = source de vérité)
+                        const emailSettings = await getEmailSettings(user?.storeId || '');
+                        const shouldSendEmail = emailSettings.expenses;
+                        if (shouldSendEmail) {
                             // Construction du résumé HTML
                             const resume = `
 <div style="margin: 20px 0;">
@@ -808,10 +818,12 @@ export default function Expenses() {
       <span class="info-label">Date :&nbsp;</span>
       <span class="info-value">${new Date(finalExpense.date).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })}</span>
     </div>
+    ${trimmedDescription ? `
     <div class="info-row">
       <span class="info-label">Description :&nbsp;</span>
-      <span class="info-value">${finalExpense.description || '-'}</span>
+      <span class="info-value">${trimmedDescription}</span>
     </div>
+    ` : ''}
     ${finalExpense.type === 'direct' && finalExpense.directProduct ? `
     <div class="info-row">
       <span class="info-label">Produit :&nbsp;</span>

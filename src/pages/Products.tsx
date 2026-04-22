@@ -15,7 +15,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNetwork } from '@/hooks/useNetwork';
 import { hasPendingStockOperations } from '@/lib/sync';
-import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
+import { notifyStockThresholdChange, sendStockAdjustmentEmail, sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -665,28 +665,71 @@ export default function Products() {
                     adjustments: cleaned
                 }
             });
-                void Promise.all(cleaned.map((line) => {
-                  const snapshotLine = adjustments.find((entry) => entry.productId === line.productId);
-                  const product = products.find((entry) => entry.id === line.productId);
-                  if (!snapshotLine || !product) {
-                    return Promise.resolve();
+                void (async () => {
+                  try {
+                    const db = await getDB();
+                    const store = await db.get('stores', user.storeId);
+                    const storeName = store?.name || user.storeId || 'le magasin';
+                    const preview = cleaned
+                      .slice(0, 4)
+                      .map((line) => {
+                      const product = products.find((entry) => entry.id === line.productId);
+                      const sign = line.delta > 0 ? '+' : '';
+                      return `${product?.name || 'Produit inconnu'} (${sign}${line.delta})`;
+                    })
+                      .join(', ');
+                    const remainingCount = cleaned.length - Math.min(cleaned.length, 4);
+                    const reasonSuffix = adjustGlobalReason.trim()
+                      ? ` Motif: ${adjustGlobalReason.trim()}.`
+                      : '';
+                    const previewSuffix = remainingCount > 0
+                      ? `${preview}, +${remainingCount} autre(s)`
+                      : preview;
+
+                    await Promise.all([
+                      sendStoreAdminNotification({
+                        event: 'stockAdjustment',
+                        senderUserId: user.id,
+                        storeId: user.storeId,
+                        type: 'info',
+                        title: `Ajustement de stock: ${cleaned.length} produit${cleaned.length > 1 ? 's' : ''}`,
+                        message: `${user.username} a effectué ${cleaned.length} ajustement${cleaned.length > 1 ? 's' : ''} de stock dans ${storeName}. ${previewSuffix}.${reasonSuffix}`,
+                      }),
+                      sendStockAdjustmentEmail({
+                        senderUserId: user.id,
+                        storeId: user.storeId,
+                        actorName: user.username,
+                        storeName,
+                        adjustmentCount: cleaned.length,
+                        previewText: previewSuffix,
+                        reason: adjustGlobalReason.trim() || undefined,
+                      }),
+                      ...cleaned.map((line) => {
+                        const snapshotLine = adjustments.find((entry) => entry.productId === line.productId);
+                        const product = products.find((entry) => entry.id === line.productId);
+                        if (!snapshotLine || !product) {
+                          return Promise.resolve();
+                        }
+                        const previousStock = Number(snapshotLine.oldStock ?? product.stock?.[user.storeId] ?? 0);
+                        const nextStock = previousStock + line.delta;
+                        return notifyStockThresholdChange({
+                          senderUserId: user.id,
+                          storeId: user.storeId,
+                          productId: product.id,
+                          productName: product.name,
+                          unit: product.unit,
+                          minStock: product.minStock,
+                          previousStock,
+                          nextStock,
+                          actorName: user.username,
+                          contextLabel: 'Après un ajustement de stock',
+                        });
+                      })
+                    ]);
                   }
-                  const previousStock = Number(snapshotLine.oldStock ?? product.stock?.[user.storeId] ?? 0);
-                  const nextStock = previousStock + line.delta;
-                  return notifyStockThresholdChange({
-                    senderUserId: user.id,
-                    storeId: user.storeId,
-                    productId: product.id,
-                    productName: product.name,
-                    unit: product.unit,
-                    minStock: product.minStock,
-                    previousStock,
-                    nextStock,
-                    actorName: user.username,
-                    contextLabel: 'Après un ajustement de stock',
-                  });
-                })).catch(() => {
-                });
+                  catch {
+                  }
+                })();
                 toast.success('Ajustements envoyés. Les admins seront notifiés selon les paramètres actifs.');
             setAdjustments([]);
             setAdjustGlobalReason('');
@@ -1149,32 +1192,35 @@ export default function Products() {
                       <Input value={adjustGlobalReason} onChange={(e) => setAdjustGlobalReason(e.target.value)} placeholder="Ex: Inventaire de fin de journée"/>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border border-dashed rounded-lg p-3 bg-muted/30">
-                      <div className="md:col-span-5 space-y-1">
-                        <Label>Produit</Label>
-                        <Select value={draftProductId} onValueChange={setDraftProductId}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Sélectionner un produit"/>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableTrackedProducts.map((product) => (<SelectItem key={product.id} value={product.id}>
-                                {product.name} ({product.sku || 'Sans SKU'})
-                              </SelectItem>))}
-                          </SelectContent>
-                        </Select>
+                    <div className="rounded-xl border border-dashed bg-muted/30 p-3 md:p-4 space-y-3">
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:items-end">
+                        <div className="md:col-span-7 space-y-1.5">
+                          <Label>Produit</Label>
+                          <Select value={draftProductId} onValueChange={setDraftProductId}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Sélectionner un produit"/>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {availableTrackedProducts.map((product) => (<SelectItem key={product.id} value={product.id}>
+                                  {product.name} ({product.sku || 'Sans SKU'})
+                                </SelectItem>))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="md:col-span-3 space-y-1.5">
+                          <Label>Quantité physique</Label>
+                          <Input type="number" value={draftPhysicalQty} onChange={(e) => setDraftPhysicalQty(e.target.value)} placeholder="Ex: 12"/>
+                        </div>
+                        <div className="md:col-span-2 flex md:justify-end">
+                          <Button type="button" variant="outline" onClick={addDraftLine} className="w-full md:w-auto">
+                            Ajouter
+                          </Button>
+                        </div>
                       </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <Label>Quantité physique</Label>
-                        <Input type="number" value={draftPhysicalQty} onChange={(e) => setDraftPhysicalQty(e.target.value)} placeholder="Ex: 12"/>
-                      </div>
-                      <div className="md:col-span-4 space-y-1">
+
+                      <div className="space-y-1.5">
                         <Label>Motif ligne</Label>
                         <Input value={draftReason} onChange={(e) => setDraftReason(e.target.value)} placeholder="Optionnel"/>
-                      </div>
-                      <div className="md:col-span-1 flex justify-end">
-                        <Button type="button" variant="outline" onClick={addDraftLine}>
-                          Ajouter
-                        </Button>
                       </div>
                     </div>
 
@@ -1216,14 +1262,15 @@ export default function Products() {
                         </Table>
                       </div>)}
 
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button type="submit" disabled={adjustSubmitting || trackedProducts.length === 0} className="gap-2">
-                        <Package className="w-4 h-4"/>
-                        {adjustSubmitting ? 'Envoi en cours...' : 'Envoyer les ajustements'}
-                      </Button>
+                    <div className="border-t pt-4 space-y-3">
+                      {trackedProducts.length === 0 && (<p className="text-sm text-muted-foreground">Aucun produit avec suivi de stock disponible pour ajustement.</p>)}
+                      <div className="flex justify-stretch sm:justify-center">
+                        <Button type="submit" disabled={adjustSubmitting || trackedProducts.length === 0} className="w-full gap-2 sm:min-w-[240px] sm:w-auto">
+                          <Package className="w-4 h-4"/>
+                          {adjustSubmitting ? 'Envoi en cours...' : 'Envoyer les ajustements'}
+                        </Button>
+                      </div>
                     </div>
-
-                    {trackedProducts.length === 0 && (<p className="text-sm text-muted-foreground">Aucun produit avec suivi de stock disponible pour ajustement.</p>)}
                   </form>
               </div>
             </DialogContent>

@@ -1,0 +1,2113 @@
+
+<style>
+:root{
+  --doc-bg:#f4efe6;
+  --doc-surface:#fffdf9;
+  --doc-surface-alt:#f6f1e7;
+  --doc-ink:#1f2a2a;
+  --doc-muted:#62706c;
+  --doc-line:#d7d0c4;
+  --doc-accent:#003bdd;
+  --doc-accent-soft:#dff4ef;
+  --doc-accent-strong:#114e4a;
+  --doc-warm:#c96f3b;
+  --doc-warm-soft:#f8e5d8;
+  --doc-danger:#9b3d2f;
+  --doc-danger-soft:#f8dfd8;
+  --doc-info:#1e5f8c;
+  --doc-info-soft:#deedf8;
+  --doc-shadow:0 18px 42px rgba(39,41,31,.12);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:"Aptos","Segoe UI","Trebuchet MS",sans-serif;
+  color:var(--doc-ink);
+  background:
+    radial-gradient(circle at top left, rgba(201,111,59,.16), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(15,118,110,.18), transparent 32%),
+    linear-gradient(180deg, #f7f1e8 0%, #efe7db 100%);
+}
+
+body.doc-lock-scroll{
+  overflow:hidden;
+}
+
+.doc-shell{
+  display:grid;
+  grid-template-columns:280px minmax(0,1fr);
+  min-height:100vh;
+  border:1px solid rgba(31,42,42,.08);
+  border-radius:28px;
+  overflow:visible;
+  background:rgba(255,253,249,.92);
+  box-shadow:var(--doc-shadow);
+}
+
+.sidebar{
+  background:
+    linear-gradient(180deg, rgba(19,44,49,.98) 0%, rgba(17,63,66,.98) 100%),
+    linear-gradient(135deg, rgba(201,111,59,.18), transparent 45%);
+  color:#eff8f6;
+  padding:1.35rem 0 1.1rem;
+  position:sticky;
+  top:0;
+  max-height:100vh;
+  overflow-y:auto;
+}
+
+.sidebar-overlay{
+  display:none;
+}
+
+.sidebar-topbar{
+  padding:0 1.2rem 1rem;
+  border-bottom:1px solid rgba(239,248,246,.12);
+  margin-bottom:.5rem;
+}
+
+.sidebar-inner{
+  padding-bottom:.2rem;
+}
+
+.brand{
+  padding:0;
+  border-bottom:none;
+  margin-bottom:0;
+}
+
+.sidebar-toggle{
+  display:none;
+  width:100%;
+  margin-top:.9rem;
+  border:none;
+  border-radius:14px;
+  padding:.82rem .95rem;
+  background:rgba(255,255,255,.1);
+  color:#fff;
+  font-size:13px;
+  font-weight:700;
+  text-align:center;
+  cursor:pointer;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+
+.sidebar-toggle:hover{
+  background:rgba(255,255,255,.14);
+}
+
+.doc-toolbar{
+  display:none;
+}
+
+.doc-toolbar-button{
+  border:none;
+  border-radius:14px;
+  padding:.82rem 1rem;
+  background:linear-gradient(135deg, #103b3d, #165b57);
+  color:#fff;
+  font-size:13px;
+  font-weight:700;
+  cursor:pointer;
+  box-shadow:0 10px 24px rgba(16,59,61,.18);
+}
+
+.doc-toolbar-copy{
+  min-width:0;
+}
+
+.doc-toolbar-label{
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--doc-muted);
+  margin-bottom:.2rem;
+}
+
+.doc-toolbar-title{
+  font-family:"Aptos Display","Bahnschrift","Segoe UI",sans-serif;
+  font-size:17px;
+  font-weight:700;
+  color:var(--doc-ink);
+}
+
+.brand-kicker{
+  font-size:11px;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:rgba(239,248,246,.66);
+  margin-bottom:.45rem;
+}
+
+.brand-title{
+  font-family:"Aptos Display","Bahnschrift","Segoe UI",sans-serif;
+  font-size:21px;
+  font-weight:700;
+  line-height:1.2;
+  margin-bottom:.5rem;
+}
+
+.brand-desc{
+  font-size:12px;
+  line-height:1.55;
+  color:rgba(239,248,246,.78);
+}
+
+.search-wrap{
+  padding:.3rem 1rem .95rem;
+}
+
+.content-search{
+  position:sticky;
+  top:.75rem;
+  z-index:6;
+  margin:0 0 1.25rem;
+  padding:0 0 1rem;
+  background:linear-gradient(180deg, rgba(255,253,249,.98) 78%, rgba(255,253,249,0) 100%);
+  backdrop-filter:blur(10px);
+}
+
+.search-box{
+  position:relative;
+}
+
+.search-input{
+  width:100%;
+  border:none;
+  outline:none;
+  border-radius:16px;
+  padding:.9rem 2.9rem .9rem 2.65rem;
+  background:rgba(255,255,255,.08);
+  color:#fff;
+  font-size:13px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+
+.content-search .search-input{
+  background:rgba(255,253,249,.92);
+  color:var(--doc-ink);
+  box-shadow:inset 0 0 0 1px rgba(31,42,42,.12), 0 12px 26px rgba(40,42,31,.08);
+}
+
+.search-input::placeholder{
+  color:rgba(239,248,246,.56);
+}
+
+.content-search .search-input::placeholder{
+  color:var(--doc-muted);
+}
+
+.search-icon,
+.search-clear{
+  position:absolute;
+  top:50%;
+  transform:translateY(-50%);
+}
+
+.search-icon{
+  left:.9rem;
+  color:rgba(239,248,246,.72);
+  font-size:13px;
+  pointer-events:none;
+}
+
+.content-search .search-icon{
+  color:var(--doc-muted);
+}
+
+.search-clear{
+  right:.55rem;
+  width:28px;
+  height:28px;
+  border:none;
+  border-radius:999px;
+  background:rgba(255,255,255,.1);
+  color:#fff;
+  cursor:pointer;
+  display:none;
+}
+
+.content-search .search-clear{
+  background:var(--doc-accent);
+  color:#fff;
+}
+
+.search-clear.visible{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.search-meta{
+  padding:.55rem .15rem 0;
+  font-size:11px;
+  line-height:1.5;
+  color:rgba(239,248,246,.6);
+}
+
+.content-search .search-meta{
+  color:var(--doc-muted);
+}
+
+.search-results{
+  margin-top:.75rem;
+  display:none;
+  gap:8px;
+}
+
+.search-results.visible{
+  display:grid;
+}
+
+.search-result,
+.search-empty{
+  border:none;
+  text-align:left;
+  width:100%;
+  border-radius:16px;
+  padding:.8rem .85rem;
+  background:rgba(255,255,255,.07);
+  color:#fff;
+  cursor:pointer;
+  transition:background .18s ease, transform .18s ease;
+}
+
+.content-search .search-result,
+.content-search .search-empty{
+  background:var(--doc-surface);
+  color:var(--doc-ink);
+  box-shadow:0 8px 20px rgba(40,42,31,.06);
+}
+
+.search-result:hover{
+  background:rgba(255,255,255,.12);
+  transform:translateX(2px);
+}
+
+.content-search .search-result:hover{
+  background:var(--doc-surface-alt);
+  transform:translateY(-1px);
+}
+
+.search-empty{
+  cursor:default;
+  color:rgba(239,248,246,.7);
+}
+
+.content-search .search-empty{
+  color:var(--doc-muted);
+}
+
+.search-result-title{
+  font-size:12px;
+  font-weight:700;
+  color:#fff;
+  margin-bottom:.2rem;
+}
+
+.content-search .search-result-title{
+  color:var(--doc-ink);
+}
+
+.search-result-snippet{
+  font-size:11px;
+  line-height:1.5;
+  color:rgba(239,248,246,.72);
+}
+
+.content-search .search-result-snippet{
+  color:var(--doc-muted);
+}
+
+.search-result mark,
+.search-match mark{
+  background:rgba(255,214,102,.68);
+  color:#21302b;
+  border-radius:4px;
+  padding:0 .08rem;
+}
+
+.sidebar-title,
+.nav-section{
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:rgba(239,248,246,.46);
+  padding:0 1.2rem .45rem;
+}
+
+.nav-section{margin-top:.9rem}
+
+.nav-item{
+  display:block;
+  margin:0 .7rem .2rem;
+  padding:.72rem .95rem;
+  border-radius:14px;
+  font-size:13px;
+  line-height:1.35;
+  color:rgba(239,248,246,.82);
+  cursor:pointer;
+  transition:background .18s ease,color .18s ease,transform .18s ease;
+}
+
+.nav-item:hover{
+  background:rgba(255,255,255,.08);
+  color:#fff;
+  transform:translateX(2px);
+}
+
+.nav-item.active{
+  background:linear-gradient(135deg, rgba(201,111,59,.28), rgba(15,118,110,.24));
+  color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+
+.content{
+  padding:1.6rem;
+  min-width:0;
+  overflow:visible;
+  max-height:none;
+}
+
+.section{display:none}
+.section.active{display:block;animation:fade .2s ease}
+
+@keyframes fade{
+  from{opacity:.45;transform:translateY(6px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+.hero{
+  position:relative;
+  overflow:hidden;
+  padding:1.65rem;
+  border-radius:26px;
+  margin-bottom:1.25rem;
+  background:
+    radial-gradient(circle at top right, rgba(255,255,255,.18), transparent 28%),
+    linear-gradient(135deg, #103b3d 0%, #165b57 48%, #c96f3b 100%);
+  color:#f8fffd;
+}
+
+.hero::after{
+  content:"";
+  position:absolute;
+  inset:auto -70px -90px auto;
+  width:210px;
+  height:210px;
+  border-radius:50%;
+  background:rgba(255,255,255,.08);
+}
+
+.eyebrow{
+  display:inline-flex;
+  align-items:center;
+  gap:.45rem;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:rgba(248,255,253,.74);
+  margin-bottom:.8rem;
+}
+
+h1{
+  font-family:"Aptos Display","Bahnschrift","Segoe UI",sans-serif;
+  font-size:31px;
+  line-height:1.1;
+  margin-bottom:.75rem;
+}
+
+.hero p,
+.section-copy,
+p{
+  font-size:14px;
+  line-height:1.75;
+  color:var(--doc-muted);
+}
+
+.hero p{color:rgba(248,255,253,.88);max-width:780px}
+
+.subtitle{
+  font-size:14px;
+  color:var(--doc-muted);
+  margin-bottom:1.25rem;
+}
+
+.hero-grid,
+.card-grid,
+.role-grid,
+.tri-grid,
+.stats-grid,
+.check-grid,
+.process-grid,
+.split-grid{
+  display:grid;
+  gap:12px;
+}
+
+.hero-grid,
+.role-grid,
+.tri-grid,
+.check-grid{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+
+.card-grid{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.stats-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.process-grid{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.split-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+
+.panel,
+.mini-card,
+.kpi,
+.role-card,
+.check-card,
+.process-card,
+.matrix,
+.section-panel{
+  background:var(--doc-surface);
+  border:1px solid rgba(31,42,42,.08);
+  border-radius:22px;
+  box-shadow:0 8px 20px rgba(40,42,31,.05);
+}
+
+.panel,
+.section-panel,
+.role-card,
+.check-card,
+.process-card,
+.matrix{padding:1.1rem}
+
+.mini-card,
+.kpi{padding:.95rem}
+
+.hero-stat{
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:18px;
+  padding:.95rem 1rem;
+  background:rgba(255,255,255,.08);
+  backdrop-filter:blur(6px);
+}
+
+.hero-stat-label{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.12em;
+  color:rgba(248,255,253,.64);
+  margin-bottom:.35rem;
+}
+
+.hero-stat-value{
+  font-size:15px;
+  font-weight:700;
+  color:#fff;
+}
+
+h2{
+  font-family:"Aptos Display","Bahnschrift","Segoe UI",sans-serif;
+  font-size:20px;
+  line-height:1.2;
+  margin:1.45rem 0 .8rem;
+  color:var(--doc-ink);
+}
+
+h3{
+  font-size:15px;
+  font-weight:700;
+  line-height:1.35;
+  color:var(--doc-ink);
+  margin-bottom:.4rem;
+}
+
+.section-panel{margin-top:1rem}
+
+.role-card{
+  position:relative;
+  overflow:hidden;
+}
+
+.search-match{
+  box-shadow:0 0 0 2px rgba(0,59,221,.14), 0 8px 20px rgba(40,42,31,.05);
+  background:linear-gradient(180deg, rgba(223,244,239,.9), rgba(255,253,249,.94));
+}
+
+.role-card::before{
+  content:"";
+  position:absolute;
+  inset:0 auto auto 0;
+  width:100%;
+  height:4px;
+}
+
+.role-admin::before{background:linear-gradient(90deg, var(--doc-warm), #d99867)}
+.role-manager::before{background:linear-gradient(90deg, var(--doc-accent), #4db2a3)}
+.role-cashier::before{background:linear-gradient(90deg, var(--doc-info), #4d8fc3)}
+
+.role-head{
+  display:flex;
+  justify-content:space-between;
+  gap:.75rem;
+  align-items:flex-start;
+  margin-bottom:.55rem;
+}
+
+.role-name{
+  font-size:18px;
+  font-weight:700;
+  color:var(--doc-ink);
+}
+
+.role-focus{
+  font-size:12px;
+  color:var(--doc-muted);
+  line-height:1.55;
+}
+
+.badge-row,
+.tag-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin:.55rem 0 0;
+}
+
+.badge{
+  display:inline-flex;
+  align-items:center;
+  border-radius:999px;
+  padding:.28rem .72rem;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.03em;
+}
+
+.badge-admin{background:var(--doc-warm-soft);color:var(--doc-warm)}
+.badge-manager{background:var(--doc-accent-soft);color:var(--doc-accent-strong)}
+.badge-cashier{background:var(--doc-info-soft);color:var(--doc-info)}
+.badge-warn{background:var(--doc-danger-soft);color:var(--doc-danger)}
+.badge-soft{background:var(--doc-surface-alt);color:var(--doc-muted)}
+
+.bullet-list,
+.step-list{
+  list-style:none;
+  margin:.65rem 0 0;
+}
+
+.bullet-list li{
+  position:relative;
+  padding:.4rem 0 .4rem 1rem;
+  font-size:14px;
+  line-height:1.6;
+  color:var(--doc-muted);
+}
+
+.bullet-list li::before{
+  content:"•";
+  position:absolute;
+  left:0;
+  top:.38rem;
+  color:var(--doc-accent);
+  font-weight:700;
+}
+
+.step-list{counter-reset:doc-step}
+
+.step-list li{
+  counter-increment:doc-step;
+  display:flex;
+  gap:.85rem;
+  padding:.8rem 0;
+  border-bottom:1px solid rgba(31,42,42,.08);
+  font-size:14px;
+  line-height:1.6;
+  color:var(--doc-muted);
+}
+
+.step-list li:last-child{border-bottom:none}
+
+.step-list li::before{
+  content:counter(doc-step);
+  min-width:28px;
+  height:28px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  margin-top:1px;
+  background:var(--doc-accent-soft);
+  color:var(--doc-accent-strong);
+  font-size:12px;
+  font-weight:700;
+}
+
+.alert{
+  border-radius:18px;
+  padding:.95rem 1rem;
+  margin:1rem 0;
+  font-size:13px;
+  line-height:1.65;
+  border:1px solid transparent;
+}
+
+.alert-info{background:var(--doc-info-soft);color:var(--doc-info);border-color:rgba(30,95,140,.14)}
+.alert-tip{background:var(--doc-accent-soft);color:var(--doc-accent-strong);border-color:rgba(15,118,110,.14)}
+.alert-warn{background:var(--doc-danger-soft);color:var(--doc-danger);border-color:rgba(155,61,47,.14)}
+
+.matrix{overflow:hidden}
+
+.matrix-row{
+  display:grid;
+  grid-template-columns:1.2fr repeat(4, minmax(0,1fr));
+  gap:10px;
+  align-items:stretch;
+  padding:.45rem 0;
+}
+
+.matrix-row + .matrix-row{border-top:1px solid rgba(31,42,42,.08)}
+
+.matrix-head{
+  font-size:12px;
+  font-weight:700;
+  color:var(--doc-ink);
+}
+
+.matrix-cell,
+.matrix-title{
+  font-size:13px;
+  line-height:1.5;
+  color:var(--doc-muted);
+}
+
+.matrix-title{font-weight:700;color:var(--doc-ink)}
+
+.status{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  min-height:38px;
+  padding:.4rem .5rem;
+  border-radius:14px;
+  font-size:12px;
+  font-weight:700;
+  text-align:center;
+}
+
+.status-full{background:var(--doc-accent-soft);color:var(--doc-accent-strong)}
+.status-mid{background:var(--doc-info-soft);color:var(--doc-info)}
+.status-lite{background:var(--doc-surface-alt);color:var(--doc-muted)}
+.status-none{background:var(--doc-danger-soft);color:var(--doc-danger)}
+
+.kpi-label{
+  font-size:12px;
+  color:var(--doc-muted);
+  margin-bottom:.35rem;
+}
+
+.kpi-value{
+  font-size:15px;
+  font-weight:700;
+  color:var(--doc-ink);
+}
+
+.timeline{
+  border-left:2px solid rgba(15,118,110,.18);
+  margin:.9rem 0 0 .5rem;
+  padding-left:1rem;
+}
+
+.timeline-block{
+  position:relative;
+  padding:0 0 1rem;
+}
+
+.timeline-block:last-child{padding-bottom:0}
+
+.timeline-block::before{
+  content:"";
+  position:absolute;
+  left:-1.35rem;
+  top:.35rem;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:var(--doc-accent);
+  box-shadow:0 0 0 4px rgba(15,118,110,.12);
+}
+
+.timeline-title{
+  font-size:14px;
+  font-weight:700;
+  color:var(--doc-ink);
+  margin-bottom:.25rem;
+}
+
+.timeline-desc{
+  font-size:13px;
+  line-height:1.65;
+  color:var(--doc-muted);
+}
+
+.small-note{
+  margin-top:.45rem;
+  font-size:12px;
+  color:var(--doc-muted);
+  line-height:1.6;
+}
+
+@media (max-width:1180px){
+  .doc-shell{grid-template-columns:240px minmax(0,1fr)}
+  .content{padding:1.35rem}
+}
+
+@media (max-width:980px){
+  .doc-shell{grid-template-columns:1fr;min-height:auto;border:none;box-shadow:none;background:transparent}
+  .sidebar{
+    position:fixed;
+    left:0;
+    top:0;
+    bottom:0;
+    width:min(86vw, 340px);
+    max-height:none;
+    overflow-y:auto;
+    padding:0;
+    border-radius:0 26px 26px 0;
+    transform:translateX(calc(-100% - 12px));
+    transition:transform .24s ease, box-shadow .24s ease;
+    z-index:40;
+  }
+  .sidebar.is-open{transform:translateX(0);box-shadow:0 18px 42px rgba(11,22,22,.3)}
+  .sidebar-overlay{
+    display:block;
+    position:fixed;
+    inset:0;
+    border:none;
+    background:rgba(20,27,29,.42);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .2s ease;
+    z-index:35;
+  }
+  .sidebar-overlay.is-visible{
+    opacity:1;
+    pointer-events:auto;
+  }
+  .sidebar-topbar{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    padding:1rem;
+    position:sticky;
+    top:0;
+    background:linear-gradient(180deg, rgba(19,44,49,.98) 0%, rgba(17,63,66,.98) 100%);
+    z-index:2;
+  }
+  .sidebar-toggle{
+    display:inline-flex;
+    flex:0 0 auto;
+    width:auto;
+    min-width:148px;
+    margin-top:0;
+    align-self:flex-start;
+    justify-content:center;
+  }
+  .sidebar-inner{display:block;padding:0 0 .9rem}
+  .nav-section{padding:0 1rem .45rem}
+  .nav-item{margin:0 .7rem .25rem}
+  .doc-toolbar{
+    position:sticky;
+    top:0;
+    z-index:20;
+    display:flex;
+    align-items:center;
+    gap:.9rem;
+    margin:0 0 1rem;
+    padding:.9rem 0 1rem;
+    background:linear-gradient(180deg, rgba(244,239,230,.98) 70%, rgba(244,239,230,0) 100%);
+    backdrop-filter:blur(10px);
+  }
+  .content{max-height:none;padding:1.15rem}
+  .content-search{position:relative;top:auto;padding:0 0 1rem;background:none;backdrop-filter:none}
+}
+
+@media (max-width:760px){
+  .content{padding:1rem}
+  .doc-toolbar{padding:.8rem 0 .9rem}
+  .doc-toolbar{align-items:flex-start}
+  .doc-toolbar-title{font-size:15px}
+  .content-search{margin-bottom:1rem}
+  .hero{padding:1.25rem;border-radius:22px}
+  h1{font-size:26px}
+  h2{font-size:18px}
+  .panel,
+  .section-panel,
+  .role-card,
+  .check-card,
+  .process-card,
+  .matrix{padding:1rem}
+  .role-head{flex-direction:column;align-items:flex-start}
+  .matrix{
+    background:transparent;
+    border:none;
+    box-shadow:none;
+    padding:0;
+  }
+  .matrix-row:first-child{display:none}
+  .matrix-row{
+    grid-template-columns:1fr;
+    gap:8px;
+    padding:1rem;
+    margin-bottom:.7rem;
+    background:var(--doc-surface);
+    border:1px solid rgba(31,42,42,.08);
+    border-radius:18px;
+    box-shadow:0 8px 20px rgba(40,42,31,.05);
+  }
+  .matrix-row + .matrix-row{border-top:none}
+  .matrix-cell{display:flex;flex-direction:column;gap:.35rem}
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(2)::before,
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(3)::before,
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(4)::before,
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(5)::before{
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--doc-muted);
+  }
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(2)::before{content:"Administrateur"}
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(3)::before{content:"Gestionnaire"}
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(4)::before{content:"Caissier"}
+  .matrix-row:not(:first-child) .matrix-cell:nth-child(5)::before{content:"But principal"}
+  .status{justify-content:flex-start;width:auto}
+}
+
+@media (max-width:560px){
+  body{background:linear-gradient(180deg, #f7f1e8 0%, #efe7db 100%)}
+  .doc-shell{
+    border-radius:0;
+  }
+  .sidebar{
+    width:min(90vw, 320px);
+    border-radius:0 24px 24px 0;
+  }
+  .sidebar-topbar{padding:.95rem .9rem}
+  .sidebar-toggle{min-width:132px;padding:.78rem .9rem;font-size:12px}
+  .content{padding:.85rem}
+  .doc-toolbar{gap:.7rem;margin-bottom:.85rem}
+  .doc-toolbar-button{padding:.78rem .9rem}
+  .search-input{font-size:16px}
+  .hero-grid,
+  .card-grid,
+  .role-grid,
+  .tri-grid,
+  .stats-grid,
+  .check-grid,
+  .process-grid,
+  .split-grid{grid-template-columns:1fr}
+  h1{font-size:23px}
+  .hero-stat,
+  .mini-card,
+  .kpi,
+  .panel,
+  .section-panel,
+  .role-card,
+  .check-card,
+  .process-card{border-radius:18px}
+}
+</style>
+
+<div class="doc-shell">
+  <div class="sidebar">
+    <div class="sidebar-topbar">
+      <div class="brand">
+        <div class="brand-kicker">Guide opérationnel</div>
+        <div class="brand-title">START POS<br>par rôle</div>
+        <div class="brand-desc">Une seule documentation pour l'administrateur, le gestionnaire et le caissier, avec les différences d'accès là où elles comptent vraiment.</div>
+      </div>
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="sidebar-nav" aria-label="Fermer le menu">Fermer</button>
+    </div>
+
+    <div id="sidebar-nav" class="sidebar-inner">
+      <div class="nav-section">Démarrer</div>
+      <div class="nav-item active" onclick="show('intro',this)">Vue d'ensemble</div>
+      <div class="nav-item" onclick="show('roles',this)">Rôles & accès</div>
+      <div class="nav-item" onclick="show('connexion',this)">Connexion & sécurité</div>
+      <div class="nav-item" onclick="show('navigation',this)">Navigation</div>
+
+      <div class="nav-section">Quotidien</div>
+      <div class="nav-item" onclick="show('routine',this)">Routines par rôle</div>
+      <div class="nav-item" onclick="show('dashboard',this)">Tableau de bord</div>
+      <div class="nav-item" onclick="show('vente',this)">Faire une vente</div>
+      <div class="nav-item" onclick="show('services',this)">Services & caisse</div>
+      <div class="nav-item" onclick="show('recus',this)">Reçus & remboursements</div>
+
+      <div class="nav-section">Gestion</div>
+      <div class="nav-item" onclick="show('produits',this)">Produits & stock</div>
+      <div class="nav-item" onclick="show('operations',this)">Dépenses & clients</div>
+      <div class="nav-item" onclick="show('organisation',this)">Équipe, magasins & paramètres</div>
+
+      <div class="nav-section">Avancé</div>
+      <div class="nav-item" onclick="show('horsligne',this)">Mode hors-ligne</div>
+      <div class="nav-item" onclick="show('problemes',this)">Problèmes courants</div>
+      <div class="nav-item" onclick="show('checklists',this)">Checklists rapides</div>
+    </div>
+  </div>
+  <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="Fermer le menu"></button>
+
+  <div class="content">
+    <div class="doc-toolbar">
+      <button id="sidebar-open" class="doc-toolbar-button" type="button" aria-expanded="false" aria-controls="sidebar-nav">Menu</button>
+      <div class="doc-toolbar-copy">
+        <div class="doc-toolbar-label">Navigation</div>
+        <div class="doc-toolbar-title">Guide START POS</div>
+      </div>
+    </div>
+
+    <div class="search-wrap content-search">
+      <div class="search-box">
+        <span class="search-icon">⌕</span>
+        <input id="doc-search" class="search-input" type="search" placeholder="Rechercher une fonction, un rôle, un problème..." autocomplete="off">
+        <button id="doc-search-clear" class="search-clear" type="button" aria-label="Effacer la recherche">×</button>
+      </div>
+      <div id="doc-search-meta" class="search-meta">Recherche globale sur toutes les sections du guide.</div>
+      <div id="doc-search-results" class="search-results"></div>
+    </div>
+
+    <div class="section active" id="s-intro">
+      <div class="hero">
+        <div class="eyebrow">Guide unifié</div>
+        <h1>START POS en un coup d'oeil</h1>
+        <p>START POS centralise la caisse, le suivi d'activité, les stocks, les dépenses, les magasins et les réglages. Cette version de la documentation évite de répéter chaque écran trois fois : vous voyez d'abord la fonctionnalité, puis ce que chaque rôle doit réellement y faire.</p>
+        <div class="hero-grid" style="margin-top:1rem">
+          <div class="hero-stat">
+            <div class="hero-stat-label">Administrateur</div>
+            <div class="hero-stat-value">Décide, configure et arbitre</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-label">Gestionnaire</div>
+            <div class="hero-stat-value">Supervise l'activité et corrige</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-label">Caissier</div>
+            <div class="hero-stat-value">Encaisse, ouvre et ferme son service</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="role-grid">
+        <div class="role-card role-admin">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Administrateur</div>
+              <div class="role-focus">Vision complète sur les ventes, les magasins, les abonnements, les comptes et les paramètres.</div>
+            </div>
+            <span class="badge badge-admin">Accès complet</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Pilote la performance globale et les décisions sensibles.</li>
+            <li>Valide les règles de stock, d'équipe et de notifications.</li>
+            <li>Intervient sur les cas récurrents : écarts, remboursements, blocages.</li>
+          </ul>
+        </div>
+
+        <div class="role-card role-manager">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Gestionnaire</div>
+              <div class="role-focus">Responsable du contrôle quotidien : équipes, shifts, qualité des données et anomalies.</div>
+            </div>
+            <span class="badge badge-manager">Supervision</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Suit les ventes, les remboursements et les écarts de caisse.</li>
+            <li>Corrige les produits, clients ou dépenses selon ses droits.</li>
+            <li>Fait remonter à l'admin ce qui touche aux magasins, abonnements ou comptes sensibles.</li>
+          </ul>
+        </div>
+
+        <div class="role-card role-cashier">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Caissier</div>
+              <div class="role-focus">Exécution rapide et fiable en caisse : vente, reçu, ouverture et fermeture du service.</div>
+            </div>
+            <span class="badge badge-cashier">Opérationnel</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Encaisse les ventes et suit son service.</li>
+            <li>Réimprime un reçu ou recherche une vente si besoin.</li>
+            <li>Signale immédiatement les écarts, erreurs produit ou anomalies d'impression.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-panel">
+        <h2>Parcours conseillé</h2>
+        <ol class="step-list">
+          <li>Lire d'abord la section Rôles & accès pour savoir jusqu'où va votre périmètre.</li>
+          <li>Passer ensuite par Connexion & sécurité si vous prenez un nouveau poste ou un nouvel appareil.</li>
+          <li>Utiliser les sections Quotidien pour les actions du jour, puis les sections Gestion quand vous devez corriger ou configurer quelque chose.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="section" id="s-roles">
+      <h1>Rôles & accès</h1>
+      <p class="subtitle">Les fonctionnalités sont les mêmes pour l'entreprise, mais la responsabilité n'est pas la même selon le profil connecté.</p>
+
+      <div class="matrix">
+        <div class="matrix-row">
+          <div class="matrix-head">Zone</div>
+          <div class="matrix-head">Administrateur</div>
+          <div class="matrix-head">Gestionnaire</div>
+          <div class="matrix-head">Caissier</div>
+          <div class="matrix-head">But principal</div>
+        </div>
+        <div class="matrix-row">
+          <div class="matrix-title">Tableau de bord</div>
+          <div class="matrix-cell"><span class="status status-full">Analyse complète</span></div>
+          <div class="matrix-cell"><span class="status status-mid">Suivi quotidien</span></div>
+          <div class="matrix-cell"><span class="status status-lite">Souvent limité</span></div>
+          <div class="matrix-cell">Lire les chiffres utiles sans mélanger stratégie et exécution.</div>
+        </div>
+        <div class="matrix-row">
+          <div class="matrix-title">Vente, services, reçus</div>
+          <div class="matrix-cell"><span class="status status-full">Peut intervenir</span></div>
+          <div class="matrix-cell"><span class="status status-full">Contrôle et appui</span></div>
+          <div class="matrix-cell"><span class="status status-full">Action principale</span></div>
+          <div class="matrix-cell">Encaisser correctement et retracer chaque opération.</div>
+        </div>
+        <div class="matrix-row">
+          <div class="matrix-title">Produits, stock, dépenses, clients</div>
+          <div class="matrix-cell"><span class="status status-full">Paramètre et valide</span></div>
+          <div class="matrix-cell"><span class="status status-mid">Met à jour</span></div>
+          <div class="matrix-cell"><span class="status status-lite">Signalement ou usage</span></div>
+          <div class="matrix-cell">Garder des données propres et exploitables.</div>
+        </div>
+        <div class="matrix-row">
+          <div class="matrix-title">Utilisateurs, magasins, paramètres</div>
+          <div class="matrix-cell"><span class="status status-full">Responsable</span></div>
+          <div class="matrix-cell"><span class="status status-lite">Lecture partielle</span></div>
+          <div class="matrix-cell"><span class="status status-none">Pas d'accès</span></div>
+          <div class="matrix-cell">Protéger la structure du magasin et les réglages sensibles.</div>
+        </div>
+      </div>
+
+      <div class="alert alert-tip">Règle simple : le gestionnaire corrige l'opérationnel, l'administrateur décide de la configuration, le caissier exécute la vente et remonte les anomalies. Selon votre organisation, certains droits peuvent être encore plus restreints.</div>
+
+      <div class="split-grid">
+        <div class="panel">
+          <h3>Quand faire remonter à l'administrateur ?</h3>
+          <ul class="bullet-list">
+            <li>Blocage lié à un magasin inactif ou expiré.</li>
+            <li>Création d'utilisateur sensible ou changement de rôle important.</li>
+            <li>Décision sur abonnement, paramètres globaux ou notifications.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Quand le gestionnaire suffit ?</h3>
+          <ul class="bullet-list">
+            <li>Écart de service à comprendre rapidement.</li>
+            <li>Produit mal configuré, client en doublon, dépense mal classée.</li>
+            <li>Besoin d'encadrement d'un caissier ou de contrôle d'un remboursement.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-connexion">
+      <h1>Connexion & sécurité</h1>
+      <p class="subtitle">Même si les rôles changent, les règles de sécurité restent les mêmes pour tout le monde.</p>
+
+      <div class="card-grid">
+        <div class="mini-card">
+          <h3>Connexion</h3>
+          <p>Entrez votre numéro sur 8 chiffres et votre mot de passe. Le préfixe +226 est ajouté automatiquement par l'application.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Verrouillage PIN</h3>
+          <p>Après inactivité, un code PIN à 4 chiffres peut être demandé pour reprendre la session sans fermer la page en cours.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Après 5 erreurs</h3>
+          <p>La session est fermée. Il faut se reconnecter complètement avec le numéro et le mot de passe.</p>
+        </div>
+      </div>
+
+      <div class="alert alert-warn">Ne partagez ni votre mot de passe ni votre PIN. Une session caisse ouverte avec le mauvais compte fausse le suivi des ventes, des shifts et des responsabilités.</div>
+
+      <h2>Réflexes selon le rôle</h2>
+      <div class="tri-grid">
+        <div class="panel">
+          <span class="badge badge-admin">Admin</span>
+          <ul class="bullet-list">
+            <li>Vérifier le magasin actif avant toute lecture d'indicateurs.</li>
+            <li>Contrôler rapidement si un magasin est actif et à jour côté abonnement.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <span class="badge badge-manager">Gestionnaire</span>
+          <ul class="bullet-list">
+            <li>Confirmer qu'il supervise bien la bonne équipe et le bon point de vente.</li>
+            <li>Ne pas rester connecté sur un poste partagé sans verrouillage.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <span class="badge badge-cashier">Caissier</span>
+          <ul class="bullet-list">
+            <li>Ne jamais encaisser sous la session d'un collègue.</li>
+            <li>Se déconnecter ou verrouiller le poste dès qu'il quitte la caisse.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-navigation">
+      <h1>Navigation</h1>
+      <p class="subtitle">Le menu change peu, mais la priorité d'usage n'est pas la même selon le rôle.</p>
+
+      <div class="process-grid">
+        <div class="process-card">
+          <h3>Pilotage</h3>
+          <p>Tableau de bord, reçus, services. C'est le noyau de supervision utilisé par l'administrateur et le gestionnaire.</p>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-manager">Gestionnaire</span>
+          </div>
+        </div>
+        <div class="process-card">
+          <h3>Exécution caisse</h3>
+          <p>Vente, réimpression, suivi du service et gestion du client au comptoir. Zone centrale du caissier.</p>
+          <div class="badge-row">
+            <span class="badge badge-cashier">Caissier</span>
+            <span class="badge badge-manager">Gestionnaire selon besoin</span>
+          </div>
+        </div>
+        <div class="process-card">
+          <h3>Données magasin</h3>
+          <p>Produits, stock, dépenses, clients. Le gestionnaire y passe souvent, l'administrateur fixe les règles.</p>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-manager">Gestionnaire</span>
+          </div>
+        </div>
+        <div class="process-card">
+          <h3>Configuration</h3>
+          <p>Utilisateurs, magasins, notifications, imprimante, logo et paramètres sensibles. Zone principalement administrative.</p>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-soft">Lecture partielle possible</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-info">Avant chaque action importante, vérifiez deux points : le magasin actif et la période affichée. Une mauvaise lecture de ces deux éléments explique une grande partie des écarts apparents.</div>
+    </div>
+
+    <div class="section" id="s-routine">
+      <h1>Routines par rôle</h1>
+      <p class="subtitle">Au lieu de répéter chaque page, voici ce que chaque profil doit vérifier aux moments clés de la journée.</p>
+
+      <div class="process-grid">
+        <div class="process-card">
+          <h3>Ouverture</h3>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-manager">Gestionnaire</span>
+            <span class="badge badge-cashier">Caissier</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Admin : vérifie le magasin actif, le statut global et les indicateurs de démarrage.</li>
+            <li>Gestionnaire : confirme l'équipe présente, l'ouverture des services et le matériel d'impression.</li>
+            <li>Caissier : ouvre son shift, teste la caisse et signale immédiatement un produit ou une imprimante défaillante.</li>
+          </ul>
+        </div>
+
+        <div class="process-card">
+          <h3>Pendant le service</h3>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-manager">Gestionnaire</span>
+            <span class="badge badge-cashier">Caissier</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Admin : surveille les tendances, les remboursements inhabituels et les signaux de marge.</li>
+            <li>Gestionnaire : contrôle les écarts, corrige les données et accompagne les caissiers si un cas bloquant apparaît.</li>
+            <li>Caissier : encaisse, retrouve les reçus, ajoute le client si nécessaire et remonte les anomalies sans attendre.</li>
+          </ul>
+        </div>
+
+        <div class="process-card">
+          <h3>Fermeture</h3>
+          <div class="badge-row">
+            <span class="badge badge-admin">Admin</span>
+            <span class="badge badge-manager">Gestionnaire</span>
+            <span class="badge badge-cashier">Caissier</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Admin : contrôle les résultats, les écarts récurrents, les opérations en attente et la synchronisation.</li>
+            <li>Gestionnaire : vérifie la cohérence des montants de clôture et documente les incidents du jour.</li>
+            <li>Caissier : compte la caisse, ferme son service proprement et n'ignore jamais un écart.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-dashboard">
+      <h1>Tableau de bord</h1>
+      <p class="subtitle">Le tableau de bord sert à lire rapidement ce qui est normal, ce qui dérive et ce qui exige une action.</p>
+
+      <div class="stats-grid">
+        <div class="kpi"><div class="kpi-label">Ventes brutes</div><div class="kpi-value">Total encaissé avant remboursements</div></div>
+        <div class="kpi"><div class="kpi-label">Remboursements</div><div class="kpi-value">Volume et fréquence à surveiller</div></div>
+        <div class="kpi"><div class="kpi-label">Ventes nettes</div><div class="kpi-value">Lecture réelle de la journée</div></div>
+        <div class="kpi"><div class="kpi-label">Surplus / manque</div><div class="kpi-value">Écarts de caisse issus des shifts</div></div>
+        <div class="kpi"><div class="kpi-label">Marge brute</div><div class="kpi-value">Ventes moins coûts observés</div></div>
+      </div>
+
+      <h2>Comment le lire sans vous tromper</h2>
+      <ol class="step-list">
+        <li>Choisir la bonne période : aujourd'hui, semaine, mois ou plage personnalisée.</li>
+        <li>Confirmer le bon magasin avant de conclure qu'un chiffre est anormal.</li>
+        <li>Si les montants surprennent, vérifier d'abord les remboursements et les écarts de service.</li>
+      </ol>
+
+      <div class="split-grid">
+        <div class="panel">
+          <h3>Lecture utile pour l'administrateur</h3>
+          <ul class="bullet-list">
+            <li>Évolution de la marge et baisse durable du chiffre d'affaires.</li>
+            <li>Remboursements fréquents ou concentrés sur un point de vente.</li>
+            <li>Manques de caisse récurrents sur plusieurs jours.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Lecture utile pour le gestionnaire</h3>
+          <ul class="bullet-list">
+            <li>Suivi du jour, de l'équipe présente et des shifts fermés.</li>
+            <li>Réaction immédiate si les chiffres du service dérivent.</li>
+            <li>Préparation d'un retour clair à l'admin si l'anomalie se répète.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-vente">
+      <h1>Faire une vente</h1>
+      <p class="subtitle">Voici le flux concret de caisse, du produit recherché jusqu'au reçu imprimé ou synchronisé.</p>
+
+      <div class="alert alert-info">La vente se fait surtout côté caissier. Le gestionnaire ou l'administrateur peuvent intervenir au besoin, mais ils doivent suivre exactement la même logique de caisse et de shift.</div>
+
+      <div class="split-grid">
+        <div class="panel">
+          <h3>Avant de commencer</h3>
+          <ul class="bullet-list">
+            <li>Vérifier que le bon magasin est actif.</li>
+            <li>Vérifier qu'un shift est bien ouvert avant la première vente.</li>
+            <li>Confirmer que les produits visibles et l'impression fonctionnent correctement.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Ce que la page Vente permet</h3>
+          <ul class="bullet-list">
+            <li>Rechercher un produit par recherche, catégorie ou favoris.</li>
+            <li>Ajouter des articles au panier et modifier les quantités.</li>
+            <li>Associer un client, encaisser, imprimer et enregistrer un brouillon si besoin.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>Procédure complète</h2>
+      <ol class="step-list">
+        <li>Aller dans la page Vente et retrouver le produit avec la barre de recherche, les catégories ou les favoris.</li>
+        <li>Cliquer sur le produit pour l'ajouter au panier. Si le produit a plusieurs variantes, choisir la bonne taille ou le bon format avant validation.</li>
+        <li>Si le produit utilise un prix saisi manuellement, entrer le prix demandé puis vérifier qu'il est cohérent avant de continuer.</li>
+        <li>Contrôler le panier : quantité, prix, sous-total, taxe éventuelle et total final.</li>
+        <li>Associer un client si le magasin suit l'historique client, les reçus par client ou un solde particulier.</li>
+        <li>Ouvrir le panneau de paiement, choisir le mode de règlement puis saisir les montants reçus.</li>
+        <li>Vérifier une dernière fois le total, la monnaie à rendre si paiement en espèces, puis confirmer la vente.</li>
+        <li>Après validation, vérifier que la vente est enregistrée, que le reçu s'affiche ou s'imprime, et que la synchronisation part correctement ou reste en attente si le réseau est indisponible.</li>
+      </ol>
+
+      <div class="process-grid">
+        <div class="process-card">
+          <h3>Recherche produit</h3>
+          <p>Utilisez la recherche si le catalogue est grand, les catégories pour aller vite par famille de produits, et les favoris pour les articles vendus très souvent.</p>
+        </div>
+        <div class="process-card">
+          <h3>Variantes et prix spéciaux</h3>
+          <p>Un article peut demander un choix de variante comme petit, moyen ou grand, ou ouvrir une saisie de prix personnalisée selon la règle du magasin.</p>
+        </div>
+        <div class="process-card">
+          <h3>Paiements</h3>
+          <p>Le règlement peut être en espèces, mobile money ou mixte. En paiement mixte, la somme saisie doit correspondre exactement au total du ticket.</p>
+        </div>
+      </div>
+
+      <h2>Cas pratiques à connaître</h2>
+      <ul class="bullet-list">
+        <li>Un produit sans prix valide ne doit pas être vendu.</li>
+        <li>Si le stock semble insuffisant, prendre l'avertissement au sérieux et prévenir le responsable si nécessaire.</li>
+        <li>Si un client revient plus tard, utiliser le brouillon plutôt que bricoler une vente incomplète.</li>
+        <li>En espèces, annoncer clairement la monnaie avant de remettre le reçu.</li>
+      </ul>
+    </div>
+
+    <div class="section" id="s-services">
+      <h1>Services & caisse</h1>
+      <p class="subtitle">La logique est simple : le caissier ouvre et ferme son service, le gestionnaire contrôle, l'administrateur arbitre quand le problème dépasse l'opérationnel.</p>
+
+      <div class="timeline">
+        <div class="timeline-block">
+          <div class="timeline-title">1. Ouverture du service</div>
+          <div class="timeline-desc">Le caissier ouvre son shift avec un montant d'ouverture cohérent. Le gestionnaire vérifie qu'au moins un service est bien actif si le point de vente doit encaisser.</div>
+        </div>
+        <div class="timeline-block">
+          <div class="timeline-title">2. Encaissement pendant le service</div>
+          <div class="timeline-desc">Toutes les ventes et tous les remboursements doivent être traçables. Un caissier ne doit pas basculer sur la session d'un collègue pour aller plus vite.</div>
+        </div>
+        <div class="timeline-block">
+          <div class="timeline-title">3. Clôture et contrôle</div>
+          <div class="timeline-desc">Le caissier saisit les montants de fermeture, le gestionnaire contrôle la cohérence et l'administrateur intervient si les écarts deviennent répétés ou inexpliqués.</div>
+        </div>
+      </div>
+
+      <h2>Ce qu'il faut vérifier sur un shift fermé</h2>
+      <ul class="bullet-list">
+        <li>Montant d'ouverture crédible pour le poste concerné.</li>
+        <li>Montant de fermeture cohérent avec les ventes du service.</li>
+        <li>Bonne répartition entre cash et mobile money.</li>
+        <li>Écart expliqué, documenté ou nul.</li>
+        <li>Chronologie compatible avec les heures de travail.</li>
+      </ul>
+
+      <div class="alert alert-warn">Un écart ne doit jamais être ignoré. Même petit, il sert de signal : erreur de comptage, remboursement mal suivi, vente sur le mauvais compte ou procédure mal appliquée.</div>
+    </div>
+
+    <div class="section" id="s-recus">
+      <h1>Reçus & remboursements</h1>
+      <p class="subtitle">La page Reçus sert autant au service client qu'au contrôle interne.</p>
+
+      <div class="split-grid">
+        <div class="panel">
+          <h3>Quand y aller</h3>
+          <ul class="bullet-list">
+            <li>Un client conteste un ticket.</li>
+            <li>Un reçu doit être réimprimé.</li>
+            <li>Un remboursement doit être vérifié.</li>
+            <li>Un montant ou un mode de paiement semble incohérent.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Recherche rapide</h3>
+          <ul class="bullet-list">
+            <li>Filtrer par date ou plage horaire.</li>
+            <li>Utiliser le montant ou le client si le numéro n'est pas connu.</li>
+            <li>Comparer le statut du reçu avant toute décision.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>Répartition des rôles</h2>
+      <div class="tri-grid">
+        <div class="panel">
+          <span class="badge badge-cashier">Caissier</span>
+          <p>Retrouve un reçu, le réimprime et remonte les demandes de remboursement ou les cas litigieux.</p>
+        </div>
+        <div class="panel">
+          <span class="badge badge-manager">Gestionnaire</span>
+          <p>Vérifie la cohérence du remboursement, son motif et son impact sur le service du jour.</p>
+        </div>
+        <div class="panel">
+          <span class="badge badge-admin">Admin</span>
+          <p>Surveille les abus, les fréquences inhabituelles et les tendances qui révèlent un problème de process ou de qualité.</p>
+        </div>
+      </div>
+
+      <div class="alert alert-tip">Des remboursements fréquents ne sont pas juste un détail caisse. Ils peuvent révéler un problème de produit, de formation, de paramétrage ou de discipline d'équipe.</div>
+    </div>
+
+    <div class="section" id="s-produits">
+      <h1>Produits & stock</h1>
+      <p class="subtitle">Le catalogue doit rester simple à utiliser en caisse, mais rigoureux côté prix, coûts et niveaux de stock.</p>
+
+      <div class="card-grid">
+        <div class="mini-card">
+          <h3>Informations</h3>
+          <p>Nom, catégorie, unité et structure lisible pour éviter les doublons.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Prix</h3>
+          <p>Prix de vente, coût, taxe et cohérence de la marge.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Variantes</h3>
+          <p>Tailles, portions ou formats pour la vente sans ambiguïté.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Stock</h3>
+          <p>Stock initial, seuil minimum et suivi actif sur les produits critiques.</p>
+        </div>
+      </div>
+
+      <h2>Ajouter un produit pas à pas</h2>
+      <ol class="step-list">
+        <li>Ouvrir la page Produits puis lancer l'action de création.</li>
+        <li>Étape Informations : saisir un nom clair, la catégorie, l'unité, et si besoin le SKU ou l'image.</li>
+        <li>Étape Prix : renseigner le prix de vente, le prix de revient si vous suivez la marge, puis vérifier taxe et marge calculée.</li>
+        <li>Étape Variantes : créer des variantes uniquement si le produit existe en plusieurs formats comme petit, moyen, grand ou portion simple et double.</li>
+        <li>Étape Stock : définir le stock initial, le stock minimum et activer le suivi de stock seulement si ce produit doit réellement être suivi.</li>
+        <li>Relire la fiche avant validation pour éviter un produit vendable sans prix ou un doublon dans le catalogue.</li>
+      </ol>
+
+      <div class="alert alert-tip">Bon réflexe catalogue : un nom clair, une catégorie cohérente, un prix de vente renseigné et un stock minimum sur les références critiques évitent la majorité des problèmes en caisse.</div>
+
+      <h2>Signaux stock à surveiller</h2>
+      <div class="badge-row">
+        <span class="badge badge-warn">Manque</span>
+        <span class="badge badge-cashier">Surplus</span>
+        <span class="badge badge-manager">Marge observée</span>
+        <span class="badge badge-admin">Impact dépenses</span>
+      </div>
+
+      <div class="split-grid" style="margin-top:.8rem">
+        <div class="panel">
+          <h3>Qui agit ici ?</h3>
+          <ul class="bullet-list">
+            <li>Admin : fixe les règles de structure, de prix et les seuils critiques.</li>
+            <li>Gestionnaire : corrige les fiches, suit les alertes et fait les ajustements justifiés.</li>
+            <li>Caissier : signale un article manquant, mal nommé ou impossible à vendre.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Bonnes pratiques</h3>
+          <ul class="bullet-list">
+            <li>Éviter les doublons de produits presque identiques.</li>
+            <li>Définir un stock minimum sur les articles critiques.</li>
+            <li>Renseigner une raison à chaque ajustement de stock.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>Faire un ajustement de stock</h2>
+      <p>Un ajustement sert à corriger l'écart entre le stock théorique et le stock réel après inventaire, casse, perte, erreur de saisie ou régularisation.</p>
+      <ol class="step-list">
+        <li>Identifier le produit concerné depuis le stock ou le flux d'ajustement prévu par l'application.</li>
+        <li>Saisir la quantité physique réellement constatée ou le delta demandé selon l'écran disponible.</li>
+        <li>Renseigner une raison claire : inventaire, casse, perte, erreur de saisie ou autre justification précise.</li>
+        <li>Vérifier le résultat avant validation, surtout si le produit est critique ou si l'écart est important.</li>
+        <li>Valider puis synchroniser rapidement si l'ajustement a un impact fort sur le magasin.</li>
+      </ol>
+      <div class="alert alert-warn">Évitez les ajustements approximatifs. Un ajustement sans raison exploitable brouille les analyses de stock, de marge et de dépenses.</div>
+    </div>
+
+    <div class="section" id="s-operations">
+      <h1>Dépenses & clients</h1>
+      <p class="subtitle">Ces deux zones influencent directement la qualité des analyses : une dépense mal classée ou un client dupliqué finit toujours par brouiller les décisions.</p>
+
+      <div class="split-grid">
+        <div class="section-panel">
+          <h3>Dépenses</h3>
+          <div class="badge-row">
+            <span class="badge badge-soft">Directe</span>
+            <span class="badge badge-soft">Indirecte</span>
+            <span class="badge badge-soft">Opérationnelle</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Vérifier le bon type avant validation.</li>
+            <li>Contrôler le montant, la date et la description.</li>
+            <li>Rattacher le bon produit ou la bonne catégorie si nécessaire.</li>
+          </ul>
+          <h3 style="margin-top:1rem">Enregistrer une dépense</h3>
+          <ol class="step-list">
+            <li>Aller dans Dépenses puis choisir le bon type : directe, indirecte ou opérationnelle.</li>
+            <li>Saisir le montant réel et la date correcte.</li>
+            <li>Ajouter une description claire pour que quelqu'un d'autre comprenne la sortie d'argent sans explication orale.</li>
+            <li>Rattacher le produit ou la catégorie si le type de dépense l'exige.</li>
+            <li>Vérifier une dernière fois avant d'enregistrer.</li>
+          </ol>
+          <p class="small-note">Le gestionnaire corrige l'opérationnel. L'administrateur décide de la règle de suivi si une dépense impacte la rentabilité ou l'organisation.</p>
+        </div>
+
+        <div class="section-panel">
+          <h3>Clients</h3>
+          <ul class="bullet-list">
+            <li>Créer une fiche propre avec un numéro correct sur 8 chiffres.</li>
+            <li>Éviter les doublons pour garder un historique exploitable.</li>
+            <li>Consulter l'historique avant de traiter un litige ou une demande répétée.</li>
+          </ul>
+          <h3 style="margin-top:1rem">Ajouter rapidement un client</h3>
+          <ol class="step-list">
+            <li>Depuis la caisse ou la page Clients, lancer l'ajout d'un nouveau client.</li>
+            <li>Saisir au minimum le nom et les informations utiles comme le téléphone.</li>
+            <li>Vérifier qu'il n'existe pas déjà sous une orthographe proche.</li>
+            <li>Enregistrer puis reprendre la vente ou la consultation.</li>
+          </ol>
+          <p class="small-note">Le caissier peut avoir besoin de créer ou retrouver un client au comptoir. Le gestionnaire nettoie la base si elle dérive. L'administrateur s'intéresse surtout aux cas récurrents et aux usages sensibles.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-organisation">
+      <h1>Équipe, magasins & paramètres</h1>
+      <p class="subtitle">Cette zone touche à la structure du magasin. Elle est donc majoritairement administrative, avec quelques actions de contrôle ou d'alerte côté gestionnaire.</p>
+
+      <div class="process-grid">
+        <div class="process-card">
+          <h3>Utilisateurs</h3>
+          <p>Nom, téléphone, email, rôle, rattachement magasin et sécurité du compte.</p>
+          <ul class="bullet-list">
+            <li>Vérifier toujours le bon rôle avant de modifier un compte.</li>
+            <li>La création de comptes sensibles peut être réservée au super administrateur.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Magasins</h3>
+          <p>Liste des points de vente, magasin actif, statut actif ou inactif et état de l'abonnement.</p>
+          <ul class="bullet-list">
+            <li>Vérifier le bon magasin avant toute lecture d'indicateurs ou modification de données.</li>
+            <li>Un magasin inactif ou expiré peut bloquer l'accès de l'équipe concernée.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Paramètres</h3>
+          <p>Notifications, imprimante, logo, solde manuel, fond de roulement et catégories sensibles.</p>
+          <ul class="bullet-list">
+            <li>Activer seulement les notifications réellement utiles.</li>
+            <li>Modifier avec prudence ce qui impacte l'impression ou les soldes.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tri-grid">
+        <div class="panel">
+          <span class="badge badge-admin">Admin</span>
+          <p>Responsable des comptes, magasins, abonnements, permissions et paramètres globaux.</p>
+        </div>
+        <div class="panel">
+          <span class="badge badge-manager">Gestionnaire</span>
+          <p>Contrôle que les bons utilisateurs travaillent sur le bon magasin et signale tout blocage ou besoin de changement structurel.</p>
+        </div>
+        <div class="panel">
+          <span class="badge badge-cashier">Caissier</span>
+          <p>Utilise les réglages déjà en place, surtout l'impression, et remonte les dysfonctionnements sans modifier la structure.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-horsligne">
+      <h1>Mode hors-ligne</h1>
+      <p class="subtitle">Quand internet tombe, le but n'est pas d'arrêter de travailler. Le but est de continuer proprement, puis de resynchroniser sans créer de contradictions.</p>
+
+      <div class="card-grid">
+        <div class="mini-card">
+          <h3>Travail local</h3>
+          <p>L'application peut continuer à enregistrer localement les opérations essentielles.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Badge d'attente</h3>
+          <p>Le nombre d'opérations non encore envoyées reste visible pour éviter l'oubli.</p>
+        </div>
+        <div class="mini-card">
+          <h3>Synchroniser</h3>
+          <p>Le bouton de synchronisation force l'envoi manuel dès que la connexion revient.</p>
+        </div>
+      </div>
+
+      <h2>Réflexes utiles</h2>
+      <ol class="step-list">
+        <li>Continuer les opérations indispensables sans multiplier les modifications sensibles en parallèle.</li>
+        <li>Éviter les corrections contradictoires sur les mêmes produits, clients ou réglages.</li>
+        <li>À la reconnexion, synchroniser puis vérifier d'abord les remboursements, ajustements de stock et grosses dépenses.</li>
+      </ol>
+
+      <div class="alert alert-info">Le caissier continue la vente, le gestionnaire contrôle les opérations critiques et l'administrateur vérifie après coup que le magasin actif, les reçus sensibles et les modifications importantes sont bien remontés.</div>
+    </div>
+
+    <div class="section" id="s-problemes">
+      <h1>Problèmes courants</h1>
+      <p class="subtitle">Commencez toujours par le diagnostic le plus simple avant de conclure à un bug.</p>
+
+      <div class="process-grid">
+        <div class="process-card">
+          <h3>Chiffres anormaux au tableau de bord</h3>
+          <ul class="bullet-list">
+            <li>Vérifier la période et les heures affichées.</li>
+            <li>Vérifier le magasin actif.</li>
+            <li>Contrôler remboursements et écarts de shifts.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Le caissier ne voit pas les bons produits</h3>
+          <ul class="bullet-list">
+            <li>Contrôler le magasin actif du compte connecté.</li>
+            <li>Vérifier le rattachement du bon utilisateur au bon magasin.</li>
+            <li>Relancer une synchronisation.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Les reçus ne s'impriment plus</h3>
+          <ul class="bullet-list">
+            <li>Tester la configuration imprimante.</li>
+            <li>Vérifier la connexion Bluetooth ou native.</li>
+            <li>Utiliser l'impression web comme solution de secours.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Un magasin semble bloqué</h3>
+          <ul class="bullet-list">
+            <li>Vérifier statut actif ou inactif.</li>
+            <li>Contrôler l'état de l'abonnement.</li>
+            <li>Faire traiter le cas par l'administrateur si le magasin ne doit pas être bloqué.</li>
+          </ul>
+        </div>
+        <div class="process-card">
+          <h3>Des écarts de caisse se répètent</h3>
+          <ul class="bullet-list">
+            <li>Reprendre les shifts concernés et les remboursements du même créneau.</li>
+            <li>Vérifier la procédure de comptage et de fermeture.</li>
+            <li>Documenter le problème et remonter à l'admin si la répétition s'installe.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="s-checklists">
+      <h1>Checklists rapides</h1>
+      <p class="subtitle">Une version courte, par rôle, pour garder l'essentiel sans relire tout le guide.</p>
+
+      <div class="check-grid">
+        <div class="check-card role-admin">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Checklist administrateur</div>
+              <div class="role-focus">Pilotage, arbitrage et configuration</div>
+            </div>
+            <span class="badge badge-admin">Admin</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Vérifier le magasin actif, le statut global et les chiffres clés du jour.</li>
+            <li>Contrôler remboursements, marge et écarts inhabituels.</li>
+            <li>Suivre les magasins proches d'une expiration ou les blocages structurels.</li>
+            <li>Valider les paramètres sensibles et les décisions d'équipe.</li>
+            <li>En fin de journée, contrôler la synchronisation et les opérations en attente.</li>
+          </ul>
+        </div>
+
+        <div class="check-card role-manager">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Checklist gestionnaire</div>
+              <div class="role-focus">Supervision terrain et qualité des données</div>
+            </div>
+            <span class="badge badge-manager">Gestionnaire</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Confirmer les shifts ouverts, l'équipe présente et l'impression.</li>
+            <li>Suivre les ventes, remboursements et écarts pendant le service.</li>
+            <li>Corriger produits, clients ou dépenses quand une anomalie est claire.</li>
+            <li>Contrôler les fermetures de service et documenter les incidents.</li>
+            <li>Faire remonter à l'admin tout besoin structurel ou répétitif.</li>
+          </ul>
+        </div>
+
+        <div class="check-card role-cashier">
+          <div class="role-head">
+            <div>
+              <div class="role-name">Checklist caissier</div>
+              <div class="role-focus">Encaissement propre et traçable</div>
+            </div>
+            <span class="badge badge-cashier">Caissier</span>
+          </div>
+          <ul class="bullet-list">
+            <li>Se connecter avec son propre compte et ouvrir son service correctement.</li>
+            <li>Encaisser sans changer de session et réimprimer les reçus si nécessaire.</li>
+            <li>Signaler immédiatement un produit absent, un reçu litigieux ou une imprimante en panne.</li>
+            <li>Compter la caisse avec rigueur à la fermeture.</li>
+            <li>Ne jamais ignorer un écart, même faible.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function findNavItem(sectionId) {
+  return Array.prototype.find.call(document.querySelectorAll('.nav-item'), function (item) {
+    var action = item.getAttribute('onclick') || '';
+    return action.indexOf("show('" + sectionId + "'") !== -1;
+  }) || null;
+}
+
+function show(id, el, options) {
+  var settings = options || {};
+
+  document.querySelectorAll('.section').forEach(function(section) {
+    section.classList.remove('active');
+  });
+
+  document.querySelectorAll('.nav-item').forEach(function(item) {
+    item.classList.remove('active');
+  });
+
+  var target = document.getElementById('s-' + id);
+  if (target) {
+    target.classList.add('active');
+  }
+
+  if (el) {
+    el.classList.add('active');
+  }
+
+  if (!settings.skipHash) {
+    var nextHash = id === 'intro' ? '' : '#' + id;
+    var nextUrl = nextHash || window.location.pathname + window.location.search;
+    if (nextHash !== window.location.hash) {
+      history.replaceState(null, '', nextUrl);
+    }
+  }
+
+  if (!settings.skipScroll) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  if (window.matchMedia && window.matchMedia('(max-width: 980px)').matches) {
+    var sidebar = document.querySelector('.sidebar');
+    var sidebarToggle = document.getElementById('sidebar-toggle');
+    var sidebarOpen = document.getElementById('sidebar-open');
+    var sidebarOverlay = document.getElementById('sidebar-overlay');
+
+    if (sidebar) {
+      sidebar.classList.remove('is-open');
+    }
+
+    if (sidebarToggle) {
+      sidebarToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    if (sidebarOpen) {
+      sidebarOpen.setAttribute('aria-expanded', 'false');
+    }
+
+    if (sidebarOverlay) {
+      sidebarOverlay.classList.remove('is-visible');
+    }
+
+    document.body.classList.remove('doc-lock-scroll');
+  }
+}
+
+(function () {
+  var sidebar = document.querySelector('.sidebar');
+  var sidebarToggle = document.getElementById('sidebar-toggle');
+  var sidebarOpen = document.getElementById('sidebar-open');
+  var sidebarOverlay = document.getElementById('sidebar-overlay');
+  var searchInput = document.getElementById('doc-search');
+  var clearButton = document.getElementById('doc-search-clear');
+  var resultsNode = document.getElementById('doc-search-results');
+  var metaNode = document.getElementById('doc-search-meta');
+  var navItems = Array.prototype.slice.call(document.querySelectorAll('.nav-item'));
+  var sections = Array.prototype.slice.call(document.querySelectorAll('.section'));
+  var searchableSelectors = 'h1, h2, h3, p, li, .role-name, .role-focus, .timeline-title, .timeline-desc, .kpi-label, .kpi-value, .matrix-title, .matrix-cell';
+  var resultLimit = 8;
+  var activeSearchMatches = [];
+  var mobileMedia = window.matchMedia ? window.matchMedia('(max-width: 980px)') : null;
+
+  function setSidebarState(isOpen) {
+    if (!sidebar || !sidebarToggle || !sidebarOpen || !sidebarOverlay) {
+      return;
+    }
+
+    if (!mobileMedia || !mobileMedia.matches) {
+      sidebar.classList.remove('is-open');
+      sidebarOverlay.classList.remove('is-visible');
+      sidebarToggle.setAttribute('aria-expanded', 'false');
+      sidebarOpen.setAttribute('aria-expanded', 'false');
+      document.body.classList.remove('doc-lock-scroll');
+      return;
+    }
+
+    sidebar.classList.toggle('is-open', isOpen);
+    sidebarOverlay.classList.toggle('is-visible', isOpen);
+    sidebarToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    sidebarOpen.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    document.body.classList.toggle('doc-lock-scroll', isOpen);
+  }
+
+  function syncSidebarState() {
+    if (!sidebar || !sidebarToggle || !sidebarOpen || !sidebarOverlay) {
+      return;
+    }
+
+    if (!mobileMedia || !mobileMedia.matches) {
+      sidebar.classList.remove('is-open');
+      sidebarOverlay.classList.remove('is-visible');
+      sidebarToggle.setAttribute('aria-expanded', 'false');
+      sidebarOpen.setAttribute('aria-expanded', 'false');
+      document.body.classList.remove('doc-lock-scroll');
+      return;
+    }
+
+    setSidebarState(sidebar.classList.contains('is-open'));
+  }
+
+  function syncSectionFromHash(skipScroll) {
+    var requestedSection = (window.location.hash || '').replace('#', '') || 'intro';
+    var targetSection = document.getElementById('s-' + requestedSection) ? requestedSection : 'intro';
+    var navItem = findNavItem(targetSection);
+
+    show(targetSection, navItem, {
+      skipHash: true,
+      skipScroll: Boolean(skipScroll)
+    });
+  }
+
+  function normalize(text) {
+    return (text || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  }
+
+  function escapeHtml(text) {
+    return (text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function clearHighlights() {
+    activeSearchMatches.forEach(function (element) {
+      element.classList.remove('search-match');
+      if (element.dataset.searchOriginalHtml) {
+        element.innerHTML = element.dataset.searchOriginalHtml;
+        delete element.dataset.searchOriginalHtml;
+      }
+    });
+    activeSearchMatches = [];
+  }
+
+  function highlightText(element, query) {
+    var originalHtml = element.innerHTML;
+    var text = element.textContent || '';
+    var normalizedText = normalize(text);
+    var normalizedQuery = normalize(query);
+    var matchIndex = normalizedText.indexOf(normalizedQuery);
+
+    if (matchIndex === -1) {
+      return;
+    }
+
+    var start = matchIndex;
+    var end = matchIndex + normalizedQuery.length;
+    var before = escapeHtml(text.slice(0, start));
+    var match = escapeHtml(text.slice(start, end));
+    var after = escapeHtml(text.slice(end));
+
+    element.dataset.searchOriginalHtml = originalHtml;
+    element.innerHTML = before + '<mark>' + match + '</mark>' + after;
+    element.classList.add('search-match');
+    activeSearchMatches.push(element);
+  }
+
+  function buildSnippet(text, query) {
+    var cleaned = (text || '').replace(/\s+/g, ' ').trim();
+    var normalizedText = normalize(cleaned);
+    var normalizedQuery = normalize(query);
+    var index = normalizedText.indexOf(normalizedQuery);
+
+    if (index === -1) {
+      return escapeHtml(cleaned.slice(0, 110)) + (cleaned.length > 110 ? '...' : '');
+    }
+
+    var start = Math.max(0, index - 35);
+    var end = Math.min(cleaned.length, index + query.length + 55);
+    var prefix = start > 0 ? '...' : '';
+    var suffix = end < cleaned.length ? '...' : '';
+    var snippet = cleaned.slice(start, end);
+    var localIndex = normalize(snippet).indexOf(normalizedQuery);
+
+    if (localIndex === -1) {
+      return escapeHtml(prefix + snippet + suffix);
+    }
+
+    var before = escapeHtml(snippet.slice(0, localIndex));
+    var match = escapeHtml(snippet.slice(localIndex, localIndex + query.length));
+    var after = escapeHtml(snippet.slice(localIndex + query.length));
+    return prefix + before + '<mark>' + match + '</mark>' + after + suffix;
+  }
+
+  function goToResult(result) {
+    clearHighlights();
+
+    var navItem = findNavItem(result.sectionId);
+
+    show(result.sectionId, navItem || null);
+
+    if (result.element) {
+      highlightText(result.element, searchInput.value.trim());
+      result.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    setSidebarState(false);
+  }
+
+  function renderResults(results, query) {
+    resultsNode.innerHTML = '';
+
+    if (!query) {
+      resultsNode.classList.remove('visible');
+      metaNode.textContent = 'Recherche globale sur toutes les sections du guide.';
+      return;
+    }
+
+    resultsNode.classList.add('visible');
+
+    if (!results.length) {
+      metaNode.textContent = 'Aucun résultat pour "' + query + '".';
+      var empty = document.createElement('div');
+      empty.className = 'search-empty';
+      empty.textContent = 'Aucun résultat trouvé. Essayez un mot plus court ou un synonyme.';
+      resultsNode.appendChild(empty);
+      return;
+    }
+
+    metaNode.textContent = results.length + ' résultat' + (results.length > 1 ? 's' : '') + ' affiché' + (results.length > 1 ? 's' : '') + ' pour "' + query + '".';
+
+    results.forEach(function (result) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'search-result';
+      button.innerHTML = '<div class="search-result-title">' + escapeHtml(result.sectionTitle) + '</div><div class="search-result-snippet">' + result.snippet + '</div>';
+      button.addEventListener('click', function () {
+        goToResult(result);
+      });
+      resultsNode.appendChild(button);
+    });
+  }
+
+  function searchDocumentation(rawQuery) {
+    var query = rawQuery.trim();
+    var normalizedQuery = normalize(query);
+
+    clearButton.classList.toggle('visible', Boolean(query));
+    clearHighlights();
+
+    if (!normalizedQuery) {
+      renderResults([], '');
+      return;
+    }
+
+    var matches = [];
+
+    sections.forEach(function (section) {
+      var sectionTitleNode = section.querySelector('h1');
+      var sectionTitle = sectionTitleNode ? sectionTitleNode.textContent.trim() : 'Section';
+      var candidates = Array.prototype.slice.call(section.querySelectorAll(searchableSelectors));
+
+      candidates.forEach(function (candidate) {
+        var text = (candidate.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text) {
+          return;
+        }
+
+        if (normalize(text).indexOf(normalizedQuery) === -1) {
+          return;
+        }
+
+        matches.push({
+          sectionId: section.id.replace('s-', ''),
+          sectionTitle: sectionTitle,
+          element: candidate,
+          score: normalize(text).indexOf(normalizedQuery),
+          snippet: buildSnippet(text, query)
+        });
+      });
+    });
+
+    matches.sort(function (left, right) {
+      if (left.score !== right.score) {
+        return left.score - right.score;
+      }
+      return left.sectionTitle.localeCompare(right.sectionTitle);
+    });
+
+    renderResults(matches.slice(0, resultLimit), query);
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener('input', function (event) {
+      searchDocumentation(event.target.value);
+    });
+
+    searchInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        var firstResult = resultsNode.querySelector('.search-result');
+        if (firstResult) {
+          event.preventDefault();
+          firstResult.click();
+        }
+      }
+
+      if (event.key === 'Escape') {
+        searchInput.value = '';
+        searchDocumentation('');
+      }
+    });
+  }
+
+  if (clearButton) {
+    clearButton.addEventListener('click', function () {
+      searchInput.value = '';
+      searchDocumentation('');
+      searchInput.focus();
+    });
+  }
+
+  if (sidebarToggle) {
+    sidebarToggle.addEventListener('click', function () {
+      setSidebarState(false);
+    });
+  }
+
+  if (sidebarOpen) {
+    sidebarOpen.addEventListener('click', function () {
+      setSidebarState(true);
+    });
+  }
+
+  if (sidebarOverlay) {
+    sidebarOverlay.addEventListener('click', function () {
+      setSidebarState(false);
+    });
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      setSidebarState(false);
+    }
+  });
+
+  if (mobileMedia) {
+    if (mobileMedia.addEventListener) {
+      mobileMedia.addEventListener('change', syncSidebarState);
+    } else if (mobileMedia.addListener) {
+      mobileMedia.addListener(syncSidebarState);
+    }
+  }
+
+  window.addEventListener('hashchange', function () {
+    syncSectionFromHash(false);
+  });
+
+  syncSectionFromHash(true);
+  syncSidebarState();
+})();
+</script>

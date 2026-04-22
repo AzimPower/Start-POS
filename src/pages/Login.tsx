@@ -70,7 +70,7 @@ export default function Login() {
             <ShoppingCart className="w-8 h-8 text-primary-foreground"/>
           </div>
           <div>
-            <CardTitle className="text-3xl font-bold">Système POS</CardTitle>
+            <CardTitle className="text-3xl font-bold">START POS</CardTitle>
             <CardDescription className="text-base mt-2">
               Connectez-vous pour accéder à votre mogasin.
             </CardDescription>

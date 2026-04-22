@@ -24,6 +24,16 @@ interface StoreData {
     subscriptionEnd?: number; // Date de fin d'abonnement
     lastPayment?: number; // Date du dernier paiement
 }
+
+  function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
+    const ids = Array.isArray(storeIds) ? storeIds : [];
+    const candidates = ids.length > 0 ? ids : [fallbackStoreId];
+
+    return Array.from(new Set(candidates
+      .map((storeId) => String(storeId || '').trim())
+      .filter(Boolean)));
+  }
+
 function StoreSummaryCard({ title, value, subtitle, icon: Icon, color }: {
     title: string;
     value: string | number;
@@ -46,8 +56,166 @@ function StoreSummaryCard({ title, value, subtitle, icon: Icon, color }: {
       </CardContent>
     </Card>);
 }
+
+function formatStoreDate(value?: number) {
+    if (!value) {
+        return 'Non renseigne';
+    }
+
+    return new Date(value).toLocaleDateString('fr-FR');
+}
+
+function getStoreVisualState(store: StoreData) {
+    const active = isActiveFlag(store.active);
+    const subscriptionEnd = (store as any).subscriptionEnd ? Number((store as any).subscriptionEnd) : null;
+    const expired = Boolean(subscriptionEnd && subscriptionEnd <= Date.now());
+    const remainingDays = subscriptionEnd && subscriptionEnd > Date.now()
+        ? Math.ceil((subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
+
+    if (expired) {
+        return {
+            active,
+            expired,
+            remainingDays,
+            statusLabel: active ? 'Abonnement expire' : 'Inactif',
+            statusClassName: 'bg-rose-100 text-rose-700 border border-rose-200',
+            accentClassName: 'bg-rose-100 text-rose-700',
+            headerClassName: 'from-rose-50 via-white to-orange-100/70',
+            cardClassName: 'border-rose-100/80 shadow-rose-100/60',
+            subscriptionClassName: 'bg-rose-50 text-rose-700 border border-rose-200',
+        };
+    }
+
+    if (!active) {
+        return {
+            active,
+            expired,
+            remainingDays,
+            statusLabel: 'Inactif',
+            statusClassName: 'bg-slate-100 text-slate-700 border border-slate-200',
+            accentClassName: 'bg-slate-100 text-slate-700',
+            headerClassName: 'from-slate-50 via-white to-slate-100/80',
+            cardClassName: 'border-slate-200/80 shadow-slate-100/70',
+            subscriptionClassName: 'bg-slate-50 text-slate-600 border border-slate-200',
+        };
+    }
+
+    return {
+        active,
+        expired,
+        remainingDays,
+        statusLabel: 'Actif',
+        statusClassName: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
+        accentClassName: 'bg-blue-100 text-blue-700',
+        headerClassName: 'from-blue-50 via-white to-emerald-100/70',
+        cardClassName: 'border-blue-100/80 shadow-blue-100/60',
+        subscriptionClassName: 'bg-blue-50 text-blue-700 border border-blue-200',
+    };
+}
+
+function StoreManagementCard({
+    store,
+    viewerRole,
+    onEdit,
+    onSwitch,
+    onRenew,
+    onToggleStatus,
+    onDelete,
+}: {
+    store: StoreData;
+    viewerRole?: string;
+    onEdit: () => void;
+    onSwitch?: () => void;
+    onRenew?: () => void;
+    onToggleStatus?: () => void;
+    onDelete?: () => void;
+}) {
+    const visual = getStoreVisualState(store);
+    const subscriptionStart = (store as any).subscriptionStart ? Number((store as any).subscriptionStart) : null;
+    const subscriptionEnd = (store as any).subscriptionEnd ? Number((store as any).subscriptionEnd) : null;
+
+    return (<Card className={`overflow-hidden rounded-[28px] border bg-white shadow-lg transition duration-200 hover:-translate-y-0.5 hover:shadow-xl ${visual.cardClassName}`}>
+      <div className={`border-b border-border/60 bg-gradient-to-br ${visual.headerClassName} p-5`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${visual.accentClassName}`}>
+              <Store className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-xl font-semibold tracking-tight text-slate-900">{store.name}</div>
+              <div className="mt-1 text-sm text-slate-500">{store.address || 'Pas d\'adresse renseignee'}</div>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${visual.statusClassName}`}>
+              {visual.statusLabel}
+            </span>
+            {subscriptionEnd && (<span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${visual.subscriptionClassName}`}>
+                {visual.remainingDays ? `${visual.remainingDays} jours restants` : `Expire le ${formatStoreDate(subscriptionEnd)}`}
+              </span>)}
+          </div>
+        </div>
+      </div>
+
+      <CardContent className="space-y-5 p-5">
+        <div className="rounded-2xl bg-slate-50/80 p-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Adresse</div>
+          <div className="text-sm leading-6 text-slate-700">{store.address || 'Aucune adresse enregistree pour ce magasin.'}</div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-2xl border border-slate-100 bg-white p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Creation</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">{formatStoreDate(store.createdAt)}</div>
+          </div>
+          <div className="rounded-2xl border border-slate-100 bg-white p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Abonnement</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">{formatStoreDate(subscriptionStart || undefined)}</div>
+          </div>
+          <div className="col-span-2 rounded-2xl border border-slate-100 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expiration</div>
+                <div className={`mt-2 text-sm font-semibold ${visual.expired ? 'text-rose-600' : 'text-slate-900'}`}>
+                  {formatStoreDate(subscriptionEnd || undefined)}
+                </div>
+              </div>
+              {visual.remainingDays ? (<div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  {visual.remainingDays} jours
+                </div>) : subscriptionEnd ? (<div className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
+                  Expire
+                </div>) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <Button variant="outline" className="h-11 flex-1 rounded-2xl border-slate-200 bg-white text-base font-semibold hover:bg-slate-50" onClick={onEdit}>
+            <Edit className="mr-2 h-4 w-4" />
+            Modifier
+          </Button>
+          {viewerRole === 'admin' && onSwitch && (<Button className="h-11 rounded-2xl bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700" onClick={onSwitch}>
+              <ArrowLeftRight className="mr-2 h-4 w-4" />
+              Basculer
+            </Button>)}
+          {viewerRole === 'super_admin' && onRenew && (<Button variant="outline" size="icon" className="h-11 w-11 rounded-2xl border-blue-200 text-blue-700 hover:bg-blue-50" onClick={onRenew}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>)}
+          {viewerRole === 'super_admin' && onToggleStatus && (<Button variant="outline" size="icon" className={`h-11 w-11 rounded-2xl ${visual.active ? 'border-rose-200 text-rose-700 hover:bg-rose-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`} onClick={onToggleStatus}>
+              <Power className="h-4 w-4" />
+            </Button>)}
+          {viewerRole === 'super_admin' && onDelete && (<Button variant="outline" size="icon" className="h-11 w-11 rounded-2xl border-slate-200 text-slate-700 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600" onClick={onDelete}>
+              <Trash2 className="h-4 w-4" />
+            </Button>)}
+        </div>
+      </CardContent>
+    </Card>);
+}
+
 export default function Stores() {
     const { user, setActiveStore } = useAuth();
+  const storeFormTotalSteps = user?.role === 'super_admin' ? 2 : 1;
     const navigate = useNavigate();
     const [switchingStore, setSwitchingStore] = useState<{
         id: string;
@@ -71,6 +239,8 @@ export default function Stores() {
     const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
     const [admins, setAdmins] = useState<Array<any>>([]);
     const [selectedAdminId, setSelectedAdminId] = useState<string | null>(null);
+    const [linkedAdmins, setLinkedAdmins] = useState<Array<any>>([]);
+    const [storeFormStep, setStoreFormStep] = useState(1);
     // Renouvellement abonnement
     const PRICE_PER_MONTH = 5000;
     const [renewalDialog, setRenewalDialog] = useState<{
@@ -214,6 +384,118 @@ export default function Stores() {
         }
         catch (e) {
         }
+    };
+      const loadLinkedAdmins = async (storeId: string) => {
+        try {
+          const db = await getDB();
+          const allUsers = await db.getAll('users');
+          const nextLinkedAdmins = allUsers.filter((candidate: any) => candidate.role === 'admin' && normalizeStoreIds(candidate.storeIds, candidate.storeId).includes(storeId));
+          setLinkedAdmins(nextLinkedAdmins);
+        }
+        catch (e) {
+          setLinkedAdmins([]);
+        }
+      };
+      const handleDetachAdminFromStore = async (adminId: string, storeId: string) => {
+        const db = await getDB();
+        try {
+          const existingUser = await db.get('users', adminId);
+          if (!existingUser) {
+            toast.error('Administrateur introuvable');
+            return;
+          }
+
+          const currentStoreIds = normalizeStoreIds((existingUser as any).storeIds, (existingUser as any).storeId);
+          if (!currentStoreIds.includes(storeId)) {
+            return;
+          }
+
+          const nextStoreIds = currentStoreIds.filter((currentStoreId) => currentStoreId !== storeId);
+          if (nextStoreIds.length === 0) {
+            toast.error('Impossible de dissocier le dernier magasin de cet administrateur');
+            return;
+          }
+
+          const updatedUser = {
+            ...existingUser,
+            storeIds: nextStoreIds,
+            storeId: String((existingUser as any).storeId || '') === String(storeId)
+              ? (nextStoreIds[0] || '')
+              : (existingUser as any).storeId,
+          };
+
+          await performSyncOp({
+            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+            method: 'PUT',
+            data: updatedUser,
+          });
+
+          await db.put('users', updatedUser);
+
+          const mappings = await db.getAllFromIndex('userStores', 'by-user', adminId as any);
+          for (const mapping of mappings.filter((mapping: any) => String(mapping.storeId || '') === String(storeId))) {
+            await db.delete('userStores', (mapping as any).id);
+          }
+
+          if (selectedAdminId === adminId) {
+            setSelectedAdminId(null);
+            setAdminLookup('');
+          }
+
+          setLinkedAdmins((current) => current.filter((candidate: any) => candidate.id !== adminId));
+          toast.success('Administrateur dissocié du magasin');
+        }
+        catch (error) {
+          toast.error('Erreur lors de la dissociation');
+        }
+      };
+    const handleConfirmStoreSwitch = async () => {
+        if (!switchingStore) {
+            return;
+        }
+
+        setIsSwitching(true);
+        try {
+            await setActiveStore(switchingStore.id);
+            const name = switchingStore.name || switchingStore.id;
+            toast.success(`Vous êtes maintenant connecté sur : ${name}`);
+            await loadStores();
+            setTimeout(() => {
+                setIsSwitching(false);
+                setSwitchingStore(null);
+                navigate('/dashboard');
+            }, 700);
+        }
+        catch (e) {
+            setIsSwitching(false);
+            toast.error('Impossible de basculer sur ce magasin');
+        }
+    };
+    const renderStoreSwitchDialog = () => {
+        if (user?.role !== 'admin') {
+            return null;
+        }
+
+        return (<Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching)
+                setSwitchingStore(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirmer le basculement</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p>Vous vous apprêtez à basculer sur le magasin <strong>{switchingStore?.name}</strong>. Voulez-vous continuer ?</p>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setSwitchingStore(null)} disabled={isSwitching} className="flex-1">
+                  Annuler
+                </Button>
+                <Button onClick={handleConfirmStoreSwitch} disabled={isSwitching} className="flex-1">
+                  {isSwitching ? <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-white"/> : null}
+                  Confirmer
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>);
     };
     const handleSubmit = async () => {
       if (!editingStore && user?.role !== 'super_admin') {
@@ -409,31 +691,15 @@ export default function Stores() {
     };
     const handleEdit = async (store: StoreData) => {
         setEditingStore(store);
+      setStoreFormStep(1);
         setFormData({ name: store.name, address: store.address });
         // Prepare admin selection for edit: load admins and existing mapping
         setIsCreatingAdmin(false);
         setSelectedAdminId(null);
-        // Try to find existing mapping(s) for this store and prefill the lookup immediately
-        try {
-            const db = await getDB();
-            const mappings = await db.getAllFromIndex('userStores', 'by-store', store.id as any);
-            if (mappings && mappings.length > 0) {
-                const first = mappings[0];
-                setSelectedAdminId(first.userId);
-                const user = await db.get('users', first.userId);
-                if (user)
-                    setAdminLookup(`${user.username || user.phone} — ${user.phone || ''}`);
-            }
-            else {
-                setAdminLookup('');
-            }
-        }
-        catch (e) {
-            // ignore if index not present or any error
-            setAdminLookup('');
-        }
+      setAdminLookup('');
         // Load admins afterwards so suggestions are available
         await loadAdmins();
+      await loadLinkedAdmins(store.id);
         setShowDialog(true);
     };
     const handleDelete = async (id: string) => {
@@ -622,14 +888,129 @@ export default function Stores() {
         return;
       }
         setEditingStore(null);
+        setStoreFormStep(1);
         setFormData({ name: '', address: '' });
         setAdminForm({ username: '', phone: '', password: '' });
         setAdminLookup('');
         setIsCreatingAdmin(false);
         setSelectedAdminId(null);
+        setLinkedAdmins([]);
         loadAdmins();
         setShowDialog(true);
     };
+    const goToNextStoreStep = () => {
+        if (!formData.name.trim()) {
+            toast.error('Le nom du magasin est requis');
+            return;
+        }
+
+        setStoreFormStep(2);
+    };
+    const renderStoreBasics = () => (<>
+        <div className="space-y-2">
+          <Label htmlFor="name">Nom du magasin *</Label>
+          <Input id="name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Ex: Magasin Central" />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="address">Adresse</Label>
+          <Textarea id="address" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Adresse complète du magasin" rows={3} />
+        </div>
+      </>);
+    const renderStoreAdminSection = () => (<>
+        {user?.role === 'super_admin' && editingStore && (<div className="space-y-2">
+            <Label>Admins associés</Label>
+            <div className="space-y-2 rounded-md border border-border/60 p-3">
+              {linkedAdmins.length === 0 ? (<p className="text-sm text-muted-foreground">Aucun administrateur associé pour ce magasin.</p>) : (linkedAdmins.map((linkedAdmin) => (<div key={linkedAdmin.id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{linkedAdmin.username || linkedAdmin.phone}</div>
+                        <div className="truncate text-xs text-muted-foreground">{linkedAdmin.phone || 'Sans téléphone'}</div>
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => handleDetachAdminFromStore(linkedAdmin.id, editingStore.id)} aria-label={`Dissocier ${linkedAdmin.username || linkedAdmin.phone || 'cet administrateur'}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>)))}
+            </div>
+          </div>)}
+        {user?.role === 'super_admin' && (<div className="space-y-2">
+            <Label htmlFor="admin-lookup">Associer un admin</Label>
+            <div>
+              <div className="flex items-start gap-3">
+                <div style={{ flex: 1 }}>
+                  <Input id="admin-lookup" placeholder={admins.length ? 'Saisir nom ou téléphone, puis choisir dans la liste' : 'Saisir nom ou téléphone (aucun admin local)'} value={adminLookup} onChange={(e) => {
+                      setAdminLookup(e.target.value);
+                      setSelectedAdminId(null);
+                      setIsCreatingAdmin(false);
+                  }} />
+                  {adminLookup && (<div className="mt-1 max-h-40 overflow-auto rounded border bg-white">
+                      {admins
+                          .filter(a => {
+                          const q = adminLookup.toLowerCase();
+                          const name = (a.username || '').toString().toLowerCase();
+                          const phone = (a.phone || '').toString().toLowerCase();
+                          return name.includes(q) || phone.includes(q);
+                      })
+                          .map(a => (<div key={a.id} className="cursor-pointer p-2 hover:bg-gray-100" onClick={() => {
+                              setSelectedAdminId(a.id);
+                              setAdminLookup(`${a.username || a.phone} — ${a.phone || ''}`);
+                              setIsCreatingAdmin(false);
+                          }}>
+                            {a.username || a.phone} <span className="text-muted-foreground">{a.phone ? `— ${a.phone}` : ''}</span>
+                          </div>))}
+                      {admins.filter(a => {
+                          const q = adminLookup.toLowerCase();
+                          const name = (a.username || '').toString().toLowerCase();
+                          const phone = (a.phone || '').toString().toLowerCase();
+                          return name.includes(q) || phone.includes(q);
+                      }).length === 0 && (<div className="p-2 text-sm text-gray-600">Aucun admin trouvé.</div>)}
+                    </div>)}
+                </div>
+                <div className="shrink-0 flex flex-col items-end gap-2">
+                  {selectedAdminId ? (<>
+                      <div className="text-sm">Admin sélectionné <strong>{admins.find(a => a.id === selectedAdminId)?.username || ''}</strong></div>
+                      <Button variant="ghost" size="sm" onClick={() => { setSelectedAdminId(null); setAdminLookup(''); }}>Effacer</Button>
+                    </>) : (<Button variant="outline" size="sm" onClick={() => { setIsCreatingAdmin(true); setAdminForm(prev => ({ ...prev, username: adminLookup })); }}>Créer un nouvel admin</Button>)}
+                </div>
+              </div>
+              {isCreatingAdmin && (<div className="mt-3 space-y-2">
+                  <Label htmlFor="admin-phone">Téléphone admin *</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-gray-100 px-2 py-1 text-gray-700">+226</span>
+                    <Input id="admin-phone" type="tel" maxLength={8} pattern="[0-9]{8}" value={adminForm.phone} onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 8);
+                        setAdminForm({ ...adminForm, phone: val });
+                    }} placeholder="XXXXXXXX" style={{ flex: 1 }} required />
+                  </div>
+                  <Label htmlFor="admin-password">Mot de passe admin *</Label>
+                  <Input id="admin-password" type="password" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} placeholder="Mot de passe admin" />
+                </div>)}
+            </div>
+          </div>)}
+      </>);
+    const renderStoreDialogForm = () => (<div className="space-y-4">
+        {storeFormTotalSteps > 1 && (<div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium text-muted-foreground">Étape {storeFormStep} sur {storeFormTotalSteps}</div>
+              <div className="text-xs text-muted-foreground">{storeFormStep === 1 ? 'Informations du magasin' : 'Association admin'}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className={`h-1.5 rounded-full ${storeFormStep >= 1 ? 'bg-primary' : 'bg-muted'}`} />
+              <div className={`h-1.5 rounded-full ${storeFormStep >= 2 ? 'bg-primary' : 'bg-muted'}`} />
+            </div>
+          </div>)}
+
+        {storeFormStep === 1 ? renderStoreBasics() : renderStoreAdminSection()}
+
+        <div className="flex gap-2 pt-2">
+          {storeFormStep > 1 && (<Button type="button" variant="outline" className="flex-1" onClick={() => setStoreFormStep(1)}>
+              Précédent
+            </Button>)}
+          {storeFormStep < storeFormTotalSteps ? (<Button type="button" className="flex-1" onClick={goToNextStoreStep}>
+              Suivant
+            </Button>) : (<Button onClick={handleSubmit} className="flex-1">
+              {editingStore ? 'Modifier' : 'Créer'}
+            </Button>)}
+        </div>
+      </div>);
     const filteredStores = stores.filter(store => {
         // Filtre de recherche
         const matchesSearch = !searchQuery ||
@@ -674,19 +1055,7 @@ export default function Stores() {
                 {editingStore ? 'Modifier le magasin' : 'Nouveau magasin'}
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Nom du magasin *</Label>
-                <Input id="name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Ex: Magasin Central"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="address">Adresse</Label>
-                <Textarea id="address" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Adresse complète du magasin" rows={3}/>
-              </div>
-              <Button onClick={handleSubmit} className="w-full">
-                {editingStore ? 'Modifier' : 'Créer'}
-              </Button>
-            </div>
+            {renderStoreDialogForm()}
           </DialogContent>
         </Dialog>
       </div>
@@ -730,7 +1099,7 @@ export default function Stores() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 lg:items-stretch lg:gap-6">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-md">
               <div className="border-b p-4">
                 <div className="flex items-center gap-3">
@@ -751,116 +1120,10 @@ export default function Stores() {
                   <div className="h-9 w-12 animate-pulse rounded bg-gray-200"/>
                 </div>
               </CardContent>
-            </Card>))) : (filteredStores.map(store => (<Card key={store.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition hover:shadow-md lg:flex lg:h-full lg:flex-col lg:justify-between">
-            <div className="flex min-h-[190px] flex-col md:min-h-[220px] lg:h-full">
-              <div className="flex items-start justify-between border-b border-border/60 bg-gradient-to-r from-slate-50 to-white p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <Store className="h-5 w-5"/>
-                  </div>
-                  <div>
-                    <div className="text-base font-semibold sm:text-lg">{store.name}</div>
-                    <div className="text-xs text-muted-foreground">{store.address || 'Pas d\'adresse'}</div>
-                  </div>
-                </div>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${isActiveFlag(store.active) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${isActiveFlag(store.active) ? 'bg-green-600' : 'bg-red-600'}`}/>
-                  {isActiveFlag(store.active) ? 'Actif' : 'Inactif'}
-                </span>
-              </div>
-              <CardContent className="flex-1 p-4">
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <p className="text-muted-foreground">Créé le</p>
-                    <p className="font-medium">{new Date(store.createdAt).toLocaleDateString('fr-FR')}</p>
-                  </div>
-                  {(store as any).subscriptionStart && (<div className="space-y-1">
-                      <p className="text-muted-foreground">Abonnement depuis</p>
-                      <p className="font-medium">{new Date((store as any).subscriptionStart).toLocaleDateString('fr-FR')}</p>
-                    </div>)}
-                  {(store as any).subscriptionEnd && (<div className="col-span-2 space-y-1">
-                      <p className="text-muted-foreground">Expiration</p>
-                      <p className={`font-medium ${(store as any).subscriptionEnd > Date.now() ? 'text-green-600' : 'text-red-600'}`}>
-                        {new Date((store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
-                        {(store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
-                      </p>
-                    </div>)}
-                  <div className="col-span-2 flex items-center justify-between gap-2">
-                    {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() ? (<span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
-                        Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
-                      </span>) : <span />}
-                    <div className="ml-auto flex items-center gap-1">
-                      <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleEdit(store)} title="Modifier" aria-label="Modifier">
-                        <Edit className="h-3.5 w-3.5"/>
-                      </Button>
-                      {user?.role === 'admin' && (<Button variant="default" size="icon" className="h-7 w-7" onClick={() => setSwitchingStore({ id: store.id, name: store.name || store.id })} title="Basculer" aria-label="Basculer">
-                          <ArrowLeftRight className="h-3.5 w-3.5"/>
-                        </Button>)}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-              <div className="p-4 pt-2 lg:flex lg:items-center lg:justify-between lg:pt-4">
-                <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:flex-row lg:items-center lg:justify-between">
-                  <div className="flex w-full flex-row flex-wrap items-center gap-2 sm:w-1/2 lg:w-1/2">
-                    {user?.role === 'super_admin' && (<Button variant="default" size="icon" onClick={() => setRenewalDialog({ open: true, store: store, months: 1 })} className="h-9 w-9 bg-blue-600 hover:bg-blue-700" title="Renouveler l'abonnement" aria-label="Renouveler l'abonnement">
-                        <RefreshCw className="h-4 w-4"/>
-                      </Button>)}
-                  </div>
-                  <div className="flex w-full flex-row flex-wrap items-center justify-end gap-2 sm:w-1/2 lg:w-auto">
-                    {user?.role === 'admin' && (<>
-                        <Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching)
-                setSwitchingStore(null); }}>
-                          <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Confirmer le basculement</DialogTitle>
-                            </DialogHeader>
-                            <div className="space-y-4">
-                              <p>Vous vous apprêtez à basculer sur le magasin <strong>{switchingStore?.name}</strong>. Voulez-vous continuer ?</p>
-                              <div className="flex gap-2">
-                                <Button variant="outline" onClick={() => setSwitchingStore(null)} disabled={isSwitching} className="flex-1">
-                                  Annuler
-                                </Button>
-                                <Button onClick={async () => {
-                    if (!switchingStore)
-                        return;
-                    setIsSwitching(true);
-                    try {
-                        await setActiveStore(switchingStore.id);
-                        const name = switchingStore.name || switchingStore.id;
-                        toast.success(`Vous êtes maintenant connecté sur : ${name}`);
-                        await loadStores();
-                        setTimeout(() => {
-                            setIsSwitching(false);
-                            setSwitchingStore(null);
-                            navigate('/dashboard');
-                        }, 700);
-                    }
-                    catch (e) {
-                        setIsSwitching(false);
-                        toast.error('Impossible de basculer sur ce magasin');
-                    }
-                }} disabled={isSwitching} className="flex-1">
-                                  {isSwitching ? <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-white"/> : null}
-                                  Confirmer
-                                </Button>
-                              </div>
-                            </div>
-                          </DialogContent>
-                        </Dialog>
-                      </>)}
-                    {user?.role === 'super_admin' && (<Button variant={isActiveFlag(store.active) ? 'destructive' : 'default'} size="icon" onClick={() => toggleStoreStatus(store.id, isActiveFlag(store.active))} className="h-9 w-9" title={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'} aria-label={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'}>
-                        <Power className="h-4 w-4"/>
-                      </Button>)}
-                    {user?.role === 'super_admin' && (<Button variant="outline" size="icon" onClick={() => handleDelete(store.id)} className="h-9 w-9" title="Supprimer" aria-label="Supprimer">
-                        <Trash2 className="h-4 w-4"/>
-                      </Button>)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Card>)))}
+            </Card>))) : (filteredStores.map((store) => (<StoreManagementCard key={store.id} store={store} viewerRole={user?.role} onEdit={() => handleEdit(store)} onSwitch={user?.role === 'admin' ? () => setSwitchingStore({ id: store.id, name: store.name || store.id }) : undefined} onRenew={user?.role === 'super_admin' ? () => setRenewalDialog({ open: true, store, months: 1 }) : undefined} onToggleStatus={user?.role === 'super_admin' ? () => toggleStoreStatus(store.id, isActiveFlag(store.active)) : undefined} onDelete={user?.role === 'super_admin' ? () => handleDelete(store.id) : undefined} />)))}
       </div>
+
+      {renderStoreSwitchDialog()}
 
       <Dialog open={renewalDialog.open} onOpenChange={(open) => { if (!open)
         setRenewalDialog({ open: false, store: null, months: 1 }); }}>
@@ -978,78 +1241,7 @@ export default function Stores() {
                 {editingStore ? 'Modifier le magasin' : 'Nouveau magasin'}
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Nom du magasin *</Label>
-                <Input id="name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Ex: Magasin Central"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="address">Adresse</Label>
-                <Textarea id="address" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Adresse complète du magasin" rows={3}/>
-              </div>
-              {/* Formulaire d'administration : saisie unique + suggestions */}
-              {user?.role === 'super_admin' && (<div className="space-y-2">
-                  <Label htmlFor="admin-lookup">Rechercher un Admin</Label>
-                  <div>
-                    <div className="flex items-start gap-3">
-                      <div style={{ flex: 1 }}>
-                        <Input id="admin-lookup" placeholder={admins.length ? 'Saisir nom ou téléphone, puis choisir dans la liste' : 'Saisir nom ou téléphone (aucun admin local)'} value={adminLookup} onChange={(e) => {
-                setAdminLookup(e.target.value);
-                setSelectedAdminId(null);
-                setIsCreatingAdmin(false);
-            }}/>
-                        {/* Suggestions */}
-                        {adminLookup && (<div className="mt-1 border rounded bg-white max-h-40 overflow-auto">
-                            {admins
-                    .filter(a => {
-                    const q = adminLookup.toLowerCase();
-                    const name = (a.username || '').toString().toLowerCase();
-                    const phone = (a.phone || '').toString().toLowerCase();
-                    return name.includes(q) || phone.includes(q);
-                })
-                    .map(a => (<div key={a.id} className="p-2 hover:bg-gray-100 cursor-pointer" onClick={() => {
-                        setSelectedAdminId(a.id);
-                        setAdminLookup(`${a.username || a.phone} — ${a.phone || ''}`);
-                        setIsCreatingAdmin(false);
-                    }}>
-                                  {a.username || a.phone} <span className="text-muted-foreground">{a.phone ? `— ${a.phone}` : ''}</span>
-                                </div>))}
-                            {/* If no match, show option text */}
-                            {admins.filter(a => {
-                    const q = adminLookup.toLowerCase();
-                    const name = (a.username || '').toString().toLowerCase();
-                    const phone = (a.phone || '').toString().toLowerCase();
-                    return name.includes(q) || phone.includes(q);
-                }).length === 0 && (<div className="p-2 text-sm text-gray-600">Aucun admin trouvé.</div>)}
-                          </div>)}
-                      </div>
-                      <div className="shrink-0 flex flex-col items-end gap-2">
-                        {selectedAdminId ? (<>
-                            <div className="text-sm">Admin sélectionné <strong>{admins.find(a => a.id === selectedAdminId)?.username || ''}</strong></div>
-                            <Button variant="ghost" size="sm" onClick={() => { setSelectedAdminId(null); setAdminLookup(''); }}>Effacer</Button>
-                          </>) : (<Button variant="outline" size="sm" onClick={() => { setIsCreatingAdmin(true); setAdminForm(prev => ({ ...prev, username: adminLookup })); }}>Créer un nouvel admin</Button>)}
-                      </div>
-                    </div>
-
-                    {/* If creating new admin, show phone/password fields */}
-                    {isCreatingAdmin && (<div className="mt-3 space-y-2">
-                        <Label htmlFor="admin-phone">Téléphone admin *</Label>
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-1 bg-gray-100 rounded text-gray-700">+226</span>
-                          <Input id="admin-phone" type="tel" maxLength={8} pattern="[0-9]{8}" value={adminForm.phone} onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 8);
-                    setAdminForm({ ...adminForm, phone: val });
-                }} placeholder="XXXXXXXX" style={{ flex: 1 }} required/>
-                        </div>
-                        <Label htmlFor="admin-password">Mot de passe admin *</Label>
-                        <Input id="admin-password" type="password" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} placeholder="Mot de passe admin"/>
-                      </div>)}
-                  </div>
-                </div>)}
-              <Button onClick={handleSubmit} className="w-full">
-                {editingStore ? 'Modifier' : 'Créer'}
-              </Button>
-            </div>
+            {renderStoreDialogForm()}
           </DialogContent>
                 </Dialog>
               </div>
@@ -1115,7 +1307,7 @@ export default function Stores() {
         </CardContent>
       </Card>
 
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:items-stretch lg:gap-6">
+  <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="rounded-xl shadow-md border border-gray-200 bg-white overflow-hidden">
               <div className="p-4 border-b">
                 <div className="flex items-center gap-3">
@@ -1136,125 +1328,10 @@ export default function Stores() {
                   <div className="h-9 w-12 bg-gray-200 rounded animate-pulse"/>
                 </div>
               </CardContent>
-            </Card>))) : (filteredStores.map(store => (<Card key={store.id} className="rounded-2xl border border-border/60 bg-card shadow-sm hover:shadow-md transition overflow-hidden lg:h-full lg:flex lg:flex-col lg:justify-between">
-            <div className="flex flex-col min-h-[190px] md:min-h-[220px] lg:h-full">
-              <div className="flex items-start justify-between p-4 border-b border-border/60 bg-gradient-to-r from-slate-50 to-white">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                    <Store className="w-5 h-5"/>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-base sm:text-lg">{store.name}</div>
-                    <div className="text-xs text-muted-foreground">{store.address || 'Pas d\'adresse'}</div>
-                  </div>
-                </div>
-                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${isActiveFlag(store.active) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${isActiveFlag(store.active) ? 'bg-green-600' : 'bg-red-600'}`}/>
-                  {isActiveFlag(store.active) ? 'Actif' : 'Inactif'}
-                </span>
-              </div>
-              <CardContent className="flex-1 p-4">
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <p className="text-muted-foreground">Créé le</p>
-                    <p className="font-medium">{new Date(store.createdAt).toLocaleDateString('fr-FR')}</p>
-                  </div>
-                  {(store as any).subscriptionStart && (<div className="space-y-1">
-                      <p className="text-muted-foreground">Abonnement depuis</p>
-                      <p className="font-medium">{new Date((store as any).subscriptionStart).toLocaleDateString('fr-FR')}</p>
-                    </div>)}
-                  {(store as any).subscriptionEnd && (<div className="space-y-1 col-span-2">
-                      <p className="text-muted-foreground">Expiration</p>
-                      <p className={`font-medium ${(store as any).subscriptionEnd > Date.now()
-                    ? 'text-green-600'
-                    : 'text-red-600'}`}>
-                        {new Date((store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
-                        {(store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
-                      </p>
-                    </div>)}
-                  <div className="col-span-2 flex items-center justify-between gap-2">
-                    {(store as any).subscriptionEnd && (store as any).subscriptionEnd > Date.now() ? (<span className="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700">
-                        Jours restants: {Math.ceil(((store as any).subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))}
-                      </span>) : <span />}
-                    <div className="flex items-center gap-1 ml-auto">
-                      <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => handleEdit(store)} title="Modifier" aria-label="Modifier">
-                        <Edit className="w-3.5 h-3.5"/>
-                      </Button>
-                      {user?.role === 'admin' && (<Button variant="default" size="icon" className="h-7 w-7" onClick={() => setSwitchingStore({ id: store.id, name: store.name || store.id })} title="Basculer" aria-label="Basculer">
-                          <ArrowLeftRight className="w-3.5 h-3.5"/>
-                        </Button>)}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-              <div className="p-4 pt-2 lg:pt-4 lg:flex lg:items-center lg:justify-between">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full lg:flex-row lg:items-center lg:justify-between">
-                  {/* Left group: Renouveler */}
-                  <div className="flex flex-row flex-wrap gap-2 items-center w-full sm:w-1/2 lg:w-1/2">
-                    {user?.role === 'super_admin' && (<Button variant="default" size="icon" onClick={() => setRenewalDialog({ open: true, store: store, months: 1 })} className="h-9 w-9 bg-blue-600 hover:bg-blue-700" title="Renouveler l'abonnement" aria-label="Renouveler l'abonnement">
-                        <RefreshCw className="w-4 h-4"/>
-                      </Button>)}
-                  </div>
-
-                  {/* Right group: Désactiver/Activer, Supprimer */}
-                  <div className="flex flex-row flex-wrap gap-2 items-center justify-end w-full sm:w-1/2 lg:w-auto">
-                    {/* If admin (not super_admin) allow to switch active store */}
-                    {user?.role === 'admin' && (<>
-                        <Dialog open={!!switchingStore} onOpenChange={() => { if (!isSwitching)
-                setSwitchingStore(null); }}>
-                          <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Confirmer le basculement</DialogTitle>
-                            </DialogHeader>
-                            <div className="space-y-4">
-                              <p>Vous vous apprêtez à basculer sur le magasin <strong>{switchingStore?.name}</strong>. Voulez-vous continuer ?</p>
-                              <div className="flex gap-2">
-                                <Button variant="outline" onClick={() => setSwitchingStore(null)} disabled={isSwitching} className="flex-1">
-                                  Annuler
-                                </Button>
-                                <Button onClick={async () => {
-                    if (!switchingStore)
-                        return;
-                    setIsSwitching(true);
-                    try {
-                        await setActiveStore(switchingStore.id);
-                        const name = switchingStore.name || switchingStore.id;
-                        // small animated confirmation: show spinner then redirect
-                        toast.success(`Vous êtes maintenant connecté sur : ${name}`);
-                        // refresh local lists
-                        await loadStores();
-                        // keep the spinner visible briefly for perceived animation
-                        setTimeout(() => {
-                            setIsSwitching(false);
-                            setSwitchingStore(null);
-                            navigate('/dashboard');
-                        }, 700);
-                    }
-                    catch (e) {
-                        setIsSwitching(false);
-                        toast.error('Impossible de basculer sur ce magasin');
-                    }
-                }} disabled={isSwitching} className="flex-1">
-                                  {isSwitching ? <span className="inline-block w-4 h-4 mr-2 border-b-2 border-white rounded-full animate-spin"/> : null}
-                                  Confirmer
-                                </Button>
-                              </div>
-                            </div>
-                          </DialogContent>
-                        </Dialog>
-                      </>)}
-                    {user?.role === 'super_admin' && (<Button variant={isActiveFlag(store.active) ? 'destructive' : 'default'} size="icon" onClick={() => toggleStoreStatus(store.id, isActiveFlag(store.active))} className="h-9 w-9" title={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'} aria-label={isActiveFlag(store.active) ? 'Désactiver' : 'Activer'}>
-                        <Power className="w-4 h-4"/>
-                      </Button>)}
-                    {user?.role === 'super_admin' && (<Button variant="outline" size="icon" onClick={() => handleDelete(store.id)} className="h-9 w-9" title="Supprimer" aria-label="Supprimer">
-                        <Trash2 className="w-4 h-4"/>
-                      </Button>)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Card>)))}
+            </Card>))) : (filteredStores.map((store) => (<StoreManagementCard key={store.id} store={store} viewerRole={user?.role} onEdit={() => handleEdit(store)} onSwitch={user?.role === 'admin' ? () => setSwitchingStore({ id: store.id, name: store.name || store.id }) : undefined} onRenew={user?.role === 'super_admin' ? () => setRenewalDialog({ open: true, store, months: 1 }) : undefined} onToggleStatus={user?.role === 'super_admin' ? () => toggleStoreStatus(store.id, isActiveFlag(store.active)) : undefined} onDelete={user?.role === 'super_admin' ? () => handleDelete(store.id) : undefined} />)))}
       </div>
+
+      {renderStoreSwitchDialog()}
 
       {/* Dialog renouvellement abonnement */}
       <Dialog open={renewalDialog.open} onOpenChange={(open) => { if (!open)

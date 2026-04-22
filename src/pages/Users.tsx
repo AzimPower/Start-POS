@@ -11,6 +11,7 @@ import { UserCircle, Edit, Trash2, Plus, Shield, RefreshCw,  User, Eye, EyeOff, 
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+
 function UserSummaryCard({ title, value, subtitle, icon: Icon, color }: {
     title: string;
     value: string | number;
@@ -33,6 +34,105 @@ function UserSummaryCard({ title, value, subtitle, icon: Icon, color }: {
       </CardContent>
     </Card>);
 }
+
+function getRoleConfig(role: UserData['role']) {
+    switch (role) {
+        case 'admin':
+            return {
+                label: 'Admin',
+                Icon: Shield,
+                badgeClassName: 'bg-blue-600 text-white border-blue-600',
+                iconWrapperClassName: 'bg-blue-100 text-blue-700',
+                headerClassName: 'from-blue-50 via-white to-blue-100/70',
+                cardClassName: 'border-blue-100/80 shadow-blue-100/60',
+            };
+        case 'manager':
+            return {
+                label: 'Gestionnaire',
+                Icon: User,
+                badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
+                iconWrapperClassName: 'bg-amber-100 text-amber-700',
+                headerClassName: 'from-amber-50 via-white to-orange-100/60',
+                cardClassName: 'border-amber-100/80 shadow-amber-100/50',
+            };
+        default:
+            return {
+                label: 'Caissier',
+                Icon: User,
+                badgeClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+                iconWrapperClassName: 'bg-emerald-100 text-emerald-700',
+                headerClassName: 'from-emerald-50 via-white to-emerald-100/60',
+                cardClassName: 'border-emerald-100/80 shadow-emerald-100/50',
+            };
+    }
+}
+
+function UserAccountCard({
+    account,
+    stores,
+    onEdit,
+    onDelete,
+}: {
+    account: UserData;
+    stores: string[];
+    onEdit: () => void;
+    onDelete: () => void;
+}) {
+    const roleConfig = getRoleConfig(account.role);
+    const RoleIcon = roleConfig.Icon;
+
+    return (<Card className={`overflow-hidden rounded-[28px] border bg-white shadow-lg transition duration-200 hover:-translate-y-0.5 hover:shadow-xl ${roleConfig.cardClassName}`}>
+      <div className={`border-b border-border/60 bg-gradient-to-br ${roleConfig.headerClassName} p-5`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${roleConfig.iconWrapperClassName}`}>
+              <RoleIcon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-xl font-semibold tracking-tight text-slate-900">{account.username}</div>
+              <div className="mt-1 text-sm text-slate-500">{account.phone}</div>
+            </div>
+          </div>
+          <Badge className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${roleConfig.badgeClassName}`}>
+            {roleConfig.label}
+          </Badge>
+        </div>
+      </div>
+
+      <CardContent className="space-y-5 p-5">
+        <div className="rounded-2xl bg-slate-50/80 p-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Affectations</div>
+          <div className="text-sm text-slate-500">Magasins associés</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {stores.length === 0 ? (<span className="text-sm text-muted-foreground">Aucun magasin</span>) : (stores.map((storeName, idx) => (<Badge key={`${account.id}-${idx}`} className="rounded-full border border-blue-200 bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-blue-600">
+                  {storeName}
+                </Badge>)))}
+          </div>
+        </div>
+
+        <div className="space-y-2 rounded-2xl border border-slate-100 bg-white p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Contact</div>
+          <div className="text-sm text-slate-700">
+            <span className="font-medium text-slate-900">Téléphone :</span> {account.phone}
+          </div>
+          <div className="text-sm text-slate-700">
+            <span className="font-medium text-slate-900">Email :</span> {account.email || 'Non renseigné'}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <Button variant="outline" className="h-11 flex-1 rounded-2xl border-slate-200 bg-white text-base font-semibold hover:bg-slate-50" onClick={onEdit}>
+            <Edit className="mr-2 h-4 w-4" />
+            Modifier
+          </Button>
+          <Button variant="outline" size="icon" className="h-11 w-11 rounded-2xl border-slate-200 text-slate-700 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={onDelete}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>);
+}
+
 interface UserData {
     id: string;
     username: string;
@@ -42,6 +142,7 @@ interface UserData {
     role: 'super_admin' | 'admin' | 'cashier' | 'manager';
     storeId: string;
     storeIds?: string[];
+    active?: boolean;
     createdAt: number;
     pin?: string;
 }
@@ -49,8 +150,19 @@ interface StoreData {
     id: string;
     name: string;
 }
+
+  function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
+    const ids = Array.isArray(storeIds) ? storeIds : [];
+    const candidates = ids.length > 0 ? ids : [fallbackStoreId];
+
+    return Array.from(new Set(candidates
+      .map((storeId) => String(storeId || '').trim())
+      .filter(Boolean)));
+  }
+
 export default function Users() {
     const { user } = useAuth();
+  const userFormTotalSteps = 2;
     const [users, setUsers] = useState<UserData[]>([]);
     const [stores, setStores] = useState<StoreData[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -68,9 +180,11 @@ export default function Users() {
         email: '',
         password: '',
         role: 'cashier' as 'admin' | 'cashier' | 'manager',
-        storeId: '',
+      storeIds: [] as string[],
         pin: '',
     });
+    const [storePickerKey, setStorePickerKey] = useState(0);
+    const [userFormStep, setUserFormStep] = useState(1);
     useEffect(() => {
         // We intentionally call loadData once when `user` changes. loadData is stable here.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,22 +214,31 @@ export default function Users() {
                 }
                 const res = await fetch(url);
                 if (res.ok) {
-                    const remoteUsers = await res.json();
+                  const remoteUsers = await res.json();
+                  const normalizedRemoteUsers = Array.isArray(remoteUsers)
+                    ? remoteUsers.map((remoteUser: any) => ({
+                      ...remoteUser,
+                      storeId: remoteUser?.storeId || '',
+                      storeIds: normalizeStoreIds(remoteUser?.storeIds, remoteUser?.storeId),
+                    }))
+                    : [];
                     // Si admin, filtrer côté client aussi pour sécurité
                     const storeUsers = user?.role === 'admin' && user?.storeId
-                        ? remoteUsers.filter((u: any) => {
-                            const uStoreIds: string[] = u.storeIds || (u.storeId ? [u.storeId] : []);
+                    ? normalizedRemoteUsers.filter((u: any) => {
+                      const uStoreIds: string[] = normalizeStoreIds(u.storeIds, u.storeId);
                             return uStoreIds.includes(user.storeId);
                         })
-                        : remoteUsers;
+                    : normalizedRemoteUsers;
                     // Met à jour IndexedDB locale
                     const db = await getDB();
+                  const existingLocalUsers = await db.getAll('users');
+                  const localUsersById = new Map(existingLocalUsers.map((existingUser: any) => [existingUser.id, existingUser]));
                     const tx = db.transaction('users', 'readwrite');
                     await tx.store.clear();
                     for (const u of storeUsers) {
                         // Preserve existing local PIN if backend doesn't return one
                         try {
-                            const local = await tx.store.get(u.id as string);
+                      const local = localUsersById.get(u.id as string);
                             const merged = {
                                 ...u,
                                 pin: (u as any).pin ?? (local ? (local as any).pin : '')
@@ -128,6 +251,9 @@ export default function Users() {
                         }
                     }
                     await tx.done;
+                      for (const syncedUser of storeUsers) {
+                        await syncLocalUserStoreMappings(db, syncedUser.id, normalizeStoreIds((syncedUser as any).storeIds, (syncedUser as any).storeId));
+                      }
                     // Filtrage et affichage
                     let filteredUsers = storeUsers.filter(u => u.role !== 'super_admin');
                     if (user?.role === 'admin') {
@@ -151,7 +277,7 @@ export default function Users() {
         const normalizedUsers = data.map((u: unknown) => ({
             ...(u as any),
             storeId: (u as any).storeId || '',
-            storeIds: (u as any).storeIds || ((u as any).storeId ? [(u as any).storeId] : []),
+          storeIds: normalizeStoreIds((u as any).storeIds, (u as any).storeId),
         }));
         let filteredUsers = normalizedUsers.filter(u => u.role !== 'super_admin');
         if (user?.role === 'admin') {
@@ -167,7 +293,11 @@ export default function Users() {
         toast.error('Seul le super admin peut créer des utilisateurs');
         return;
       }
-        if (!formData.username.trim() || !formData.phone.trim() || !formData.password.trim() || !formData.storeId) {
+        const requestedStoreIds = user?.role === 'admin'
+            ? normalizeStoreIds(undefined, user.storeId)
+            : normalizeStoreIds(formData.storeIds);
+
+        if (!formData.username.trim() || !formData.phone.trim() || !formData.password.trim() || requestedStoreIds.length === 0) {
             toast.error('Tous les champs sont requis');
             return;
         }
@@ -176,7 +306,7 @@ export default function Users() {
             return;
         }
         let finalRole = formData.role;
-        let finalStoreId = formData.storeId;
+        let finalStoreIds = requestedStoreIds;
         if (user?.role === 'admin') {
             if (!editingUser || editingUser.id !== user.id) {
                 // L'admin peut créer des caissiers et des gestionnaires, mais pas d'autres admins
@@ -186,9 +316,10 @@ export default function Users() {
                 else {
                     finalRole = formData.role; // Permet 'cashier' et 'manager'
                 }
-                finalStoreId = user.storeId;
             }
+              finalStoreIds = normalizeStoreIds(undefined, user.storeId);
         }
+            const finalStoreId = finalStoreIds[0] || '';
         const db = await getDB();
         try {
             if (editingUser) {
@@ -200,11 +331,13 @@ export default function Users() {
                     email: formData.email.trim() || null,
                     password: formData.password,
                     role: finalRole,
+                    storeIds: finalStoreIds,
                     storeId: finalStoreId,
                     // Only overwrite pin if admin provided a new one
                     ...(formData.pin ? { pin: formData.pin } : {}),
                 };
                 await db.put('users', userData);
+                  await syncLocalUserStoreMappings(db, userData.id, finalStoreIds);
                 if (connectionState.isOnline) {
                     const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
                         method: 'PUT',
@@ -253,12 +386,14 @@ export default function Users() {
                     email: formData.email.trim() || null,
                     password: formData.password,
                     role: finalRole,
+                    storeIds: finalStoreIds,
                     storeId: finalStoreId,
                     pin: formData.pin || '',
                     active: true,
                     createdAt: Date.now(),
                 };
                 await db.add('users', newUser);
+                  await syncLocalUserStoreMappings(db, newUser.id, finalStoreIds);
                 if (connectionState.isOnline) {
                     const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
                         method: 'POST',
@@ -285,7 +420,7 @@ export default function Users() {
             setEditingUser(null);
             setShowPassword(false);
             setShowPin(false);
-            setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeId: '', pin: '' });
+            setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeIds: [], pin: '' });
         }
         catch (error) {
             const msg = (error as any)?.message || 'Erreur lors de l\'enregistrement';
@@ -294,6 +429,7 @@ export default function Users() {
     };
     const handleEdit = (editUser: UserData) => {
         setEditingUser(editUser);
+      setUserFormStep(1);
         // Ensure phone is prefilled as 8 digits (strip +226 and non-digits)
         const rawPhone = String(editUser.phone || '').replace(/[^0-9]/g, '');
         const phone8 = rawPhone.replace(/^226/, '').slice(-8);
@@ -303,10 +439,11 @@ export default function Users() {
             email: editUser.email || '',
             password: editUser.password || '',
             role: editUser.role === 'super_admin' ? 'admin' : editUser.role as 'admin' | 'cashier' | 'manager',
-            storeId: editUser.storeId,
+          storeIds: normalizeStoreIds(editUser.storeIds, editUser.storeId),
             pin: editUser.pin || '',
         });
         setShowDialog(true);
+        setStorePickerKey((current) => current + 1);
     };
     const handleDelete = async (id: string) => {
         if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?'))
@@ -314,6 +451,10 @@ export default function Users() {
         const db = await getDB();
         try {
             await db.delete('users', id);
+          const mappings = await db.getAllFromIndex('userStores', 'by-user', id as any);
+          for (const mapping of mappings) {
+            await db.delete('userStores', (mapping as any).id);
+          }
             if (connectionState.isOnline) {
                 await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php?id=${id}`, {
                     method: 'DELETE',
@@ -340,16 +481,41 @@ export default function Users() {
         return;
       }
         setEditingUser(null);
+        setUserFormStep(1);
         setShowPassword(false);
         setShowPin(false);
-        setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeId: stores[0]?.id || '', pin: '' });
+        setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeIds: [], pin: '' });
+        setStorePickerKey((current) => current + 1);
         setShowDialog(true);
     };
+    const syncLocalUserStoreMappings = async (db: any, userId: string, storeIds: string[]) => {
+        const existingMappings = await db.getAllFromIndex('userStores', 'by-user', userId as any);
+        for (const mapping of existingMappings) {
+            await db.delete('userStores', (mapping as any).id);
+        }
+        for (const storeId of normalizeStoreIds(storeIds)) {
+            await db.add('userStores', { id: generateId(), userId, storeId });
+        }
+    };
+    const toggleStoreSelection = (storeId: string, checked: boolean) => {
+        setFormData((current) => {
+            const currentStoreIds = normalizeStoreIds(current.storeIds);
+            const nextStoreIds = checked
+                ? Array.from(new Set([...currentStoreIds, storeId]))
+                : currentStoreIds.filter((currentStoreId) => currentStoreId !== storeId);
+
+            return {
+                ...current,
+                storeIds: nextStoreIds,
+            };
+        });
+    };
+          const addStoreSelection = (storeId: string) => {
+            toggleStoreSelection(storeId, true);
+            setStorePickerKey((current) => current + 1);
+          };
     const getUserStoreIds = (u: UserData) => {
-      if (Array.isArray(u.storeIds)) {
-        return u.storeIds.filter(Boolean);
-      }
-      return u.storeId ? [u.storeId] : [];
+      return normalizeStoreIds(u.storeIds, u.storeId);
     };
     const getStoreName = (storeId: string) => {
       return stores.find(s => s.id === storeId)?.name || 'Inconnu';
@@ -359,6 +525,149 @@ export default function Users() {
         .map(id => stores.find(s => s.id === id)?.name)
         .filter((name): name is string => Boolean(name));
         return names; // return array of names; rendering will handle empty case
+    };
+    const goToNextUserStep = () => {
+        if (!formData.username.trim() || !formData.phone.trim() || !formData.password.trim()) {
+            toast.error('Complétez les champs obligatoires avant de continuer');
+            return;
+        }
+
+        if (!/^[0-9]{8}$/.test(formData.phone)) {
+            toast.error('Le numéro doit contenir exactement 8 chiffres.');
+            return;
+        }
+
+        setUserFormStep(2);
+    };
+    const renderUserRoleField = () => (<div className="space-y-2">
+        <Label htmlFor="role">Rôle *</Label>
+        {(user?.role === 'admin' && editingUser && editingUser.id === user.id) ? (<Input id="role" value="Administrateur" disabled />) : user?.role === 'admin' ? (<Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cashier">Caissier</SelectItem>
+              <SelectItem value="manager">Gestionnaire</SelectItem>
+            </SelectContent>
+          </Select>) : (<Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cashier">Caissier</SelectItem>
+              <SelectItem value="manager">Gestionnaire</SelectItem>
+              <SelectItem value="admin">Administrateur</SelectItem>
+            </SelectContent>
+          </Select>)}
+      </div>);
+    const renderUserDialogForm = () => (<div className="space-y-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium text-muted-foreground">Étape {userFormStep} sur {userFormTotalSteps}</div>
+            <div className="text-xs text-muted-foreground">{userFormStep === 1 ? 'Informations' : 'Rôle et magasins'}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className={`h-1.5 rounded-full ${userFormStep >= 1 ? 'bg-primary' : 'bg-muted'}`} />
+            <div className={`h-1.5 rounded-full ${userFormStep >= 2 ? 'bg-primary' : 'bg-muted'}`} />
+          </div>
+        </div>
+
+        {userFormStep === 1 ? (<>
+            <div className="space-y-2">
+              <Label htmlFor="username">Nom d'utilisateur *</Label>
+              <Input id="username" value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="Ex: caissier1" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="phone">Téléphone *</Label>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-gray-100 px-2 py-1 text-gray-700">+226</span>
+                <Input id="phone" type="tel" maxLength={8} pattern="[0-9]{8}" value={formData.phone} onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 8);
+                    setFormData({ ...formData, phone: val });
+                }} placeholder="XXXXXXXX" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="utilisateur@exemple.com" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Mot de passe *</Label>
+              <div className="relative">
+                <Input id="password" type={showPassword ? 'text' : 'password'} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="••••••••" className="pr-10" />
+                <button type="button" className="absolute inset-y-0 right-0 flex items-center pr-3" onClick={() => setShowPassword(!showPassword)}>
+                  {showPassword ? (<EyeOff className="h-4 w-4 text-gray-400" />) : (<Eye className="h-4 w-4 text-gray-400" />)}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pin">PIN (4-8 chiffres)</Label>
+              <div className="relative">
+                <Input id="pin" type={showPin ? 'text' : 'password'} inputMode="numeric" maxLength={8} value={formData.pin} onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 8) })} placeholder={editingUser ? 'Laisser vide pour conserver le PIN actuel' : 'Ex: 1234'} className="pr-10" />
+                <button type="button" className="absolute inset-y-0 right-0 flex items-center pr-3" onClick={() => setShowPin(!showPin)}>
+                  {showPin ? (<EyeOff className="h-4 w-4 text-gray-400" />) : (<Eye className="h-4 w-4 text-gray-400" />)}
+                </button>
+              </div>
+            </div>
+          </>) : (<>
+            {renderUserRoleField()}
+            {renderStoreSelection()}
+          </>)}
+
+        <div className="flex gap-2 pt-2">
+          {userFormStep > 1 && (<Button type="button" variant="outline" className="flex-1" onClick={() => setUserFormStep(1)}>
+              Précédent
+            </Button>)}
+          {userFormStep < userFormTotalSteps ? (<Button type="button" className="flex-1" onClick={goToNextUserStep}>
+              Suivant
+            </Button>) : (<Button onClick={handleSubmit} className="flex-1">
+              {editingUser ? 'Modifier' : 'Créer'}
+            </Button>)}
+        </div>
+      </div>);
+    const renderStoreSelection = () => {
+      if (user?.role === 'admin') {
+        return null;
+      }
+
+      const selectedStoreIds = normalizeStoreIds(formData.storeIds);
+      const associatedStores = stores.filter((store) => selectedStoreIds.includes(store.id));
+      const availableStores = stores.filter((store) => !selectedStoreIds.includes(store.id));
+
+      return (<div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <Label>Magasins associés *</Label>
+          <span className="text-xs text-muted-foreground">
+            {selectedStoreIds.length === 0
+              ? 'Aucun magasin sélectionné'
+              : `${selectedStoreIds.length} magasin${selectedStoreIds.length > 1 ? 's' : ''}`}
+          </span>
+        </div>
+        <div className="max-h-52 space-y-3 overflow-auto rounded-md border border-border/60 p-3">
+          {associatedStores.length === 0 ? (<p className="text-sm text-muted-foreground">Aucun magasin associé.</p>) : (associatedStores.map((store) => (<div key={store.id} className="flex items-center justify-between gap-3 rounded-md border border-transparent px-2 py-1.5 transition hover:border-border hover:bg-muted/40">
+                <span className="text-sm font-medium">{store.name}</span>
+                <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => toggleStoreSelection(store.id, false)} aria-label={`Dissocier ${store.name}`}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>)))}
+        </div>
+        {availableStores.length > 0 && (<div className="space-y-2">
+          <Label>Associer un magasin</Label>
+          <Select key={storePickerKey} onValueChange={addStoreSelection}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choisir un magasin à associer" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableStores.map((store) => (<SelectItem key={store.id} value={store.id}>
+                  {store.name}
+                </SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>)}
+        {selectedStoreIds.length > 0 && (<div className="flex flex-wrap gap-2">
+          {selectedStoreIds.map((storeId) => (<Badge key={storeId} variant="outline">{getStoreName(storeId)}</Badge>))}
+        </div>)}
+      </div>);
     };
     const filteredUsers = users.filter(u => {
         // Filtre de recherche
@@ -397,83 +706,7 @@ export default function Users() {
                 {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="username">Nom d'utilisateur *</Label>
-                <Input id="username" value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="Ex: caissier1"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="phone">Téléphone *</Label>
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-gray-100 px-2 py-1 text-gray-700">+226</span>
-                  <Input id="phone" type="tel" maxLength={8} pattern="[0-9]{8}" value={formData.phone} onChange={(e) => {
-                const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 8);
-                setFormData({ ...formData, phone: val });
-            }} placeholder="XXXXXXXX"/>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="utilisateur@exemple.com"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Mot de passe *</Label>
-                <div className="relative">
-                  <Input id="password" type={showPassword ? 'text' : 'password'} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="••••••••" className="pr-10"/>
-                  <button type="button" className="absolute inset-y-0 right-0 flex items-center pr-3" onClick={() => setShowPassword(!showPassword)}>
-                    {showPassword ? (<EyeOff className="h-4 w-4 text-gray-400"/>) : (<Eye className="h-4 w-4 text-gray-400"/>)}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="pin">PIN (4-8 chiffres)</Label>
-                <div className="relative">
-                  <Input id="pin" type={showPin ? 'text' : 'password'} inputMode="numeric" maxLength={8} value={formData.pin} onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 8) })} placeholder={editingUser ? 'Laisser vide pour conserver le PIN actuel' : 'Ex: 1234'} className="pr-10"/>
-                  <button type="button" className="absolute inset-y-0 right-0 flex items-center pr-3" onClick={() => setShowPin(!showPin)}>
-                    {showPin ? (<EyeOff className="h-4 w-4 text-gray-400"/>) : (<Eye className="h-4 w-4 text-gray-400"/>)}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="role">Rôle *</Label>
-                {(user?.role === 'admin' && editingUser && editingUser.id === user.id) ? (<Input id="role" value="Administrateur" disabled/>) : user?.role === 'admin' ? (<Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cashier">Caissier</SelectItem>
-                      <SelectItem value="manager">Gestionnaire</SelectItem>
-                    </SelectContent>
-                  </Select>) : (<Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cashier">Caissier</SelectItem>
-                      <SelectItem value="manager">Gestionnaire</SelectItem>
-                      <SelectItem value="admin">Administrateur</SelectItem>
-                    </SelectContent>
-                  </Select>)}
-              </div>
-              <div className="space-y-2">
-                {user?.role !== 'admin' && (<>
-                    <Label htmlFor="store">Magasin *</Label>
-                    <Select value={formData.storeId} onValueChange={(v) => setFormData({ ...formData, storeId: v })}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner un magasin"/>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {stores.map(store => (<SelectItem key={store.id} value={store.id}>
-                            {store.name}
-                          </SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                  </>)}
-              </div>
-              <Button onClick={handleSubmit} className="w-full">
-                {editingUser ? 'Modifier' : 'Créer'}
-              </Button>
-            </div>
+            {renderUserDialogForm()}
           </DialogContent>
         </Dialog>
       </div>
@@ -520,7 +753,7 @@ export default function Users() {
       </Card>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {isLoading ? (Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`}>
+        {isLoading ? (Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="overflow-hidden rounded-[28px] border border-slate-200 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center justify-between text-lg">
                   <div className="flex items-center gap-2">
@@ -544,47 +777,7 @@ export default function Users() {
                   <div className="h-9 w-12 animate-pulse rounded bg-gray-200"/>
                 </div>
               </CardContent>
-            </Card>))) : (filteredUsers.map(listUser => (<Card key={listUser.id}>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center justify-between text-lg">
-                  <div className="flex items-center gap-2">
-                    {listUser.role === 'admin' ? (<Shield className="h-5 w-5 text-primary"/>) : (<User className="h-5 w-5 text-primary"/>)}
-                    {listUser.username}
-                  </div>
-                  <Badge variant={listUser.role === 'admin' ? 'default' : listUser.role === 'manager' ? 'outline' : 'secondary'}>
-                    {listUser.role === 'admin' ? 'Admin' : listUser.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-4 text-sm text-muted-foreground">
-                  {listUser.email && (<div className="mb-2">
-                      <span className="font-medium">Email:</span> {listUser.email}
-                    </div>)}
-                  <div>Magasins:</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(() => {
-                const names = getStoreNames(listUser);
-                if (!names || names.length === 0) {
-                    return <span className="text-muted-foreground">Aucun magasin</span>;
-                }
-                return names.map((name, idx) => (<Badge key={idx} className="text-xs">
-                          {name}
-                        </Badge>));
-            })()}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="flex-1" onClick={() => handleEdit(listUser)}>
-                    <Edit className="mr-2 h-4 w-4"/>
-                    Modifier
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(listUser.id)}>
-                    <Trash2 className="h-4 w-4"/>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>)))}
+            </Card>))) : (filteredUsers.map(listUser => (<UserAccountCard key={listUser.id} account={listUser} stores={getStoreNames(listUser)} onEdit={() => handleEdit(listUser)} onDelete={() => handleDelete(listUser.id)} />)))}
       </div>
 
       {!isLoading && users.length === 0 && (<Card className="p-12 text-center">
@@ -633,74 +826,7 @@ export default function Users() {
                 {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="username">Nom d'utilisateur *</Label>
-                <Input id="username" value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="Ex: caissier1"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="phone">Téléphone *</Label>
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-1 bg-gray-100 rounded text-gray-700">+226</span>
-                  <Input id="phone" type="tel" maxLength={8} pattern="[0-9]{8}" value={formData.phone} onChange={(e) => {
-            // N'accepte que des chiffres et max 8 caractères
-            const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 8);
-            setFormData({ ...formData, phone: val });
-        }} placeholder="XXXXXXXX"/>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="utilisateur@exemple.com"/>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Mot de passe *</Label>
-                <div className="relative">
-                  <Input id="password" type={showPassword ? "text" : "password"} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="••••••••" className="pr-10"/>
-                  <button type="button" className="absolute inset-y-0 right-0 pr-3 flex items-center" onClick={() => setShowPassword(!showPassword)}>
-                    {showPassword ? (<EyeOff className="h-4 w-4 text-gray-400"/>) : (<Eye className="h-4 w-4 text-gray-400"/>)}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="pin">PIN (4-8 chiffres)</Label>
-                <div className="relative">
-                  <Input id="pin" type={showPin ? "text" : "password"} inputMode="numeric" maxLength={8} value={formData.pin} onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 8) })} placeholder={editingUser ? 'Laisser vide pour conserver le PIN actuel' : 'Ex: 1234'} className="pr-10"/>
-                  <button type="button" className="absolute inset-y-0 right-0 pr-3 flex items-center" onClick={() => setShowPin(!showPin)}>
-                    {showPin ? (<EyeOff className="h-4 w-4 text-gray-400"/>) : (<Eye className="h-4 w-4 text-gray-400"/>)}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="role">Rôle *</Label>
-                <Select value={formData.role} onValueChange={(v: any) => setFormData({ ...formData, role: v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cashier">Caissier</SelectItem>
-                    <SelectItem value="manager">Gestionnaire</SelectItem>
-                    <SelectItem value="admin">Administrateur</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="store">Magasin *</Label>
-                <Select value={formData.storeId} onValueChange={(v) => setFormData({ ...formData, storeId: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sélectionner un magasin"/>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {stores.map(store => (<SelectItem key={store.id} value={store.id}>
-                        {store.name}
-                      </SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleSubmit} className="w-full">
-                {editingUser ? 'Modifier' : 'Créer'}
-              </Button>
-            </div>
+            {renderUserDialogForm()}
           </DialogContent>
                 </Dialog>
               </div>
@@ -768,79 +894,36 @@ export default function Users() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (
-        // show skeleton cards while loading
-        Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="border-border/60 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center justify-between text-lg">
-                  <div className="flex items-center gap-2">
-                    <div className="w-5 h-5 bg-gray-200 rounded"/>
-                    <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"/>
-                  </div>
-                  <div className="h-4 bg-gray-200 rounded w-12 animate-pulse"/>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-sm text-muted-foreground mb-4">
-                  <div className="h-3 bg-gray-200 rounded w-24 animate-pulse mb-2"/>
-                  <div className="flex flex-wrap gap-2">
-                    <div className="h-6 w-20 bg-gray-200 rounded animate-pulse"/>
-                    <div className="h-6 w-16 bg-gray-200 rounded animate-pulse"/>
-                    <div className="h-6 w-24 bg-gray-200 rounded animate-pulse"/>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <div className="h-9 flex-1 bg-gray-200 rounded animate-pulse"/>
-                  <div className="h-9 w-12 bg-gray-200 rounded animate-pulse"/>
-                </div>
-              </CardContent>
-            </Card>))) : (filteredUsers.map(user => (<Card key={user.id} className="overflow-hidden rounded-2xl border border-border/60 shadow-sm transition hover:shadow-md">
-              <div className="border-b border-border/60 bg-gradient-to-r from-slate-50 to-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                      {user.role === 'admin' ? (<Shield className="h-5 w-5"/>) : (<User className="h-5 w-5"/>)}
+          Array.from({ length: 6 }).map((_, i) => (<Card key={`skeleton-${i}`} className="overflow-hidden rounded-[28px] border border-slate-200 shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center justify-between text-lg">
+                    <div className="flex items-center gap-2">
+                      <div className="w-5 h-5 bg-gray-200 rounded"/>
+                      <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"/>
                     </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-base font-semibold">{user.username}</div>
-                      <div className="text-xs text-muted-foreground">{user.phone}</div>
+                    <div className="h-4 bg-gray-200 rounded w-12 animate-pulse"/>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-4 text-sm text-muted-foreground">
+                    <div className="h-3 bg-gray-200 rounded w-24 animate-pulse mb-2"/>
+                    <div className="flex flex-wrap gap-2">
+                      <div className="h-6 w-20 bg-gray-200 rounded animate-pulse"/>
+                      <div className="h-6 w-16 bg-gray-200 rounded animate-pulse"/>
+                      <div className="h-6 w-24 bg-gray-200 rounded animate-pulse"/>
                     </div>
                   </div>
-                  <Badge variant={user.role === 'admin' ? 'default' : user.role === 'manager' ? 'outline' : 'secondary'} className="shrink-0">
-                    {user.role === 'admin' ? 'Admin' : user.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
-                  </Badge>
-                </div>
-              </div>
-              <CardContent className="p-4">
-                <div className="mb-4 space-y-3 text-sm text-muted-foreground">
-                  {user.email && (<div className="mb-2">
-                      <span className="font-medium">Email:</span> {user.email}
-                    </div>)}
-                  <div>Magasins:</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(() => {
-                const names = getStoreNames(user);
-                if (!names || names.length === 0) {
-                    return <span className="text-muted-foreground">Aucun magasin</span>;
-                }
-                return names.map((n, idx) => (<Badge key={idx} className="text-xs">
-                          {n}
-                        </Badge>));
-            })()}
+                  <div className="flex gap-2">
+                    <div className="h-9 flex-1 bg-gray-200 rounded animate-pulse"/>
+                    <div className="h-9 w-12 bg-gray-200 rounded animate-pulse"/>
                   </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="flex-1" onClick={() => handleEdit(user)}>
-                    <Edit className="w-4 h-4 mr-2"/>
-                    Modifier
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(user.id)}>
-                    <Trash2 className="w-4 h-4"/>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>)))}
+                </CardContent>
+              </Card>))
+        ) : (
+          filteredUsers.map((listUser) => (<UserAccountCard key={listUser.id} account={listUser} stores={getStoreNames(listUser)} onEdit={() => handleEdit(listUser)} onDelete={() => handleDelete(listUser.id)} />))
+        )}
       </div>
 
       {!isLoading && users.length === 0 && (<Card className="p-12 text-center">

@@ -121,7 +121,7 @@ export default function Layout({ children }: LayoutProps) {
             <ShoppingCart className="w-5 h-5 text-primary-foreground"/>
           </div>
           <div>
-            <h2 className="font-bold text-sidebar-foreground">Système POS</h2>
+            <h2 className="font-bold text-sidebar-foreground">START POS</h2>
             <p className="text-xs text-sidebar-foreground/60">
               {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
             </p>
@@ -193,9 +193,9 @@ export default function Layout({ children }: LayoutProps) {
       </aside>
 
       {/* Main Content */}
-  <div className="flex-1 flex flex-col lg:ml-64 min-h-screen max-h-screen overflow-y-auto">
+    <div className="flex-1 flex flex-col lg:ml-64 min-h-screen max-h-screen overflow-y-auto">
         {/* Mobile Header */}
-        <header className="lg:hidden sticky top-0 z-30 bg-gradient-to-r from-blue-700 to-blue-500 shadow-lg">
+      <header className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-gradient-to-r from-blue-700 to-blue-500 shadow-lg">
           <div className="flex items-center justify-between px-3 py-2.5">
             {/* Left: Menu button */}
             <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
@@ -220,11 +220,10 @@ export default function Layout({ children }: LayoutProps) {
             {/* Right: Network status + sync */}
             <div className="flex items-center gap-2">
               {/* Badge réseau */}
-              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold ${network.isBackendReachable
+              <span className={`inline-flex items-center justify-center w-9 h-9 rounded-lg ${network.isBackendReachable
             ? 'bg-green-500 text-white shadow-sm'
             : 'bg-red-500 text-white shadow-sm'}`} title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'} aria-live="polite">
                 <Wifi className="w-4 h-4"/>
-                <span>{network.isBackendReachable ? '' : ''}</span>
               </span>
 
               <NotificationBell buttonClassName="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/30 bg-white/25 p-0 text-white hover:bg-white/40" iconClassName="h-5 w-5"/>
@@ -245,7 +244,7 @@ export default function Layout({ children }: LayoutProps) {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1">
+        <main className="flex-1 pt-[60px] lg:pt-0">
           {children}
         </main>
       </div>

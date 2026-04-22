@@ -643,7 +643,7 @@ export default function POS() {
             return;
         }
         if (!activeShift) {
-            toast.error('Veuillez ouvrir un shift avant de faire une vente');
+            toast.error('Veuillez ouvrir un service avant de faire une vente');
             return;
         }
         if (cart.length === 0) {
@@ -957,11 +957,11 @@ export default function POS() {
         return (<div className="p-6 flex items-center justify-center min-h-[80vh]">
         <Card className="max-w-md w-full">
           <CardHeader>
-            <CardTitle>Aucun shift actif</CardTitle>
+            <CardTitle>Aucun service actif</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-muted-foreground mb-4">
-              Vous devez ouvrir un shift avant de pouvoir effectuer des ventes.
+              Vous devez ouvrir un service avant de pouvoir effectuer des ventes.
             </p>
             <Button onClick={() => {
                 // Client-side navigation to avoid full page reload which triggers PIN flow
@@ -972,7 +972,7 @@ export default function POS() {
                     window.location.href = '/shifts';
                 }
             }} className="w-full">
-              Ouvrir un shift
+              Ouvrir un service
             </Button>
           </CardContent>
         </Card>

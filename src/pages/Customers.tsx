@@ -54,7 +54,8 @@ export default function Customers() {
     const [searchTerm, setSearchTerm] = useState('');
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+    const [isMutatingCustomer, setIsMutatingCustomer] = useState(false);
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
     const [formData, setFormData] = useState({
         name: '',
@@ -101,8 +102,29 @@ export default function Customers() {
         }
         setSalesByCustomer(byCustomer);
     };
+    const getOrderedCustomers = async (db: any) => {
+        const allCustomers = await db.getAll('customers');
+        const normalizedCustomers = allCustomers.map((customer: any) => ({ ...customer, storeId: customer.storeId || '' }));
+        const storeCustomers = user?.storeId
+            ? normalizedCustomers.filter((customer: any) => customer.storeId === user.storeId)
+            : normalizedCustomers;
+
+        storeCustomers.sort((a: any, b: any) => b.createdAt - a.createdAt);
+        return storeCustomers as Customer[];
+    };
+    const refreshCustomersFromLocal = async (db: any, visibleCount = pageSize) => {
+        const orderedCustomers = await getOrderedCustomers(db);
+        const nextVisibleCount = Math.max(visibleCount, pageSize);
+        const nextCustomers = orderedCustomers.slice(0, nextVisibleCount);
+
+        setCustomers(nextCustomers);
+        setLoadedCount(nextCustomers.length);
+        setHasMore(orderedCustomers.length > nextCustomers.length);
+
+        return nextCustomers;
+    };
     const loadCustomers = async () => {
-        setLoading(true);
+        setIsLoadingCustomers(true);
         try {
             const db = await getDB();
             // Si en ligne, charger depuis le backend et synchroniser
@@ -114,7 +136,10 @@ export default function Customers() {
                         url += `?storeId=${user.storeId}`;
                     const response = await fetch(url);
                     if (response.ok) {
-                        const backendCustomers = await response.json();
+                        const backendCustomersResponse = await response.json();
+                        const backendCustomers = Array.isArray(backendCustomersResponse)
+                            ? backendCustomersResponse
+                            : backendCustomersResponse.data || [];
                         // Filtrer côté client aussi pour sécurité
                         const storeCustomers = backendCustomers.filter((c: any) => !user?.storeId || c.storeId === user.storeId);
                         // Mettre à jour la base locale et supprimer les clients effacés côté backend
@@ -137,6 +162,9 @@ export default function Customers() {
                         setHasMore(true);
                         await loadCustomersPage(db, 0, pageSize, true);
                     }
+                    else {
+                        await loadCustomersPage(db, 0, pageSize, true);
+                    }
                 }
                 catch (error) {
                     // En cas d'erreur, charger depuis la base locale (paged)
@@ -154,7 +182,7 @@ export default function Customers() {
             toast.error('Erreur lors du chargement des clients');
         }
         finally {
-            setLoading(false);
+            setIsLoadingCustomers(false);
         }
     };
     const loadFromLocal = async (db: any) => {
@@ -162,15 +190,8 @@ export default function Customers() {
     };
     const loadCustomersPage = async (db: any, offset: number, limit: number, reset = false) => {
         try {
-            const store = db.transaction('customers').objectStore('customers');
-            const results: any[] = [];
-            // No index for createdAt in customers; fallback to getAll
-            const all = await db.getAll('customers');
-            const normalized = all.map((c: any) => ({ ...c, storeId: c.storeId || '' }));
-            // optionally filter by store
-            const filtered = user?.storeId ? normalized.filter((c: any) => c.storeId === user.storeId) : normalized;
-            filtered.sort((a: any, b: any) => b.createdAt - a.createdAt);
-            const page = filtered.slice(offset, offset + limit);
+            const orderedCustomers = await getOrderedCustomers(db);
+            const page = orderedCustomers.slice(offset, offset + limit);
             if (reset) {
                 setCustomers(page);
                 setLoadedCount(page.length);
@@ -179,23 +200,19 @@ export default function Customers() {
                 setCustomers(prev => [...prev, ...page]);
                 setLoadedCount(prev => prev + page.length);
             }
-            setHasMore(page.length === limit);
-            setFilteredCustomers(reset ? page : [...customers, ...page]);
+            setHasMore(orderedCustomers.length > offset + page.length);
             return page;
         }
         catch (e) {
             // fallback
-            const all = await db.getAll('customers');
-            const normalized = all.map((c: any) => ({ ...c, storeId: c.storeId || '' }));
-            const filtered = user?.storeId ? normalized.filter((c: any) => c.storeId === user.storeId) : normalized;
-            filtered.sort((a: any, b: any) => b.createdAt - a.createdAt);
-            const page = filtered.slice(offset, offset + limit);
+            const orderedCustomers = await getOrderedCustomers(db);
+            const page = orderedCustomers.slice(offset, offset + limit);
             if (reset)
                 setCustomers(page);
             else
                 setCustomers(prev => [...prev, ...page]);
-            setHasMore(page.length === limit);
-            setFilteredCustomers(reset ? page : [...customers, ...page]);
+            setLoadedCount(reset ? page.length : offset + page.length);
+            setHasMore(orderedCustomers.length > offset + page.length);
             return page;
         }
     };
@@ -247,7 +264,7 @@ export default function Customers() {
             return;
         }
         try {
-            setLoading(true);
+            setIsMutatingCustomer(true);
             const db = await getDB();
             if (editingCustomer) {
                 // Modification
@@ -259,6 +276,7 @@ export default function Customers() {
                 };
                 // Sauvegarder localement d'abord
                 await db.put('customers', updated);
+                await refreshCustomersFromLocal(db, Math.max(loadedCount, pageSize));
                 // Si en ligne, synchroniser immédiatement avec le backend
                 if (isBackendReachable) {
                     try {
@@ -314,6 +332,7 @@ export default function Customers() {
                 };
                 // Sauvegarder localement d'abord
                 await db.add('customers', newCustomer);
+                await refreshCustomersFromLocal(db, Math.max(loadedCount + 1, pageSize));
                 // Si en ligne, synchroniser immédiatement avec le backend
                 if (isBackendReachable) {
                     try {
@@ -359,13 +378,13 @@ export default function Customers() {
             }
             setIsDialogOpen(false);
             resetForm();
-            loadCustomers();
+            await updatePendingSyncCount(db);
         }
         catch (error) {
             toast.error('Erreur lors de l\'enregistrement');
         }
         finally {
-            setLoading(false);
+            setIsMutatingCustomer(false);
         }
     };
     const handleEdit = (customer: Customer) => {
@@ -383,9 +402,10 @@ export default function Customers() {
         if (!confirm('Êtes-vous sûr de vouloir supprimer ce client ?'))
             return;
         try {
-            setLoading(true);
+            setIsMutatingCustomer(true);
             const db = await getDB();
             await db.delete('customers', id);
+            await refreshCustomersFromLocal(db, Math.max(loadedCount, pageSize));
             // Si en ligne, synchroniser immédiatement avec le backend
             if (isBackendReachable) {
                 try {
@@ -427,13 +447,13 @@ export default function Customers() {
                 });
                 toast.success('Client supprimé (mode hors ligne)');
             }
-            loadCustomers();
+            await updatePendingSyncCount(db);
         }
         catch (error) {
             toast.error('Erreur lors de la suppression');
         }
         finally {
-            setLoading(false);
+            setIsMutatingCustomer(false);
         }
     };
     const resetForm = () => {
@@ -453,7 +473,7 @@ export default function Customers() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold">Clients</h1>
-            {loading && (<div className="flex items-center text-sm text-muted-foreground">
+                        {(isLoadingCustomers || isMutatingCustomer) && (<div className="flex items-center text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin"/>
               </div>)}
           </div>
@@ -516,11 +536,11 @@ export default function Customers() {
                 <Textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} rows={3}/>
               </div>
               <div className="flex gap-2">
-                <Button type="button" variant="outline" className="w-1/2" onClick={() => setIsDialogOpen(false)} disabled={loading}>
+                                <Button type="button" variant="outline" className="w-1/2" onClick={() => setIsDialogOpen(false)} disabled={isMutatingCustomer}>
                   Annuler
                 </Button>
-                <Button type="submit" className="w-1/2" disabled={loading}>
-                  {loading ? 'Traitement...' : (editingCustomer ? 'Mettre à jour' : 'Créer')}
+                                <Button type="submit" className="w-1/2" disabled={isMutatingCustomer}>
+                                    {isMutatingCustomer ? 'Traitement...' : (editingCustomer ? 'Mettre à jour' : 'Créer')}
                 </Button>
               </div>
             </form>
@@ -550,7 +570,7 @@ export default function Customers() {
       <Card>
         <CardContent className="p-0">
                     {isMobile ? (<div className="space-y-3 p-3">
-                            {loading ? (Array.from({ length: 6 }).map((_, i) => (<div key={`mobile-skeleton-${i}`} className="rounded-2xl border p-4">
+                                                        {isLoadingCustomers && customers.length === 0 ? (Array.from({ length: 6 }).map((_, i) => (<div key={`mobile-skeleton-${i}`} className="rounded-2xl border p-4">
                                         <div className="animate-pulse space-y-3">
                                             <div className="h-5 w-32 rounded bg-gray-200"/>
                                             <div className="h-4 w-24 rounded bg-gray-200"/>
@@ -607,10 +627,10 @@ export default function Customers() {
                                                 </div>
 
                                                 <div className="grid grid-cols-3 gap-2 pt-1">
-                                                    <Button variant="ghost" className="h-10" onClick={() => handleEdit(customer)} title="Modifier" disabled={loading}>
+                                                    <Button variant="ghost" className="h-10" onClick={() => handleEdit(customer)} title="Modifier" disabled={isMutatingCustomer}>
                                                         <Edit className="w-4 h-4"/>
                                                     </Button>
-                                                    <Button variant="ghost" className="h-10" onClick={() => handleDelete(customer.id)} title="Supprimer" disabled={loading}>
+                                                    <Button variant="ghost" className="h-10" onClick={() => handleDelete(customer.id)} title="Supprimer" disabled={isMutatingCustomer}>
                                                         <Trash2 className="w-4 h-4"/>
                                                     </Button>
                                                     <Button variant="outline" className="h-10" title="Voir les reçus du client" onClick={() => navigate(`/customer-receipts/${customer.id}`)}>
@@ -638,7 +658,7 @@ export default function Customers() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loading ? (Array.from({ length: 6 }).map((_, i) => (<TableRow key={`skeleton-${i}`}>
+                                {isLoadingCustomers && customers.length === 0 ? (Array.from({ length: 6 }).map((_, i) => (<TableRow key={`skeleton-${i}`}>
                       <TableCell colSpan={7} className="py-8">
                         <div className="flex items-center gap-3 animate-pulse">
                           <div className="h-5 bg-gray-200 rounded w-32"/>
@@ -685,10 +705,10 @@ export default function Customers() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)} title="Modifier" disabled={loading}>
+                                                        <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)} title="Modifier" disabled={isMutatingCustomer}>
                               <Edit className="w-4 h-4"/>
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleDelete(customer.id)} title="Supprimer" disabled={loading}>
+                                                        <Button variant="ghost" size="icon" onClick={() => handleDelete(customer.id)} title="Supprimer" disabled={isMutatingCustomer}>
                               <Trash2 className="w-4 h-4"/>
                             </Button>
                             <Button variant="outline" size="icon" title="Voir les reçus du client" onClick={() => navigate(`/customer-receipts/${customer.id}`)}>

@@ -1,12 +1,14 @@
 import { BACKEND_BASE } from '@/lib/backend';
-import { performSyncOp } from '@/lib/db';
+import { getDB, performSyncOp } from '@/lib/db';
 import { getEmailSettings, type StoreAlertSettings } from '@/lib/emailSettingsCache';
+import { pendingEmailService } from '@/lib/pendingEmailService';
 
 type NotificationSeverity = 'info' | 'success' | 'warning' | 'critical';
 
 export type AutomatedStoreAdminEvent =
     | 'shift'
     | 'stockSignal'
+    | 'stockAdjustment'
     | 'expense'
     | 'login'
     | 'refund'
@@ -16,6 +18,7 @@ export type AutomatedStoreAdminEvent =
 type InboxSettingKey =
     | 'inboxShifts'
     | 'inboxStockSignals'
+    | 'inboxStockAdjustments'
     | 'inboxExpenses'
     | 'inboxLogins'
     | 'inboxRefunds'
@@ -27,6 +30,7 @@ const AUTOMATED_NOTIFICATIONS_API = `${BACKEND_BASE}/api/notifications.php`;
 const EVENT_TO_SETTING_KEY: Record<AutomatedStoreAdminEvent, InboxSettingKey> = {
     shift: 'inboxShifts',
     stockSignal: 'inboxStockSignals',
+    stockAdjustment: 'inboxStockAdjustments',
     expense: 'inboxExpenses',
     login: 'inboxLogins',
     refund: 'inboxRefunds',
@@ -56,6 +60,124 @@ function getStockLevelState(stock: number, minStock?: number | null) {
         return 'low';
     }
     return 'ok';
+}
+
+async function sendStockThresholdEmail(options: {
+        senderUserId: string;
+        storeId: string;
+        productName: string;
+        unit?: string;
+        minStock?: number | null;
+        previousStock: number;
+        nextStock: number;
+        actorName?: string;
+        contextLabel?: string;
+}) {
+        const settings = await getEmailSettings(options.storeId);
+        const eventKey = options.nextStock <= 0 ? 'outOfStockEmails' : 'lowStockEmails';
+        if (settings[eventKey] === false) {
+                return { sent: false, queued: false, skipped: true, reason: 'disabled' };
+        }
+
+        const db = await getDB();
+        const store = await db.get('stores', options.storeId);
+        const storeName = store?.name || options.storeId || 'Magasin';
+        const thresholdLabel = options.nextStock <= 0 ? 'Rupture de stock' : 'Stock faible';
+        const actorLabel = options.actorName || 'Un utilisateur';
+        const contextLine = options.contextLabel ? `<div class="info-row"><span class="info-label">Contexte :&nbsp;</span><span class="info-value">${options.contextLabel}</span></div>` : '';
+        const thresholdLine = options.nextStock <= 0
+                ? ''
+                : `<div class="info-row"><span class="info-label">Seuil minimum :&nbsp;</span><span class="info-value">${formatQuantity(Number(options.minStock || 0), options.unit)}</span></div>`;
+        const resume = `
+<div style="margin: 20px 0;">
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">${options.nextStock <= 0 ? '🚨' : '⚠️'} ${thresholdLabel}</h3>
+        <div class="info-row">
+            <span class="info-label">Magasin :&nbsp;</span>
+            <span class="info-value">${storeName}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Produit :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600;">${options.productName}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Action par :&nbsp;</span>
+            <span class="info-value">${actorLabel}</span>
+        </div>
+        ${contextLine}
+        <div class="info-row">
+            <span class="info-label">Stock précédent :&nbsp;</span>
+            <span class="info-value">${formatQuantity(options.previousStock, options.unit)}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Stock actuel :&nbsp;</span>
+            <span class="info-value" style="font-weight: 600; color: ${options.nextStock <= 0 ? '#dc2626' : '#d97706'};">${formatQuantity(options.nextStock, options.unit)}</span>
+        </div>
+        ${thresholdLine}
+    </div>
+</div>
+`;
+
+        return pendingEmailService.sendToAllAdmins({
+                message: resume,
+                storeName,
+                type: 'stock',
+                relatedId: options.productName,
+                storeId: options.storeId,
+                userId: options.senderUserId,
+        });
+}
+
+export async function sendStockAdjustmentEmail(options: {
+        senderUserId: string;
+        storeId: string;
+        actorName?: string;
+        storeName?: string;
+        adjustmentCount: number;
+        previewText: string;
+        reason?: string;
+}) {
+        const settings = await getEmailSettings(options.storeId);
+        if (settings.stockAdjustments === false) {
+                return { sent: false, queued: false, skipped: true, reason: 'disabled' };
+        }
+
+        const db = await getDB();
+        const store = await db.get('stores', options.storeId);
+        const storeName = options.storeName || store?.name || options.storeId || 'Magasin';
+        const resume = `
+<div style="margin: 20px 0;">
+    <div class="info-block">
+        <h3 style="margin: 0 0 15px 0; color: #667eea; font-size: 18px;">📦 Ajustement de stock</h3>
+        <div class="info-row">
+            <span class="info-label">Magasin :&nbsp;</span>
+            <span class="info-value">${storeName}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Action par :&nbsp;</span>
+            <span class="info-value">${options.actorName || 'Un utilisateur'}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Produits ajustés :&nbsp;</span>
+            <span class="info-value">${options.adjustmentCount}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Résumé :&nbsp;</span>
+            <span class="info-value">${options.previewText}</span>
+        </div>
+        ${options.reason ? `<div class="info-row"><span class="info-label">Motif :&nbsp;</span><span class="info-value">${options.reason}</span></div>` : ''}
+    </div>
+</div>
+`;
+
+        return pendingEmailService.sendToAllAdmins({
+                message: resume,
+                storeName,
+                type: 'stock',
+                relatedId: `stock-adjustment-${Date.now()}`,
+                storeId: options.storeId,
+                userId: options.senderUserId,
+        });
 }
 
 export async function sendStoreAdminNotification(options: {
@@ -128,7 +250,7 @@ export async function notifyStockThresholdChange(options: {
     const contextSuffix = options.contextLabel ? ` ${options.contextLabel}.` : '';
 
     if (nextState === 'out') {
-        return sendStoreAdminNotification({
+        const result = await sendStoreAdminNotification({
             event: 'outOfStock',
             senderUserId: options.senderUserId,
             storeId: options.storeId,
@@ -137,9 +259,17 @@ export async function notifyStockThresholdChange(options: {
             title: `Rupture de stock: ${options.productName}`,
             message: `${options.productName} est maintenant en rupture de stock.${contextSuffix} Stock précédent: ${formatQuantity(options.previousStock, options.unit)}. Stock actuel: ${formatQuantity(options.nextStock, options.unit)}.${actorSuffix}`.trim(),
         });
+
+        try {
+            await sendStockThresholdEmail(options);
+        }
+        catch {
+        }
+
+        return result;
     }
 
-    return sendStoreAdminNotification({
+    const result = await sendStoreAdminNotification({
         event: 'lowStock',
         senderUserId: options.senderUserId,
         storeId: options.storeId,
@@ -148,4 +278,12 @@ export async function notifyStockThresholdChange(options: {
         title: `Stock faible: ${options.productName}`,
         message: `${options.productName} est passé en stock faible.${contextSuffix} Stock actuel: ${formatQuantity(options.nextStock, options.unit)}. Seuil configuré: ${formatQuantity(Number(options.minStock || 0), options.unit)}. Stock précédent: ${formatQuantity(options.previousStock, options.unit)}.${actorSuffix}`.trim(),
     });
+
+    try {
+        await sendStockThresholdEmail(options);
+    }
+    catch {
+    }
+
+    return result;
 }

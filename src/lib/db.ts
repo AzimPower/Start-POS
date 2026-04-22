@@ -117,11 +117,15 @@ interface POSDB extends DBSchema {
             storeId: string;
             shifts: boolean;
             stockSignals: boolean;
+            stockAdjustments: boolean;
             expenses: boolean;
             logins: boolean;
             refunds: boolean;
+            lowStockEmails: boolean;
+            outOfStockEmails: boolean;
             inboxShifts: boolean;
             inboxStockSignals: boolean;
+            inboxStockAdjustments: boolean;
             inboxExpenses: boolean;
             inboxLogins: boolean;
             inboxRefunds: boolean;

@@ -642,7 +642,7 @@ export default function Receipts() {
             </div>
             <div className="flex items-center gap-2">
               <div className="text-sm text-muted-foreground hidden sm:block">
-                {loadedCount} chargés
+                {loadedCount} reçus chargés
               </div>
             </div>
           </div>

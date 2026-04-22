@@ -580,7 +580,6 @@ export default function CustomerReceipts() {
                                         <p className="text-xs text-muted-foreground sm:text-sm">Montant encaissé</p>
                                         <p className="mt-2 text-lg font-semibold sm:text-2xl">{formatCurrency(totalRevenue)}</p>
                                     </div>
-                                    <Badge variant="secondary" className="mt-1 text-[10px] sm:text-xs">Net</Badge>
                                 </div>
                             </div>
 
@@ -600,9 +599,6 @@ export default function CustomerReceipts() {
                                         <p className="text-xs text-muted-foreground sm:text-sm">Remboursements</p>
                                         <p className="mt-2 text-xl font-semibold sm:text-2xl">{refundedCount}</p>
                                     </div>
-                                    <Badge variant={refundedCount > 0 ? 'destructive' : 'outline'} className="mt-1 text-[10px] sm:text-xs">
-                                        {refundedCount > 0 ? 'À surveiller' : 'Aucun'}
-                                    </Badge>
                                 </div>
                             </div>
                         </CardContent>

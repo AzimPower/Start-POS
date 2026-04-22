@@ -10,11 +10,15 @@ const CACHE_TTL_MS = 60000; // 60 secondes
 export interface StoreAlertSettings {
     shifts: boolean;
     stockSignals: boolean;
+    stockAdjustments: boolean;
     expenses: boolean;
     logins: boolean;
     refunds: boolean;
+    lowStockEmails: boolean;
+    outOfStockEmails: boolean;
     inboxShifts: boolean;
     inboxStockSignals: boolean;
+    inboxStockAdjustments: boolean;
     inboxExpenses: boolean;
     inboxLogins: boolean;
     inboxRefunds: boolean;
@@ -24,11 +28,15 @@ export interface StoreAlertSettings {
 export const DEFAULT_STORE_ALERT_SETTINGS: StoreAlertSettings = {
     shifts: true,
     stockSignals: true,
+    stockAdjustments: true,
     expenses: true,
     logins: true,
     refunds: true,
+    lowStockEmails: true,
+    outOfStockEmails: true,
     inboxShifts: true,
     inboxStockSignals: true,
+    inboxStockAdjustments: true,
     inboxExpenses: true,
     inboxLogins: true,
     inboxRefunds: true,
@@ -72,11 +80,15 @@ function normalizeSettings(data: any, fallback: StoreAlertSettings = DEFAULT_STO
     return {
         shifts: normalizeBooleanSetting(data, 'shifts', fallback.shifts),
         stockSignals: normalizeBooleanSetting(data, 'stockSignals', fallback.stockSignals),
+        stockAdjustments: normalizeBooleanSetting(data, 'stockAdjustments', fallback.stockAdjustments),
         expenses: normalizeBooleanSetting(data, 'expenses', fallback.expenses),
         logins: normalizeBooleanSetting(data, 'logins', fallback.logins),
         refunds: normalizeBooleanSetting(data, 'refunds', fallback.refunds),
+        lowStockEmails: normalizeBooleanSetting(data, 'lowStockEmails', fallback.lowStockEmails),
+        outOfStockEmails: normalizeBooleanSetting(data, 'outOfStockEmails', fallback.outOfStockEmails),
         inboxShifts: normalizeBooleanSetting(data, 'inboxShifts', fallback.inboxShifts),
         inboxStockSignals: normalizeBooleanSetting(data, 'inboxStockSignals', fallback.inboxStockSignals),
+        inboxStockAdjustments: normalizeBooleanSetting(data, 'inboxStockAdjustments', fallback.inboxStockAdjustments),
         inboxExpenses: normalizeBooleanSetting(data, 'inboxExpenses', fallback.inboxExpenses),
         inboxLogins: normalizeBooleanSetting(data, 'inboxLogins', fallback.inboxLogins),
         inboxRefunds: normalizeBooleanSetting(data, 'inboxRefunds', fallback.inboxRefunds),

@@ -19,11 +19,15 @@ function format_settings_row(array $row) {
         'storeId' => $row['store_id'] ?? null,
         'shifts' => !empty($row['shifts']),
         'stockSignals' => !empty($row['stock_signals']),
+        'stockAdjustments' => !array_key_exists('stock_adjustments', $row) || !empty($row['stock_adjustments']),
         'expenses' => !empty($row['expenses']),
         'logins' => !empty($row['logins']),
         'refunds' => !empty($row['refunds']),
+        'lowStockEmails' => !array_key_exists('low_stock_emails', $row) || !empty($row['low_stock_emails']),
+        'outOfStockEmails' => !array_key_exists('out_of_stock_emails', $row) || !empty($row['out_of_stock_emails']),
         'inboxShifts' => !array_key_exists('inbox_shifts', $row) || !empty($row['inbox_shifts']),
         'inboxStockSignals' => !array_key_exists('inbox_stock_signals', $row) || !empty($row['inbox_stock_signals']),
+        'inboxStockAdjustments' => !array_key_exists('inbox_stock_adjustments', $row) || !empty($row['inbox_stock_adjustments']),
         'inboxExpenses' => !array_key_exists('inbox_expenses', $row) || !empty($row['inbox_expenses']),
         'inboxLogins' => !array_key_exists('inbox_logins', $row) || !empty($row['inbox_logins']),
         'inboxRefunds' => !array_key_exists('inbox_refunds', $row) || !empty($row['inbox_refunds']),
@@ -39,11 +43,15 @@ function default_settings_payload($storeId) {
         'storeId' => $storeId,
         'shifts' => true,
         'stockSignals' => true,
+        'stockAdjustments' => true,
         'expenses' => true,
         'logins' => true,
         'refunds' => true,
+        'lowStockEmails' => true,
+        'outOfStockEmails' => true,
         'inboxShifts' => true,
         'inboxStockSignals' => true,
+        'inboxStockAdjustments' => true,
         'inboxExpenses' => true,
         'inboxLogins' => true,
         'inboxRefunds' => true,
@@ -89,11 +97,15 @@ try {
             $storeId = $input['storeId'];
             $shifts = isset($input['shifts']) ? (int)$input['shifts'] : 1;
             $stockSignals = isset($input['stockSignals']) ? (int)$input['stockSignals'] : 1;
+            $stockAdjustments = isset($input['stockAdjustments']) ? (int)$input['stockAdjustments'] : 1;
             $expenses = isset($input['expenses']) ? (int)$input['expenses'] : 1;
             $logins = isset($input['logins']) ? (int)$input['logins'] : 1;
             $refunds = isset($input['refunds']) ? (int)$input['refunds'] : 1;
+            $lowStockEmails = isset($input['lowStockEmails']) ? (int)$input['lowStockEmails'] : 1;
+            $outOfStockEmails = isset($input['outOfStockEmails']) ? (int)$input['outOfStockEmails'] : 1;
             $inboxShifts = isset($input['inboxShifts']) ? (int)$input['inboxShifts'] : 1;
             $inboxStockSignals = isset($input['inboxStockSignals']) ? (int)$input['inboxStockSignals'] : 1;
+            $inboxStockAdjustments = isset($input['inboxStockAdjustments']) ? (int)$input['inboxStockAdjustments'] : 1;
             $inboxExpenses = isset($input['inboxExpenses']) ? (int)$input['inboxExpenses'] : 1;
             $inboxLogins = isset($input['inboxLogins']) ? (int)$input['inboxLogins'] : 1;
             $inboxRefunds = isset($input['inboxRefunds']) ? (int)$input['inboxRefunds'] : 1;
@@ -110,19 +122,24 @@ try {
                 // Update existing record
                 $stmt = $pdo->prepare("
                     UPDATE email_settings 
-                    SET shifts = ?, stock_signals = ?, expenses = ?, logins = ?, refunds = ?,
-                        inbox_shifts = ?, inbox_stock_signals = ?, inbox_expenses = ?, inbox_logins = ?, inbox_refunds = ?,
+                    SET shifts = ?, stock_signals = ?, stock_adjustments = ?, expenses = ?, logins = ?, refunds = ?,
+                        low_stock_emails = ?, out_of_stock_emails = ?,
+                        inbox_shifts = ?, inbox_stock_signals = ?, inbox_stock_adjustments = ?, inbox_expenses = ?, inbox_logins = ?, inbox_refunds = ?,
                         inbox_low_stock = ?, inbox_out_of_stock = ?, updated_at = ?
                     WHERE store_id = ?
                 ");
                 $stmt->execute([
                     $shifts,
                     $stockSignals,
+                    $stockAdjustments,
                     $expenses,
                     $logins,
                     $refunds,
+                    $lowStockEmails,
+                    $outOfStockEmails,
                     $inboxShifts,
                     $inboxStockSignals,
+                    $inboxStockAdjustments,
                     $inboxExpenses,
                     $inboxLogins,
                     $inboxRefunds,
@@ -137,22 +154,27 @@ try {
                 $id = uniqid();
                 $stmt = $pdo->prepare("
                     INSERT INTO email_settings (
-                        id, store_id, shifts, stock_signals, expenses, logins, refunds,
-                        inbox_shifts, inbox_stock_signals, inbox_expenses, inbox_logins, inbox_refunds,
+                        id, store_id, shifts, stock_signals, stock_adjustments, expenses, logins, refunds,
+                        low_stock_emails, out_of_stock_emails,
+                        inbox_shifts, inbox_stock_signals, inbox_stock_adjustments, inbox_expenses, inbox_logins, inbox_refunds,
                         inbox_low_stock, inbox_out_of_stock, updated_at
                     ) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ");
                 $stmt->execute([
                     $id,
                     $storeId,
                     $shifts,
                     $stockSignals,
+                    $stockAdjustments,
                     $expenses,
                     $logins,
                     $refunds,
+                    $lowStockEmails,
+                    $outOfStockEmails,
                     $inboxShifts,
                     $inboxStockSignals,
+                    $inboxStockAdjustments,
                     $inboxExpenses,
                     $inboxLogins,
                     $inboxRefunds,
@@ -167,11 +189,15 @@ try {
                 'storeId' => $storeId,
                 'shifts' => (bool)$shifts,
                 'stockSignals' => (bool)$stockSignals,
+                'stockAdjustments' => (bool)$stockAdjustments,
                 'expenses' => (bool)$expenses,
                 'logins' => (bool)$logins,
                 'refunds' => (bool)$refunds,
+                'lowStockEmails' => (bool)$lowStockEmails,
+                'outOfStockEmails' => (bool)$outOfStockEmails,
                 'inboxShifts' => (bool)$inboxShifts,
                 'inboxStockSignals' => (bool)$inboxStockSignals,
+                'inboxStockAdjustments' => (bool)$inboxStockAdjustments,
                 'inboxExpenses' => (bool)$inboxExpenses,
                 'inboxLogins' => (bool)$inboxLogins,
                 'inboxRefunds' => (bool)$inboxRefunds,

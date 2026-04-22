@@ -7,6 +7,10 @@ type ReceiptSaleLike = {
     receiptNumber?: string | null;
 };
 
+type ReceiptSalesDbLike = {
+    getAll: (storeName: 'sales') => Promise<ReceiptSaleLike[]>;
+};
+
 function toTimestamp(value: ReceiptSaleLike['createdAt']): number {
     if (value instanceof Date) {
         return value.getTime();
@@ -117,7 +121,7 @@ export function formatReceiptNumber(sale: ReceiptSaleLike, sales?: ReceiptSaleLi
     return fallbackId ? `REC${fallbackId.slice(-6)}` : `REC${prefix}`;
 }
 
-export async function assignReceiptMetadata<T extends ReceiptSaleLike>(db: { getAll: (storeName: string) => Promise<ReceiptSaleLike[]>; }, sale: T) {
+export async function assignReceiptMetadata<T extends ReceiptSaleLike>(db: ReceiptSalesDbLike, sale: T) {
     if (isDraftSale(sale)) {
         return sale;
     }

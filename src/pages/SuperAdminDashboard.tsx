@@ -285,7 +285,7 @@ export default function SuperAdminDashboard() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
                     <Activity size={16} className="text-indigo-500"/>
-                    Encaissements abonnements (6 derniers mois)
+                    Encaissements (6 derniers mois)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>

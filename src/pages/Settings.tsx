@@ -1840,6 +1840,14 @@ export default function Settings() {
                     </div>
                                         <Switch checked={emailSettings.stockSignals} onCheckedChange={(checked) => toggleStoreAlertSetting('stockSignals', checked)} disabled={loadingEmailSettings}/>
                   </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Ajustements de stock</p>
+                                            <p className="text-xs text-muted-foreground">Reçoit un email à chaque ajustement manuel de stock</p>
+                                        </div>
+                                                                                <Switch checked={emailSettings.stockAdjustments} onCheckedChange={(checked) => toggleStoreAlertSetting('stockAdjustments', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
                   
                   <div className="flex items-center justify-between">
                     <div>
@@ -1863,6 +1871,22 @@ export default function Settings() {
                       <p className="text-xs text-muted-foreground">Reçoit un email à chaque remboursement de vente</p>
                     </div>
                                         <Switch checked={emailSettings.refunds} onCheckedChange={(checked) => toggleStoreAlertSetting('refunds', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Stock faible</p>
+                                            <p className="text-xs text-muted-foreground">Reçoit un email quand un produit passe sous son seuil minimum</p>
+                                        </div>
+                                                                                <Switch checked={emailSettings.lowStockEmails} onCheckedChange={(checked) => toggleStoreAlertSetting('lowStockEmails', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Rupture de stock</p>
+                                            <p className="text-xs text-muted-foreground">Reçoit un email critique quand un produit tombe à zéro</p>
+                                        </div>
+                                                                                <Switch checked={emailSettings.outOfStockEmails} onCheckedChange={(checked) => toggleStoreAlertSetting('outOfStockEmails', checked)} disabled={loadingEmailSettings}/>
                   </div>
 
                                     <Separator />
@@ -1886,6 +1910,14 @@ export default function Settings() {
                                             <p className="text-xs text-muted-foreground">Créer une notification quand un signalement de stock est envoyé</p>
                                         </div>
                                         <Switch checked={emailSettings.inboxStockSignals} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxStockSignals', checked)} disabled={loadingEmailSettings}/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-sm font-medium">Ajustements de stock</p>
+                                            <p className="text-xs text-muted-foreground">Créer une notification après un ajustement manuel de stock</p>
+                                        </div>
+                                        <Switch checked={emailSettings.inboxStockAdjustments} onCheckedChange={(checked) => toggleStoreAlertSetting('inboxStockAdjustments', checked)} disabled={loadingEmailSettings}/>
                                     </div>
 
                                     <div className="flex items-center justify-between">

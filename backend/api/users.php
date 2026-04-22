@@ -15,19 +15,53 @@ require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+function normalize_store_ids($storeIds, $fallbackStoreId = null) {
+    $normalized = [];
+
+    if (is_array($storeIds)) {
+        foreach ($storeIds as $storeId) {
+            $trimmed = trim((string)$storeId);
+            if ($trimmed !== '') {
+                $normalized[] = $trimmed;
+            }
+        }
+    }
+
+    if (empty($normalized) && $fallbackStoreId !== null) {
+        $trimmedFallback = trim((string)$fallbackStoreId);
+        if ($trimmedFallback !== '') {
+            $normalized[] = $trimmedFallback;
+        }
+    }
+
+    return array_values(array_unique($normalized));
+}
+
 switch ($method) {
     case 'GET':
         // Récupérer tous les utilisateurs et leurs magasins (storeIds)
-        $stmt = $pdo->query('SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt FROM users');
-        $users = $stmt->fetchAll();
+        $requestedStoreId = isset($_GET['storeId']) ? trim((string)$_GET['storeId']) : '';
+        if ($requestedStoreId !== '') {
+            $stmt = $pdo->prepare(
+                'SELECT DISTINCT u.id, u.username, u.phone, u.email, u.password, u.pin, u.pinEnabled, u.role, u.storeId, u.active, u.createdAt
+                 FROM users u
+                 LEFT JOIN user_stores us ON us.userId = u.id
+                 WHERE u.storeId = ? OR us.storeId = ?'
+            );
+            $stmt->execute([$requestedStoreId, $requestedStoreId]);
+            $users = $stmt->fetchAll();
+        } else {
+            $stmt = $pdo->query('SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt FROM users');
+            $users = $stmt->fetchAll();
+        }
         foreach ($users as &$u) {
             try {
                 $ms = $pdo->prepare('SELECT storeId FROM user_stores WHERE userId = ?');
                 $ms->execute([$u['id']]);
                 $mappings = $ms->fetchAll(PDO::FETCH_COLUMN);
-                $u['storeIds'] = $mappings ?: ([]);
+                $u['storeIds'] = normalize_store_ids($mappings, $u['storeId'] ?? null);
             } catch (Exception $e) {
-                $u['storeIds'] = [];
+                $u['storeIds'] = normalize_store_ids([], $u['storeId'] ?? null);
             }
         }
         echo json_encode($users);
@@ -38,13 +72,8 @@ switch ($method) {
         $sql = 'INSERT INTO users (id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
-        // storeId kept for backward compatibility: use first storeId if provided
-        $firstStore = null;
-        if (!empty($data['storeIds']) && is_array($data['storeIds'])) {
-            $firstStore = $data['storeIds'][0] ?? null;
-        } elseif (!empty($data['storeId'])) {
-            $firstStore = $data['storeId'];
-        }
+        $storeIds = normalize_store_ids($data['storeIds'] ?? null, $data['storeId'] ?? null);
+        $firstStore = $storeIds[0] ?? null;
         $stmt->execute([
             $id,
             $data['username'],
@@ -60,8 +89,8 @@ switch ($method) {
         ]);
 
         // If storeIds provided, insert mappings into user_stores
-        if (!empty($data['storeIds']) && is_array($data['storeIds'])) {
-            foreach ($data['storeIds'] as $sid) {
+        if (!empty($storeIds)) {
+            foreach ($storeIds as $sid) {
                 try {
                     $linkId = uniqid();
                     $ins = $pdo->prepare('INSERT INTO user_stores (id, userId, storeId) VALUES (?, ?, ?)');
@@ -71,7 +100,6 @@ switch ($method) {
                 }
             }
         } elseif (!empty($firstStore)) {
-            // legacy single storeId provided
             try {
                 $linkId = uniqid();
                 $ins = $pdo->prepare('INSERT INTO user_stores (id, userId, storeId) VALUES (?, ?, ?)');
@@ -88,12 +116,8 @@ switch ($method) {
         $stmt = $pdo->prepare($sql);
 
         // determine primary store for backward compatibility
-        $firstStore = null;
-        if (!empty($data['storeIds']) && is_array($data['storeIds'])) {
-            $firstStore = $data['storeIds'][0] ?? null;
-        } elseif (isset($data['storeId'])) {
-            $firstStore = $data['storeId'];
-        }
+        $storeIds = normalize_store_ids($data['storeIds'] ?? null, $data['storeId'] ?? null);
+        $firstStore = $storeIds[0] ?? null;
 
         $stmt->execute([
             $data['username'],
@@ -110,11 +134,11 @@ switch ($method) {
         ]);
 
         // Update user_stores mappings if provided
-        if (isset($data['storeIds']) && is_array($data['storeIds'])) {
+        if (isset($data['storeIds']) || isset($data['storeId'])) {
             try {
                 $del = $pdo->prepare('DELETE FROM user_stores WHERE userId = ?');
                 $del->execute([$data['id']]);
-                foreach ($data['storeIds'] as $sid) {
+                foreach ($storeIds as $sid) {
                     $linkId = uniqid();
                     $ins = $pdo->prepare('INSERT INTO user_stores (id, userId, storeId) VALUES (?, ?, ?)');
                     $ins->execute([$linkId, $data['id'], $sid]);

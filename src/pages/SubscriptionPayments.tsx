@@ -327,13 +327,9 @@ export default function SubscriptionPayments() {
         <div className="max-w-7xl mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-3">
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Crown size={16} className="text-yellow-300"/>
-                <span className="text-blue-200 text-sm font-medium">Super Admin</span>
-              </div>
               <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                 <CreditCard size={22}/>
-                Encaissements Abonnements
+                Encaissements
               </h1>
               <p className="text-blue-200 text-sm mt-0.5">
                 Suivi complet des paiements d'abonnements
