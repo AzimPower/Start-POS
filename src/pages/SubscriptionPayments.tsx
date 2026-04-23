@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, } from 'recharts';
-import { CreditCard, RefreshCw, Plus, Trash2, Search, Store, TrendingUp, Calendar, Wallet, ArrowLeft, ChevronLeft, ChevronRight, Crown, Filter, FileDown, AlertTriangle, CheckCircle2, DollarSign, } from 'lucide-react';
+import { CreditCard, RefreshCw, Trash2, Search, Store, TrendingUp, Calendar, Wallet, ArrowLeft, ChevronLeft, ChevronRight, Crown, Filter, FileDown, AlertTriangle, CheckCircle2, DollarSign, } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -68,30 +68,20 @@ export default function SubscriptionPayments() {
     const { user } = useAuth();
     const navigate = useNavigate();
   const isMobile = useIsMobile();
-    // ── Data ──────────────────────────────────────────────────────────────────
+    // -- Data ------------------------------------------------------------------
     const [payments, setPayments] = useState<PaymentRecord[]>([]);
     const [stores, setStores] = useState<StoreData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [lastRefresh, setLastRefresh] = useState(new Date());
-    // ── Filters ───────────────────────────────────────────────────────────────
+    // -- Filters ---------------------------------------------------------------
     const [storeFilter, setStoreFilter] = useState<string>('all');
     const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all');
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
-    // ── Add dialog ────────────────────────────────────────────────────────────
-    const [showAdd, setShowAdd] = useState(false);
-    const [addForm, setAddForm] = useState({
-        storeId: '',
-        months: '1',
-        amount: '',
-        note: '',
-        paidAt: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
-    });
-    const [isSaving, setIsSaving] = useState(false);
-    // ── Delete confirm ────────────────────────────────────────────────────────
+    // -- Delete confirm --------------------------------------------------------
     const [deleteId, setDeleteId] = useState<string | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
-    // ── Load data ─────────────────────────────────────────────────────────────
+    // -- Load data -------------------------------------------------------------
     const loadData = useCallback(async () => {
         setIsLoading(true);
         try {
@@ -126,7 +116,7 @@ export default function SubscriptionPayments() {
         }
         loadData();
     }, [loadData, user, navigate]);
-    // ── Period range ──────────────────────────────────────────────────────────
+    // -- Period range ----------------------------------------------------------
     const periodRange = useMemo<{
         start: number;
         end: number;
@@ -146,7 +136,7 @@ export default function SubscriptionPayments() {
         }
         return null;
     }, [periodFilter]);
-    // ── Filtered payments ─────────────────────────────────────────────────────
+    // -- Filtered payments -----------------------------------------------------
     const filteredPayments = useMemo(() => {
         return payments.filter((p) => {
             if (storeFilter !== 'all' && p.storeId !== storeFilter)
@@ -165,13 +155,13 @@ export default function SubscriptionPayments() {
             return true;
         });
     }, [payments, storeFilter, periodRange, search]);
-    // ── Pagination ────────────────────────────────────────────────────────────
+    // -- Pagination ------------------------------------------------------------
     const totalPages = Math.max(1, Math.ceil(filteredPayments.length / PAGE_SIZE));
     const pagedPayments = filteredPayments.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
     useEffect(() => {
         setPage(1);
     }, [storeFilter, periodFilter, search]);
-    // ── KPIs ──────────────────────────────────────────────────────────────────
+    // -- KPIs ------------------------------------------------------------------
     const totalEncaisse = useMemo(() => filteredPayments.reduce((a, p) => a + p.amount, 0), [filteredPayments]);
     const now = new Date();
     const thisMonthStart = startOfMonth(now).getTime();
@@ -180,7 +170,7 @@ export default function SubscriptionPayments() {
     const thisMonthTotal = thisMonthPayments.reduce((a, p) => a + p.amount, 0);
     const uniqueStoresPaying = new Set(filteredPayments.map((p) => p.storeId)).size;
     const avgPerPayment = filteredPayments.length > 0 ? totalEncaisse / filteredPayments.length : 0;
-    // ── Monthly chart data (last 12 months) ───────────────────────────────────
+    // -- Monthly chart data (last 12 months) -----------------------------------
     const chartData = useMemo(() => {
         const data: {
             month: string;
@@ -202,7 +192,7 @@ export default function SubscriptionPayments() {
         }
         return data;
     }, [payments, storeFilter, now]);
-    // ── Per-store totals ──────────────────────────────────────────────────────
+    // -- Per-store totals ------------------------------------------------------
     const perStoreTotals = useMemo(() => {
         const map: Record<string, {
             name: string;
@@ -222,56 +212,7 @@ export default function SubscriptionPayments() {
             .map(([id, v]) => ({ id, ...v }))
             .sort((a, b) => b.total - a.total);
     }, [payments, periodRange]);
-    // ── Add payment ───────────────────────────────────────────────────────────
-    const handleAdd = async () => {
-        if (!addForm.storeId || !addForm.amount) {
-            toast.error('Veuillez remplir les champs obligatoires');
-            return;
-        }
-        const amount = parseFloat(addForm.amount);
-        if (isNaN(amount) || amount <= 0) {
-            toast.error('Montant invalide');
-            return;
-        }
-        const selectedStore = stores.find((s) => s.id === addForm.storeId);
-        setIsSaving(true);
-        try {
-            const res = await fetch(`${BACKEND}/api/subscription_payments.php`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    storeId: addForm.storeId,
-                    storeName: selectedStore?.name || '',
-                    months: parseInt(addForm.months, 10) || 1,
-                    amount,
-                    paidAt: new Date(addForm.paidAt).getTime(),
-                    note: addForm.note || null,
-                }),
-            });
-            if (res.ok) {
-                toast.success('Encaissement enregistré');
-                setShowAdd(false);
-                setAddForm({
-                    storeId: '',
-                    months: '1',
-                    amount: '',
-                    note: '',
-                    paidAt: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
-                });
-                await loadData();
-            }
-            else {
-                toast.error("Erreur lors de l'enregistrement");
-            }
-        }
-        catch {
-            toast.error('Erreur réseau');
-        }
-        finally {
-            setIsSaving(false);
-        }
-    };
-    // ── Delete payment ────────────────────────────────────────────────────────
+    // -- Delete payment --------------------------------------------------------
     const handleDelete = async () => {
         if (!deleteId)
             return;
@@ -296,7 +237,7 @@ export default function SubscriptionPayments() {
             setIsDeleting(false);
         }
     };
-    // ── Export CSV ────────────────────────────────────────────────────────────
+    // -- Export CSV ------------------------------------------------------------
     const exportCSV = () => {
         const headers = ['Date', 'Boutique', 'Mois', 'Montant (XOF)', 'Note'];
         const rows = filteredPayments.map((p) => [
@@ -322,7 +263,7 @@ export default function SubscriptionPayments() {
       </div>);
     }
     return (<div className="min-h-screen bg-background">
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* -- Header ----------------------------------------------------------- */}
       <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 px-4 pt-6 pb-8">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-3">
@@ -347,17 +288,13 @@ export default function SubscriptionPayments() {
                 <FileDown size={14} className="mr-1.5"/>
                 Export CSV
               </Button>
-              <Button size="sm" onClick={() => setShowAdd(true)} className="bg-white text-blue-700 hover:bg-blue-50 font-semibold">
-                <Plus size={14} className="mr-1.5"/>
-                Encaissement
-              </Button>
             </div>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 -mt-4 pb-10 space-y-6">
-        {/* ── KPI Cards ────────────────────────────────────────────────────── */}
+        {/* -- KPI Cards ------------------------------------------------------ */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <KPICard title={periodFilter === 'all' ? 'Total encaissé' : 'Encaissé (période)'} value={formatCFA(totalEncaisse)} subtitle={`${filteredPayments.length} paiement${filteredPayments.length !== 1 ? 's' : ''}`} icon={Wallet} color="bg-blue-500"/>
           <KPICard title="Ce mois-ci" value={formatCFA(thisMonthTotal)} subtitle={`${thisMonthPayments.length} paiement${thisMonthPayments.length !== 1 ? 's' : ''}`} icon={Calendar} color="bg-indigo-500"/>
@@ -365,7 +302,7 @@ export default function SubscriptionPayments() {
           <KPICard title="Montant moyen" value={formatCFA(avgPerPayment)} subtitle="par encaissement" icon={DollarSign} color="bg-sky-500"/>
         </div>
 
-        {/* ── Filters ──────────────────────────────────────────────────────── */}
+        {/* -- Filters -------------------------------------------------------- */}
         <Card>
           <CardContent className="p-4">
             <div className="flex flex-wrap gap-3 items-end">
@@ -424,7 +361,7 @@ export default function SubscriptionPayments() {
           </CardContent>
         </Card>
 
-        {/* ── Charts ───────────────────────────────────────────────────────── */}
+        {/* -- Charts --------------------------------------------------------- */}
         <div className="grid md:grid-cols-3 gap-4">
           {/* Area chart: 12 months trend */}
           <Card className="md:col-span-2">
@@ -480,7 +417,7 @@ export default function SubscriptionPayments() {
           </Card>
         </div>
 
-        {/* ── Per-store summary cards ───────────────────────────────────────── */}
+        {/* -- Per-store summary cards ----------------------------------------- */}
         {perStoreTotals.length > 0 && (<Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -506,7 +443,7 @@ export default function SubscriptionPayments() {
             </CardContent>
           </Card>)}
 
-        {/* ── Payments table ────────────────────────────────────────────────── */}
+        {/* -- Payments table -------------------------------------------------- */}
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -639,71 +576,7 @@ export default function SubscriptionPayments() {
         </Card>
       </div>
 
-      {/* ── Add payment dialog ─────────────────────────────────────────────── */}
-      <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-                <Plus size={16} className="text-blue-500"/>
-              Nouvel encaissement
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div>
-              <Label className="text-sm mb-1.5 block">Boutique *</Label>
-              <Select value={addForm.storeId} onValueChange={(v) => setAddForm((f) => ({ ...f, storeId: v }))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner une boutique"/>
-                </SelectTrigger>
-                <SelectContent>
-                  {stores.map((s) => (<SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-sm mb-1.5 block">Nombre de mois *</Label>
-                <Input type="number" min="1" max="24" value={addForm.months} onChange={(e) => setAddForm((f) => ({ ...f, months: e.target.value }))}/>
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Montant (XOF) *</Label>
-                <Input type="number" min="0" placeholder="0" value={addForm.amount} onChange={(e) => setAddForm((f) => ({ ...f, amount: e.target.value }))}/>
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-sm mb-1.5 block">Date du paiement *</Label>
-              <Input type="datetime-local" value={addForm.paidAt} onChange={(e) => setAddForm((f) => ({ ...f, paidAt: e.target.value }))}/>
-            </div>
-
-            <div>
-              <Label className="text-sm mb-1.5 block">Note (optionnel)</Label>
-              <Input placeholder="Ex: Paiement Cash, Mobile Money..." value={addForm.note} onChange={(e) => setAddForm((f) => ({ ...f, note: e.target.value }))}/>
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setShowAdd(false)}>
-              Annuler
-            </Button>
-            <Button onClick={handleAdd} disabled={isSaving} className="bg-blue-600 hover:bg-blue-700">
-              {isSaving ? (<>
-                  <RefreshCw size={14} className="mr-1.5 animate-spin"/>
-                  Enregistrement…
-                </>) : (<>
-                  <Plus size={14} className="mr-1.5"/>
-                  Enregistrer
-                </>)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Delete confirm dialog ──────────────────────────────────────────── */}
+      {/* -- Delete confirm dialog -------------------------------------------- */}
       <Dialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -728,3 +601,4 @@ export default function SubscriptionPayments() {
       </Dialog>
     </div>);
 }
+

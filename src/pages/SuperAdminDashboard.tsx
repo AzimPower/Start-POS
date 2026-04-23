@@ -195,8 +195,8 @@ export default function SuperAdminDashboard() {
     const expiringStores = activeStores.filter((s) => {
         if (!s.subscriptionEnd)
             return false;
-        const d = differenceInDays(s.subscriptionEnd, now);
-        return d >= 0 && d <= 30;
+      const d = differenceInDays(s.subscriptionEnd, now);
+      return d >= 0 && d <= 14;
     });
     const expiredStores = stores.filter((s) => s.subscriptionEnd && s.subscriptionEnd < now);
     const currentMonth = new Date();

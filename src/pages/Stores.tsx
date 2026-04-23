@@ -68,9 +68,11 @@ function formatStoreDate(value?: number) {
 function getStoreVisualState(store: StoreData) {
     const active = isActiveFlag(store.active);
     const subscriptionEnd = (store as any).subscriptionEnd ? Number((store as any).subscriptionEnd) : null;
-    const expired = Boolean(subscriptionEnd && subscriptionEnd <= Date.now());
-    const remainingDays = subscriptionEnd && subscriptionEnd > Date.now()
-        ? Math.ceil((subscriptionEnd - Date.now()) / (1000 * 60 * 60 * 24))
+    const now = Date.now();
+    const hasSubscriptionEnd = subscriptionEnd !== null && !Number.isNaN(subscriptionEnd);
+    const expired = Boolean(hasSubscriptionEnd && subscriptionEnd <= now);
+    const remainingDays = hasSubscriptionEnd
+        ? Math.max(0, Math.ceil((subscriptionEnd - now) / (1000 * 60 * 60 * 24)))
         : null;
 
     if (expired) {
@@ -152,7 +154,7 @@ function StoreManagementCard({
               {visual.statusLabel}
             </span>
             {subscriptionEnd && (<span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${visual.subscriptionClassName}`}>
-                {visual.remainingDays ? `${visual.remainingDays} jours restants` : `Expire le ${formatStoreDate(subscriptionEnd)}`}
+                {visual.remainingDays !== null ? `${visual.remainingDays} jours restants` : `Expire le ${formatStoreDate(subscriptionEnd)}`}
               </span>)}
           </div>
         </div>
@@ -181,7 +183,7 @@ function StoreManagementCard({
                   {formatStoreDate(subscriptionEnd || undefined)}
                 </div>
               </div>
-              {visual.remainingDays ? (<div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+              {visual.remainingDays !== null ? (<div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                   {visual.remainingDays} jours
                 </div>) : subscriptionEnd ? (<div className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
                   Expire
@@ -859,6 +861,70 @@ export default function Stores() {
             toast.error('Erreur lors du renouvellement');
         }
     };
+    const resetSubscriptionCounter = async (storeId: string) => {
+        const db = await getDB();
+        try {
+            const store = await db.get('stores', storeId);
+            if (!store) {
+                return;
+            }
+
+            const now = Date.now();
+            const updatedStore = {
+                ...store,
+                subscriptionEnd: now,
+                lastPayment: now,
+                active: false
+            };
+
+            await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                method: 'PUT',
+                data: updatedStore,
+            });
+
+            await db.put('stores', updatedStore);
+            toast.success('Compteur remis à zéro: expiration fixée à aujourd\'hui (0 jour restant)');
+            setRenewalDialog({ open: false, store: null, months: 1 });
+            loadStores();
+        }
+        catch (error) {
+            toast.error('Erreur lors de la remise à zéro');
+        }
+    };
+    const grantFreeTrial14Days = async (storeId: string) => {
+        const db = await getDB();
+        try {
+            const store = await db.get('stores', storeId);
+            if (!store) {
+                return;
+            }
+
+            const now = Date.now();
+            const currentEnd = (store as any).subscriptionEnd || now;
+            const newEnd = Math.max(currentEnd, now) + (14 * 24 * 60 * 60 * 1000);
+            const updatedStore = {
+                ...store,
+                subscriptionEnd: newEnd,
+                lastPayment: now,
+                active: true
+            };
+
+            await performSyncOp({
+                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                method: 'PUT',
+                data: updatedStore,
+            });
+
+            await db.put('stores', updatedStore);
+            toast.success('14 jours gratuit appliques avec succes');
+            setRenewalDialog({ open: false, store: null, months: 1 });
+            loadStores();
+        }
+        catch (error) {
+            toast.error('Erreur lors de l\'activation des 14 jours gratuit');
+        }
+    };
     const toggleStoreStatus = async (storeId: string, currentStatus: boolean) => {
         const db = await getDB();
         try {
@@ -1132,16 +1198,42 @@ export default function Stores() {
             <DialogTitle>Renouveler l'abonnement</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Magasin : <strong>{renewalDialog.store?.name}</strong>
-            </p>
-            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-sm text-muted-foreground">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Magasin : <strong>{renewalDialog.store?.name}</strong>
+                </p>
+                {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-sm text-muted-foreground">
                 Expiration actuelle :{' '}
                 <span className={(renewalDialog.store as any).subscriptionEnd <= Date.now() ? 'font-semibold text-red-600' : 'font-semibold text-green-600'}>
                   {new Date((renewalDialog.store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
                   {(renewalDialog.store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
                 </span>
               </p>)}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="h-10 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  onClick={() => renewalDialog.store && grantFreeTrial14Days(renewalDialog.store.id)}
+                  aria-label="Activer 14 jours gratuit"
+                  title="Activer 14 jours gratuit"
+                >
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  Gratuit
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-10 border-amber-200 text-amber-700 hover:bg-amber-50"
+                  onClick={() => renewalDialog.store && resetSubscriptionCounter(renewalDialog.store.id)}
+                  aria-label="Remettre a zero (0 jour)"
+                  title="Remettre a zero (0 jour)"
+                >
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  Reinitialiser
+                </Button>
+              </div>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="renewal-months">Nombre de mois</Label>
               <Select value={String(renewalDialog.months)} onValueChange={(v) => setRenewalDialog(d => ({ ...d, months: Number(v) }))}>
@@ -1341,16 +1433,42 @@ export default function Stores() {
             <DialogTitle>Renouveler l'abonnement</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Magasin : <strong>{renewalDialog.store?.name}</strong>
-            </p>
-            {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-sm text-muted-foreground">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Magasin : <strong>{renewalDialog.store?.name}</strong>
+                </p>
+                {renewalDialog.store && (renewalDialog.store as any).subscriptionEnd && (<p className="text-sm text-muted-foreground">
                 Expiration actuelle :{' '}
                 <span className={(renewalDialog.store as any).subscriptionEnd <= Date.now() ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}>
                   {new Date((renewalDialog.store as any).subscriptionEnd).toLocaleDateString('fr-FR')}
                   {(renewalDialog.store as any).subscriptionEnd <= Date.now() && ' (EXPIRÉ)'}
                 </span>
               </p>)}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="h-10 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  onClick={() => renewalDialog.store && grantFreeTrial14Days(renewalDialog.store.id)}
+                  aria-label="Activer 14 jours gratuit"
+                  title="Activer 14 jours gratuit"
+                >
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  Gratuit
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-10 border-amber-200 text-amber-700 hover:bg-amber-50"
+                  onClick={() => renewalDialog.store && resetSubscriptionCounter(renewalDialog.store.id)}
+                  aria-label="Remettre a zero (0 jour)"
+                  title="Remettre a zero (0 jour)"
+                >
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  Reinitialiser
+                </Button>
+              </div>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="renewal-months">Nombre de mois</Label>
               <Select value={String(renewalDialog.months)} onValueChange={(v) => setRenewalDialog(d => ({ ...d, months: Number(v) }))}>
@@ -1416,3 +1534,11 @@ export default function Stores() {
       </div>
     </div>);
 }
+
+
+
+
+
+
+
+
