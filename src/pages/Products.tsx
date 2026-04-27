@@ -15,7 +15,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNetwork } from '@/hooks/useNetwork';
 import { hasPendingStockOperations } from '@/lib/sync';
-import { notifyStockThresholdChange, sendStockAdjustmentEmail, sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { sendStockAdjustmentNotifications, type StockAdjustmentNotificationPayload } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
     name: string;
@@ -49,9 +49,13 @@ interface Category {
 }
 interface StockAdjustmentLine {
     productId: string;
-    delta: string;
+    delta?: string;
     physical?: string;
     oldStock?: number;
+    deltaPreview?: string;
+    oldStockPreview?: number;
+    oldStockRaw?: number;
+    roundedPreview?: boolean;
     reason: string;
 }
 export default function Products() {
@@ -94,6 +98,23 @@ export default function Products() {
             fracPart = fracPart.replace(/[^0-9]/g, '').slice(0, 2).replace(/0+$/, '');
         }
         return fracPart ? `${sign}${formattedInt}.${fracPart}` : `${sign}${formattedInt}`;
+    }
+    function parseWholeQuantity(value: string) {
+        const trimmed = String(value || '').trim();
+        if (!/^\d+$/.test(trimmed))
+            return null;
+        const parsed = parseInt(trimmed, 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    function normalizeStockForAdjustment(value: unknown) {
+        const numeric = typeof value === 'number' ? value : Number(value ?? 0);
+        const raw = Number.isFinite(numeric) ? numeric : 0;
+        const normalized = Math.round(raw);
+        return {
+            raw,
+            normalized,
+            wasRounded: Math.abs(raw - normalized) > 0.0001,
+        };
     }
     const { user } = useAuth();
     // Permettre aux managers, admins et super_admins de gérer les ajustements de stock
@@ -641,102 +662,134 @@ export default function Products() {
     const submitAdjust = async (e?: React.FormEvent) => {
         if (e)
             e.preventDefault();
-        const cleaned = adjustments
-            .filter((line) => line.productId && line.delta !== '')
-            .map((line) => ({
-            productId: line.productId,
-            delta: parseInt(line.delta, 10),
-            reason: line.reason || ''
-        }))
-            .filter((line) => !isNaN(line.delta) && line.delta !== 0);
-        if (cleaned.length === 0) {
-            toast.error('Ajoutez au moins un ajustement valide (delta non nul).');
+        if (adjustSubmitting)
             return;
-        }
         setAdjustSubmitting(true);
         try {
-            await performSyncOp({
+            const db = await getDB();
+            const computedLines: Array<{
+                product: Product;
+                productId: string;
+                delta: number;
+                reason: string;
+                previousStock: number;
+                nextStock: number;
+            }> = [];
+            for (const line of adjustments) {
+                if (!line.productId)
+                    continue;
+                const physical = parseWholeQuantity(line.physical || '');
+                if (physical === null) {
+                    toast.error('Chaque quantité physique doit être un nombre entier positif ou nul.');
+                    return;
+                }
+                const freshProduct = await db.get('products', line.productId) as Product | undefined;
+                if (!freshProduct) {
+                    toast.error(`Produit introuvable pour l'ajustement: ${getProductLabel(line.productId)}`);
+                    return;
+                }
+                const { normalized: previousStock } = normalizeStockForAdjustment(freshProduct.stock?.[user.storeId] ?? 0);
+                const nextStock = physical;
+                const delta = nextStock - previousStock;
+                if (delta === 0)
+                    continue;
+                computedLines.push({
+                    product: freshProduct,
+                    productId: line.productId,
+                    delta,
+                    reason: line.reason || '',
+                    previousStock,
+                    nextStock,
+                });
+            }
+            if (computedLines.length === 0) {
+                toast.error('Ajoutez au moins un ajustement valide (écart non nul après recalcul).');
+                return;
+            }
+            const updatedProducts = computedLines.map((line) => ({
+                ...line.product,
+                stock: {
+                    ...(line.product.stock || {}),
+                    [user.storeId]: line.nextStock,
+                },
+                updatedAt: Date.now(),
+            }));
+            const tx = db.transaction('products', 'readwrite');
+            for (const product of updatedProducts) {
+                await tx.store.put(product);
+            }
+            await tx.done;
+            const updatedById = new Map(updatedProducts.map((product) => [product.id, product]));
+            setProducts((prev) => prev.map((product) => updatedById.get(product.id) || product));
+            const store = await db.get('stores', user.storeId);
+            const storeName = store?.name || user.storeId || 'le magasin';
+            const preview = computedLines
+                .slice(0, 4)
+                .map((line) => {
+                const sign = line.delta > 0 ? '+' : '';
+                return `${line.product.name || 'Produit inconnu'} (${sign}${line.delta})`;
+            })
+                .join(', ');
+            const remainingCount = computedLines.length - Math.min(computedLines.length, 4);
+            const previewText = remainingCount > 0
+                ? `${preview}, +${remainingCount} autre(s)`
+                : preview;
+            const notificationPayload: StockAdjustmentNotificationPayload = {
+                senderUserId: user.id,
+                storeId: user.storeId,
+                actorName: user.username,
+                storeName,
+                adjustmentCount: computedLines.length,
+                previewText,
+                reason: adjustGlobalReason.trim() || undefined,
+                lines: computedLines.map((line) => ({
+                    productId: line.product.id,
+                    productName: line.product.name,
+                    unit: line.product.unit,
+                    minStock: line.product.minStock,
+                    previousStock: line.previousStock,
+                    nextStock: line.nextStock,
+                })),
+            };
+            const syncResult = await performSyncOp({
                 url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_adjust.php',
                 method: 'POST',
+                table: 'stockAdjustments',
+                storeId: user.storeId,
                 data: {
                     storeId: user.storeId,
                     userId: user.id,
                     reason: adjustGlobalReason || '',
-                    adjustments: cleaned
+                    adjustments: computedLines.map((line) => ({
+                        productId: line.productId,
+                        delta: line.delta,
+                        reason: line.reason || '',
+                    }))
+                },
+                notifyOnSuccess: {
+                    kind: 'stockAdjustment',
+                    payload: notificationPayload,
                 }
             });
-                void (async () => {
-                  try {
-                    const db = await getDB();
-                    const store = await db.get('stores', user.storeId);
-                    const storeName = store?.name || user.storeId || 'le magasin';
-                    const preview = cleaned
-                      .slice(0, 4)
-                      .map((line) => {
-                      const product = products.find((entry) => entry.id === line.productId);
-                      const sign = line.delta > 0 ? '+' : '';
-                      return `${product?.name || 'Produit inconnu'} (${sign}${line.delta})`;
-                    })
-                      .join(', ');
-                    const remainingCount = cleaned.length - Math.min(cleaned.length, 4);
-                    const reasonSuffix = adjustGlobalReason.trim()
-                      ? ` Motif: ${adjustGlobalReason.trim()}.`
-                      : '';
-                    const previewSuffix = remainingCount > 0
-                      ? `${preview}, +${remainingCount} autre(s)`
-                      : preview;
-
-                    await Promise.all([
-                      sendStoreAdminNotification({
-                        event: 'stockAdjustment',
-                        senderUserId: user.id,
-                        storeId: user.storeId,
-                        type: 'info',
-                        title: `Ajustement de stock: ${cleaned.length} produit${cleaned.length > 1 ? 's' : ''}`,
-                        message: `${user.username} a effectué ${cleaned.length} ajustement${cleaned.length > 1 ? 's' : ''} de stock dans ${storeName}. ${previewSuffix}.${reasonSuffix}`,
-                      }),
-                      sendStockAdjustmentEmail({
-                        senderUserId: user.id,
-                        storeId: user.storeId,
-                        actorName: user.username,
-                        storeName,
-                        adjustmentCount: cleaned.length,
-                        previewText: previewSuffix,
-                        reason: adjustGlobalReason.trim() || undefined,
-                      }),
-                      ...cleaned.map((line) => {
-                        const snapshotLine = adjustments.find((entry) => entry.productId === line.productId);
-                        const product = products.find((entry) => entry.id === line.productId);
-                        if (!snapshotLine || !product) {
-                          return Promise.resolve();
-                        }
-                        const previousStock = Number(snapshotLine.oldStock ?? product.stock?.[user.storeId] ?? 0);
-                        const nextStock = previousStock + line.delta;
-                        return notifyStockThresholdChange({
-                          senderUserId: user.id,
-                          storeId: user.storeId,
-                          productId: product.id,
-                          productName: product.name,
-                          unit: product.unit,
-                          minStock: product.minStock,
-                          previousStock,
-                          nextStock,
-                          actorName: user.username,
-                          contextLabel: 'Après un ajustement de stock',
-                        });
-                      })
-                    ]);
-                  }
-                  catch {
-                  }
-                })();
-                toast.success('Ajustements envoyés. Les admins seront notifiés selon les paramètres actifs.');
+            if (syncResult.success && !syncResult.queued) {
+                try {
+                    await sendStockAdjustmentNotifications(notificationPayload);
+                }
+                catch {
+                }
+                toast.success('Ajustements synchronisés avec succès.');
+            }
+            else {
+                toast.success('Ajustements appliqués localement. Synchronisation en attente.');
+            }
             setAdjustments([]);
             setAdjustGlobalReason('');
             setDraftProductId('');
             setDraftPhysicalQty('');
             setDraftReason('');
-            loadData();
+            if (syncResult.success && !syncResult.queued) {
+                void loadData();
+            }
         }
         catch (err) {
             toast.error('Erreur lors de l\'envoi des ajustements');
@@ -746,8 +799,8 @@ export default function Products() {
         }
     };
     const addDraftLine = () => {
-        const physical = parseInt(draftPhysicalQty, 10);
-        if (!draftProductId || isNaN(physical)) {
+        const physical = parseWholeQuantity(draftPhysicalQty);
+        if (!draftProductId || physical === null) {
             toast.error('Sélectionnez un produit et saisissez la quantité présente en physique.');
             return;
         }
@@ -757,15 +810,25 @@ export default function Products() {
             return;
         }
         const prod = products.find(p => p.id === draftProductId);
-        const currentStock = prod?.stock?.[user.storeId] ?? 0;
-        const delta = physical - (typeof currentStock === 'number' ? currentStock : parseInt(String(currentStock) || '0', 10));
+        const currentStock = normalizeStockForAdjustment(prod?.stock?.[user.storeId] ?? 0);
+        const delta = physical - currentStock.normalized;
         if (delta === 0) {
             toast.error('Aucun écart détecté entre quantité physique et quantité dans l\'app.');
             return;
         }
         setAdjustments((prev) => [
             ...prev,
-            { productId: draftProductId, delta: String(delta), physical: String(physical), oldStock: currentStock as number, reason: draftReason }
+            {
+                productId: draftProductId,
+                delta: String(delta),
+                deltaPreview: String(delta),
+                physical: String(physical),
+                oldStock: currentStock.normalized,
+                oldStockPreview: currentStock.normalized,
+                oldStockRaw: currentStock.raw,
+                roundedPreview: currentStock.wasRounded,
+                reason: draftReason
+            }
         ]);
         setDraftProductId('');
         setDraftPhysicalQty('');
@@ -1209,7 +1272,7 @@ export default function Products() {
                         </div>
                         <div className="md:col-span-3 space-y-1.5">
                           <Label>Quantité physique</Label>
-                          <Input type="number" value={draftPhysicalQty} onChange={(e) => setDraftPhysicalQty(e.target.value)} placeholder="Ex: 12"/>
+                          <Input type="number" min="0" step="1" value={draftPhysicalQty} onChange={(e) => setDraftPhysicalQty(e.target.value)} placeholder="Ex: 12"/>
                         </div>
                         <div className="md:col-span-2 flex md:justify-end">
                           <Button type="button" variant="outline" onClick={addDraftLine} className="w-full md:w-auto">
@@ -1222,6 +1285,7 @@ export default function Products() {
                         <Label>Motif ligne</Label>
                         <Input value={draftReason} onChange={(e) => setDraftReason(e.target.value)} placeholder="Optionnel"/>
                       </div>
+                      <p className="text-xs text-muted-foreground">Le stock est recalculé juste avant l'envoi pour rester cohérent, même hors ligne.</p>
                     </div>
 
                     {adjustments.length > 0 && (<div className="border rounded-lg overflow-hidden">

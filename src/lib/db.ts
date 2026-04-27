@@ -43,6 +43,9 @@ export async function performSyncOp(op: {
     url: string;
     method?: string;
     data?: any;
+    table?: string;
+    storeId?: string;
+    notifyOnSuccess?: any;
 }) {
     // Ensure backend is reachable before attempting a direct call.
     if (connectionState.isOnline) {
@@ -397,6 +400,7 @@ interface POSDB extends DBSchema {
             data: any;
             url: string;
             method?: string;
+            storeId?: string;
             createdAt: number;
             attempts: number;
             lastError?: string;

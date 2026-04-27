@@ -34,6 +34,23 @@ export async function queueSyncOp(op) {
     const db = await getSyncDB();
     await db.add(SYNC_STORE, { ...op, createdAt: Date.now() });
 }
+async function processDeferredSyncSuccess(op: any) {
+    if (op?.notifyOnSuccess?.kind !== 'stockAdjustment') {
+        return;
+    }
+    try {
+        const { sendStockAdjustmentNotifications } = await import('./storeAdminNotifications');
+        await sendStockAdjustmentNotifications(op.notifyOnSuccess.payload);
+    }
+    catch (e) {
+        writeSyncLog({
+            level: 'warn',
+            message: 'Impossible d\'envoyer les notifications différées d\'ajustement',
+            entity: op?.table,
+            details: { error: String(e), url: op?.url },
+        });
+    }
+}
 async function writeSyncLog(entry: {
     level: 'info' | 'warn' | 'error';
     message: string;
@@ -64,6 +81,290 @@ export async function getPendingSyncOps() {
 export async function getPendingSyncCount() {
     const db = await getSyncDB();
     return db.count(SYNC_STORE);
+}
+
+function shiftOpenedAt(shift: any) {
+    return Number(shift?.openedAt || 0);
+}
+
+function shiftClosedAt(shift: any) {
+    const value = shift?.closedAt;
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function shiftIntervalEnd(shift: any) {
+    if (String(shift?.status || '') === 'open') {
+        return Number.POSITIVE_INFINITY;
+    }
+    const closedAt = shiftClosedAt(shift);
+    return closedAt === null ? Number.POSITIVE_INFINITY : closedAt;
+}
+
+function shiftsOverlap(left: any, right: any) {
+    return shiftOpenedAt(right) <= shiftIntervalEnd(left) && shiftOpenedAt(left) <= shiftIntervalEnd(right);
+}
+
+function buildShiftOverlapGroups(shifts: any[]) {
+    const sorted = [...shifts].sort((a, b) => {
+        const startDiff = shiftOpenedAt(a) - shiftOpenedAt(b);
+        if (startDiff !== 0) {
+            return startDiff;
+        }
+        return shiftIntervalEnd(a) - shiftIntervalEnd(b);
+    });
+    const groups: any[][] = [];
+    let currentGroup: any[] = [];
+    let currentGroupEnd = Number.NEGATIVE_INFINITY;
+
+    for (const shift of sorted) {
+        if (currentGroup.length === 0) {
+            currentGroup = [shift];
+            currentGroupEnd = shiftIntervalEnd(shift);
+            continue;
+        }
+        if (shiftOpenedAt(shift) <= currentGroupEnd) {
+            currentGroup.push(shift);
+            currentGroupEnd = Math.max(currentGroupEnd, shiftIntervalEnd(shift));
+            continue;
+        }
+        groups.push(currentGroup);
+        currentGroup = [shift];
+        currentGroupEnd = shiftIntervalEnd(shift);
+    }
+
+    if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+    }
+
+    return groups;
+}
+
+function shiftGroupCanonical(group: any[], backendShiftIds?: Set<string>, queuedShiftIds?: Set<string>) {
+    const sorted = [...group].sort((a, b) => {
+        const aId = String(a?.id || '');
+        const bId = String(b?.id || '');
+        const aRank = backendShiftIds?.has(aId) ? 0 : (queuedShiftIds?.has(aId) ? 2 : 1);
+        const bRank = backendShiftIds?.has(bId) ? 0 : (queuedShiftIds?.has(bId) ? 2 : 1);
+        if (aRank !== bRank) {
+            return aRank - bRank;
+        }
+        if (String(a?.status || '') !== String(b?.status || '')) {
+            return String(a?.status || '') === 'open' ? -1 : 1;
+        }
+        const startDiff = shiftOpenedAt(a) - shiftOpenedAt(b);
+        if (startDiff !== 0) {
+            return startDiff;
+        }
+        return String(aId).localeCompare(String(bId));
+    });
+    return sorted[0];
+}
+
+function buildMergedShiftRecord(canonical: any, group: any[]) {
+    const orderedByStart = [...group].sort((a, b) => shiftOpenedAt(a) - shiftOpenedAt(b));
+    const earliestShift = orderedByStart[0];
+    const latestClosedShift = [...group]
+        .filter((shift) => shiftClosedAt(shift) !== null)
+        .sort((a, b) => Number(shiftClosedAt(b) || 0) - Number(shiftClosedAt(a) || 0))[0];
+    const hasOpenShift = group.some((shift) => String(shift?.status || '') === 'open' || shiftClosedAt(shift) === null);
+    const mergedOpenedAt = Math.min(...group.map((shift) => shiftOpenedAt(shift)));
+    const mergedClosedAt = hasOpenShift ? null : Math.max(...group.map((shift) => Number(shiftClosedAt(shift) || 0)));
+
+    return {
+        ...canonical,
+        userId: canonical?.userId || earliestShift?.userId,
+        storeId: canonical?.storeId || earliestShift?.storeId,
+        openingAmount: Number(earliestShift?.openingAmount ?? canonical?.openingAmount ?? 0) || 0,
+        openedAt: mergedOpenedAt,
+        status: hasOpenShift ? 'open' : 'closed',
+        closedAt: mergedClosedAt,
+        closingAmount: hasOpenShift ? null : (latestClosedShift?.closingAmount ?? canonical?.closingAmount ?? null),
+        expectedAmount: hasOpenShift ? null : (latestClosedShift?.expectedAmount ?? canonical?.expectedAmount ?? null),
+        difference: hasOpenShift ? null : (latestClosedShift?.difference ?? canonical?.difference ?? null),
+        cashAmount: hasOpenShift ? undefined : latestClosedShift?.cashAmount,
+        mobileMoneyAmount: hasOpenShift ? undefined : latestClosedShift?.mobileMoneyAmount,
+        otherAmount: hasOpenShift ? undefined : latestClosedShift?.otherAmount,
+        mergedFromShiftIds: Array.from(new Set(group.map((shift) => String(shift?.id || '')).filter(Boolean))),
+    };
+}
+
+function didShiftChangeForSync(previous: any, next: any) {
+    const keys = ['status', 'openedAt', 'closedAt', 'openingAmount', 'closingAmount', 'expectedAmount', 'difference', 'cashAmount', 'mobileMoneyAmount', 'otherAmount'];
+    return keys.some((key) => String(previous?.[key] ?? '') !== String(next?.[key] ?? ''));
+}
+
+function getShiftOpTargetId(op: any) {
+    if (op?.data?.id) {
+        return String(op.data.id);
+    }
+    try {
+        const parsed = new URL(String(op?.url || ''), 'https://local.sync');
+        const id = parsed.searchParams.get('id');
+        return id ? String(id) : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+async function rewriteShiftReferencesInQueuedOps(duplicateIds: Set<string>, canonicalId: string) {
+    const syncDb = await getSyncDB();
+    const pendingOps = await syncDb.getAll(SYNC_STORE);
+    for (const op of pendingOps) {
+        const opTargetId = getShiftOpTargetId(op);
+        const touchesShifts = String(op?.table || '') === 'shifts' || String(op?.url || '').includes('shifts.php');
+        if (touchesShifts && opTargetId && duplicateIds.has(opTargetId)) {
+            await syncDb.delete(SYNC_STORE, op.id);
+            continue;
+        }
+        if (duplicateIds.has(String(op?.data?.shiftId || ''))) {
+            await syncDb.put(SYNC_STORE, {
+                ...op,
+                data: {
+                    ...op.data,
+                    shiftId: canonicalId,
+                },
+            });
+        }
+    }
+
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const queueOps = await db.getAll('syncQueue');
+    for (const op of queueOps) {
+        const opTargetId = getShiftOpTargetId(op);
+        const touchesShifts = String(op?.table || '') === 'shifts' || String(op?.url || '').includes('shifts.php');
+        if (touchesShifts && opTargetId && duplicateIds.has(opTargetId)) {
+            await db.delete('syncQueue', op.id);
+            continue;
+        }
+        if (duplicateIds.has(String(op?.data?.shiftId || ''))) {
+            await db.put('syncQueue', {
+                ...op,
+                data: {
+                    ...op.data,
+                    shiftId: canonicalId,
+                },
+            });
+        }
+    }
+}
+
+async function queueCanonicalShiftSync(shift: any, backendShiftIds?: Set<string>) {
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const operation = backendShiftIds?.has(String(shift?.id || '')) ? 'update' : 'create';
+    await db.add('syncQueue', {
+        id: crypto.randomUUID(),
+        table: 'shifts',
+        operation,
+        method: operation === 'create' ? 'POST' : 'PUT',
+        data: shift,
+        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php',
+        createdAt: Date.now(),
+        attempts: 0,
+        storeId: shift?.storeId,
+    });
+}
+
+export async function mergeOverlappingShiftsForUserStore(userId?: string, storeId?: string, options?: {
+    backendShiftIds?: Set<string>;
+    rebuildShiftSyncOps?: boolean;
+}) {
+    if (!userId || !storeId) {
+        return [];
+    }
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const allShifts = await db.getAll('shifts');
+    const scopedShifts = allShifts.filter((shift: any) => String(shift?.userId || '') === String(userId) && String(shift?.storeId || '') === String(storeId));
+    if (scopedShifts.length < 2) {
+        return [];
+    }
+
+    const queuedShiftIds = await getQueuedShiftIds();
+    const groups = buildShiftOverlapGroups(scopedShifts).filter((group) => group.length > 1);
+    const mergedCanonicalIds: string[] = [];
+
+    for (const group of groups) {
+        const canonical = shiftGroupCanonical(group, options?.backendShiftIds, queuedShiftIds);
+        const canonicalId = String(canonical?.id || '');
+        const duplicateIds = new Set(group
+            .map((shift) => String(shift?.id || ''))
+            .filter((id) => id && id !== canonicalId));
+        if (duplicateIds.size === 0) {
+            continue;
+        }
+
+        const mergedShift = buildMergedShiftRecord(canonical, group);
+        const sales = await db.getAll('sales');
+        const expenses = await db.getAll('expenses');
+        const salesToUpdate = sales
+            .filter((sale: any) => duplicateIds.has(String(sale?.shiftId || '')))
+            .map((sale: any) => ({ ...sale, shiftId: canonicalId }));
+        const expensesToUpdate = expenses
+            .filter((expense: any) => duplicateIds.has(String(expense?.shiftId || '')))
+            .map((expense: any) => ({ ...expense, shiftId: canonicalId }));
+
+        const tx = db.transaction(['shifts', 'sales', 'expenses'], 'readwrite');
+        await tx.objectStore('shifts').put(mergedShift);
+        for (const duplicateId of duplicateIds) {
+            await tx.objectStore('shifts').delete(duplicateId);
+        }
+        for (const sale of salesToUpdate) {
+            await tx.objectStore('sales').put(sale);
+        }
+        for (const expense of expensesToUpdate) {
+            await tx.objectStore('expenses').put(expense);
+        }
+        await tx.done;
+
+        await rewriteShiftReferencesInQueuedOps(duplicateIds, canonicalId);
+
+        if (options?.rebuildShiftSyncOps) {
+            const shouldQueueSync = !options?.backendShiftIds?.has(canonicalId) || didShiftChangeForSync(canonical, mergedShift);
+            if (shouldQueueSync) {
+                await queueCanonicalShiftSync(mergedShift, options?.backendShiftIds);
+            }
+        }
+
+        mergedCanonicalIds.push(canonicalId);
+    }
+
+    return mergedCanonicalIds;
+}
+
+async function handleShiftCreateConflict(op: any) {
+    const storeId = String(op?.data?.storeId || op?.storeId || '');
+    const userId = String(op?.data?.userId || '');
+    if (!storeId || !userId) {
+        return false;
+    }
+    try {
+        const url = new URL('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php');
+        url.searchParams.set('storeId', storeId);
+        const response = await fetch(url.toString(), { cache: 'no-store' });
+        if (!response.ok) {
+            return false;
+        }
+        const backendShifts = await response.json();
+        if (!Array.isArray(backendShifts)) {
+            return false;
+        }
+        await mergeBackendShifts(backendShifts);
+        await mergeOverlappingShiftsForUserStore(userId, storeId, {
+            backendShiftIds: new Set(backendShifts.map((shift: any) => String(shift?.id || '')).filter(Boolean)),
+            rebuildShiftSyncOps: true,
+        });
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 
 function isStockMutationOp(op: any, storeId?: string) {
@@ -158,9 +459,14 @@ export async function syncWithServer() {
                     body: JSON.stringify(op.data),
                 });
                 if (res.ok) {
+                    await processDeferredSyncSuccess(op);
                     await removeSyncOp(op.id);
                     successCount++;
                     writeSyncLog({ level: 'info', message: 'Op synchronisée (pending_ops)', entity: op.table, details: { id: op.data?.id, url: op.url } });
+                }
+                else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && String(op?.method || 'POST').toUpperCase() === 'POST' && await handleShiftCreateConflict(op)) {
+                    successCount++;
+                    writeSyncLog({ level: 'info', message: 'Conflit shift résolu par fusion automatique (pending_ops)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                 }
                 else {
                     writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (pending_ops)`, entity: op.table, details: { url: op.url, status: res.status } });
@@ -192,9 +498,15 @@ export async function syncWithServer() {
                             body: JSON.stringify(op.data),
                         });
                         if (res.ok) {
+                            await processDeferredSyncSuccess(op);
                             await mainDb.delete('syncQueue', op.id);
                             successCount++;
                             writeSyncLog({ level: 'info', message: 'Op synchronisée (syncQueue)', entity: op.table, details: { id: op.data?.id, url: op.url } });
+                        }
+                        else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && mappedMethod === 'POST' && await handleShiftCreateConflict(op)) {
+                            await mainDb.delete('syncQueue', op.id);
+                            successCount++;
+                            writeSyncLog({ level: 'info', message: 'Conflit shift résolu par fusion automatique (syncQueue)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                         }
                         else {
                             writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (syncQueue)`, entity: op.table, details: { url: op.url, status: res.status } });
@@ -321,6 +633,10 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
                     const backendShifts = await response.json();
                     if (Array.isArray(backendShifts)) {
                         await mergeBackendShifts(backendShifts);
+                        await mergeOverlappingShiftsForUserStore(userId, storeId, {
+                            backendShiftIds: new Set(backendShifts.map((shift: any) => String(shift?.id || '')).filter(Boolean)),
+                            rebuildShiftSyncOps: true,
+                        });
                         const queuedShiftIds = await getQueuedShiftIds();
                         const backendIds = new Set(backendShifts.map((shift: any) => String(shift.id)));
                         const localShifts = await db.getAll('shifts');
@@ -352,8 +668,7 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
         .sort((a: any, b: any) => Number(b.openedAt || 0) - Number(a.openedAt || 0));
     const closedMarker = readClosedShiftMarker(userId, storeId);
     if (closedMarker) {
-        const staleOpenShifts = openShifts.filter((shift: any) => String(shift.id) === String(closedMarker.id) ||
-            Number(shift.openedAt || 0) <= Number(closedMarker.closedAt || 0));
+        const staleOpenShifts = openShifts.filter((shift: any) => String(shift.id) === String(closedMarker.id));
         if (staleOpenShifts.length > 0) {
             const tx = db.transaction('shifts', 'readwrite');
             await Promise.all([

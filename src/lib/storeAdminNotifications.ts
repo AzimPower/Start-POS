@@ -5,6 +5,26 @@ import { pendingEmailService } from '@/lib/pendingEmailService';
 
 type NotificationSeverity = 'info' | 'success' | 'warning' | 'critical';
 
+export interface StockAdjustmentThresholdTransition {
+    productId: string;
+    productName: string;
+    unit?: string;
+    minStock?: number | null;
+    previousStock: number;
+    nextStock: number;
+}
+
+export interface StockAdjustmentNotificationPayload {
+    senderUserId: string;
+    storeId: string;
+    actorName?: string;
+    storeName?: string;
+    adjustmentCount: number;
+    previewText: string;
+    reason?: string;
+    lines: StockAdjustmentThresholdTransition[];
+}
+
 export type AutomatedStoreAdminEvent =
     | 'shift'
     | 'stockSignal'
@@ -286,4 +306,45 @@ export async function notifyStockThresholdChange(options: {
     }
 
     return result;
+}
+
+export async function sendStockAdjustmentNotifications(options: StockAdjustmentNotificationPayload) {
+    const db = await getDB();
+    const store = await db.get('stores', options.storeId);
+    const storeName = options.storeName || store?.name || options.storeId || 'Magasin';
+    const reasonSuffix = options.reason?.trim()
+        ? ` Motif: ${options.reason.trim()}.`
+        : '';
+
+    await Promise.all([
+        sendStoreAdminNotification({
+            event: 'stockAdjustment',
+            senderUserId: options.senderUserId,
+            storeId: options.storeId,
+            type: 'info',
+            title: `Ajustement de stock: ${options.adjustmentCount} produit${options.adjustmentCount > 1 ? 's' : ''}`,
+            message: `${options.actorName || 'Un utilisateur'} a effectué ${options.adjustmentCount} ajustement${options.adjustmentCount > 1 ? 's' : ''} de stock dans ${storeName}. ${options.previewText}.${reasonSuffix}`,
+        }),
+        sendStockAdjustmentEmail({
+            senderUserId: options.senderUserId,
+            storeId: options.storeId,
+            actorName: options.actorName,
+            storeName,
+            adjustmentCount: options.adjustmentCount,
+            previewText: options.previewText,
+            reason: options.reason?.trim() || undefined,
+        }),
+        ...options.lines.map((line) => notifyStockThresholdChange({
+            senderUserId: options.senderUserId,
+            storeId: options.storeId,
+            productId: line.productId,
+            productName: line.productName,
+            unit: line.unit,
+            minStock: line.minStock,
+            previousStock: line.previousStock,
+            nextStock: line.nextStock,
+            actorName: options.actorName,
+            contextLabel: 'Après un ajustement de stock',
+        })),
+    ]);
 }
