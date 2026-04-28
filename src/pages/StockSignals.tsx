@@ -18,7 +18,7 @@ import { AlertTriangle, TrendingUp, TrendingDown, Package, DollarSign, Clock, Ch
 import { toast } from 'sonner';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
-import { hasPendingStockOperations } from '@/lib/sync';
+import { getPendingSyncOps, hasPendingStockOperations } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 interface Product {
     id: string;
@@ -120,6 +120,107 @@ const toOptionalTimestamp = (value: unknown): number | null => {
     const parsed = toSafeNumber(value);
     return parsed > 0 ? parsed : null;
 };
+const STOCK_SIGNALS_API_PATH = '/backend/api/stock_signals.php';
+const EXPENSES_ADVANCED_API_PATH = '/backend/api/expenses_advanced.php';
+
+function normalizeQueueMethod(entry: any) {
+    const explicitMethod = String(entry?.method || '').toUpperCase();
+    if (explicitMethod) {
+        return explicitMethod;
+    }
+
+    const operation = String(entry?.operation || '').toLowerCase();
+    if (operation === 'update') {
+        return 'PUT';
+    }
+    if (operation === 'delete') {
+        return 'DELETE';
+    }
+
+    return 'POST';
+}
+
+function matchesScopedPendingEntry(entry: any, apiPath: string, tableName: string, storeId?: string) {
+    const url = String(entry?.url || '');
+    const table = String(entry?.table || '');
+    const entryStoreId = String(entry?.storeId || entry?.data?.storeId || '').trim();
+
+    if (table !== tableName && !url.includes(apiPath)) {
+        return false;
+    }
+
+    if (!storeId || !entryStoreId) {
+        return true;
+    }
+
+    return entryStoreId === String(storeId).trim();
+}
+
+async function collectPendingEntityState(db: any, options: {
+    apiPath: string;
+    tableName: string;
+    storeId?: string;
+}) {
+    const pendingUpsertIds = new Set<string>();
+    const pendingDeleteIds = new Set<string>();
+    const queueEntries: any[] = [];
+
+    try {
+        queueEntries.push(...await db.getAll('syncQueue'));
+    }
+    catch (error) {
+    }
+
+    try {
+        queueEntries.push(...await getPendingSyncOps());
+    }
+    catch (error) {
+    }
+
+    for (const entry of queueEntries) {
+        if (!matchesScopedPendingEntry(entry, options.apiPath, options.tableName, options.storeId)) {
+            continue;
+        }
+
+        const targetId = String(entry?.data?.id || '').trim();
+        if (!targetId) {
+            continue;
+        }
+
+        const method = normalizeQueueMethod(entry);
+        if (method === 'DELETE') {
+            pendingDeleteIds.add(targetId);
+            continue;
+        }
+
+        pendingUpsertIds.add(targetId);
+    }
+
+    return { pendingUpsertIds, pendingDeleteIds };
+}
+
+function buildStockSignalFallbackId(signal: any) {
+    return [
+        String(signal?.storeId || '').trim(),
+        String(signal?.expenseId || '').trim(),
+        String(signal?.productId || '').trim(),
+        String(signal?.startDate || '').trim(),
+        String(signal?.endDate || '').trim(),
+        String(signal?.createdAt || '').trim(),
+    ].join(':');
+}
+
+function normalizeStockSignalRecord(signal: any) {
+    if (!signal) {
+        return signal;
+    }
+
+    const normalizedId = signal.id || signal.uid || signal._id || buildStockSignalFallbackId(signal);
+    return {
+        ...signal,
+        id: String(normalizedId),
+    };
+}
 const isBogusStockSignal = (signal: Partial<StockSignal> | null | undefined): boolean => {
     if (!signal)
         return true;
@@ -610,10 +711,36 @@ export default function StockSignals() {
             if (response.ok) {
                 const backendExpenses = normalizeBackendCollection(await response.json());
                 // Filtrer côté client aussi pour sécurité
-                const storeExpenses = backendExpenses.filter((e: any) => !user?.storeId || e.storeId === user.storeId);
+                const storeExpenses = backendExpenses.filter((expense: any) => !user?.storeId || expense.storeId === user.storeId);
+                const pendingState = await collectPendingEntityState(db, {
+                    apiPath: EXPENSES_ADVANCED_API_PATH,
+                    tableName: 'expensesAdvanced',
+                    storeId: user?.storeId
+                });
+                const currentScopedExpenses: ExpenseAdvanced[] = options?.id
+                    ? await (async () => {
+                        const existing = await db.get('expensesAdvanced', options.id);
+                        return existing ? [existing] : [];
+                    })()
+                    : await getStoreScopedRecords<ExpenseAdvanced>(db, 'expensesAdvanced', 'by-store');
+                const localPendingExpenses = currentScopedExpenses.filter((expense) => pendingState.pendingUpsertIds.has(String(expense.id || '')));
+                const mergedScopedExpenses = [
+                    ...storeExpenses.filter((expense: any) => {
+                        const expenseId = String(expense?.id || '').trim();
+                        if (!expenseId) {
+                            return false;
+                        }
+                        if (pendingState.pendingDeleteIds.has(expenseId)) {
+                            return false;
+                        }
+                        return !pendingState.pendingUpsertIds.has(expenseId);
+                    }),
+                    ...localPendingExpenses
+                ];
                 const tx = db.transaction('expensesAdvanced', 'readwrite');
                 await Promise.all([
-                    ...storeExpenses.map(e => tx.store.put(e)),
+                    ...currentScopedExpenses.map((expense) => tx.store.delete(expense.id)),
+                    ...mergedScopedExpenses.map((expense) => tx.store.put(expense)),
                     tx.done
                 ]);
             }
@@ -634,23 +761,35 @@ export default function StockSignals() {
             if (response.ok) {
                 const backendSignals = normalizeBackendCollection(await response.json());
                 // Filtrer côté client aussi pour sécurité
-                const storeSignals = backendSignals.filter((s: any) => !user?.storeId || s.storeId === user.storeId);
-                const tx = db.transaction('stockSignals', 'readwrite');
-                // Ensure every record has an id (IndexedDB keyPath = 'id')
-                const prepared = storeSignals.map((s: any) => {
-                    if (!s)
-                        return s;
-                    // if server used numeric id or different key, try to normalize
-                    if (!s.id && (s.uid || s._id || s.id === 0)) {
-                        s.id = s.uid || s._id || s.id;
-                    }
-                    if (!s.id) {
-                        s.id = generateId();
-                    }
-                    return s;
+                const storeSignals = backendSignals
+                    .filter((signal: any) => !user?.storeId || signal.storeId === user.storeId)
+                    .map((signal: any) => normalizeStockSignalRecord(signal));
+                const pendingState = await collectPendingEntityState(db, {
+                    apiPath: STOCK_SIGNALS_API_PATH,
+                    tableName: 'stockSignals',
+                    storeId: user?.storeId
                 });
+                const currentScopedSignals: StockSignal[] = options?.productId && user?.storeId
+                    ? await db.getAllFromIndex('stockSignals', 'by-store-product', [user.storeId, options.productId])
+                    : await getStoreScopedRecords<StockSignal>(db, 'stockSignals', 'by-store');
+                const localPendingSignals = currentScopedSignals.filter((signal) => pendingState.pendingUpsertIds.has(String(signal.id || '')));
+                const mergedScopedSignals = [
+                    ...storeSignals.filter((signal: any) => {
+                        const signalId = String(signal?.id || '').trim();
+                        if (!signalId) {
+                            return false;
+                        }
+                        if (pendingState.pendingDeleteIds.has(signalId)) {
+                            return false;
+                        }
+                        return !pendingState.pendingUpsertIds.has(signalId);
+                    }),
+                    ...localPendingSignals
+                ];
+                const tx = db.transaction('stockSignals', 'readwrite');
                 await Promise.all([
-                    ...prepared.map((s: any) => tx.store.put(s)),
+                    ...currentScopedSignals.map((signal) => tx.store.delete(signal.id)),
+                    ...mergedScopedSignals.map((signal) => tx.store.put(signal)),
                     tx.done
                 ]);
             }
@@ -706,11 +845,11 @@ export default function StockSignals() {
                     }
                 }
                 catch (error) {
-                    await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+                    await performSyncOp({ url, method: 'DELETE', data: { id: signal.id }, table: 'stockSignals', storeId: signal.storeId || user?.storeId });
                 }
             }
             else {
-                await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+                await performSyncOp({ url, method: 'DELETE', data: { id: signal.id }, table: 'stockSignals', storeId: signal.storeId || user?.storeId });
             }
         }
         await updatePendingSyncCount();
@@ -1187,8 +1326,32 @@ export default function StockSignals() {
             };
             await db.put('expensesAdvanced', updatedExpense);
             invalidateCaches();
+            const [stockSignalSyncResp, expenseSyncResp] = await Promise.all([
+                performSyncOp({
+                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php',
+                    method: 'POST',
+                    data: stockSignal,
+                    table: 'stockSignals',
+                    storeId: user.storeId,
+                }),
+                performSyncOp({
+                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                    method: 'PUT',
+                    data: updatedExpense,
+                    table: 'expensesAdvanced',
+                    storeId: user.storeId,
+                })
+            ]);
+            if (stockSignalSyncResp.success && expenseSyncResp.success) {
+                toast.success('Signalement cree et synchronise avec succes');
+            }
+            else {
+                toast.success(isOnline
+                    ? 'Signalement cree (synchronisation differee si necessaire)'
+                    : 'Signalement cree (mode hors ligne)');
+            }
             // Si en ligne, synchroniser immédiatement avec le backend
-            if (isOnline) {
+            if (false && isOnline) {
                 try {
                     const [stockSignalResponse, expenseResponse] = await Promise.all([
                         fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', {
@@ -1231,17 +1394,9 @@ export default function StockSignals() {
             else {
                 // Hors ligne : ajouter directement à la queue de synchronisation
                 // Offline: queue via performSyncOp
-                await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php',
-                    method: 'POST',
-                    data: stockSignal,
-                });
-                await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
-                    method: 'PUT',
-                    data: updatedExpense,
-                });
-                toast.success('Signalement créé (mode hors ligne)');
+                void 0;
+                void 0;
+                void 0;
             }
                         lastSignalDataRefreshAtRef.current = Date.now();
                         await processData(db);
@@ -1324,6 +1479,8 @@ export default function StockSignals() {
                                 url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
                                 method: 'PUT',
                                 data: updatedExpense,
+                                table: 'expensesAdvanced',
+                                storeId: updatedExpense.storeId,
                             });
                         }
                     }
@@ -1333,6 +1490,8 @@ export default function StockSignals() {
                             url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
                             method: 'PUT',
                             data: updatedExpense,
+                            table: 'expensesAdvanced',
+                            storeId: updatedExpense.storeId,
                         });
                     }
                 }
@@ -1352,12 +1511,12 @@ export default function StockSignals() {
                     }
                 }
                 catch (err) {
-                    await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+                    await performSyncOp({ url, method: 'DELETE', data: { id: signal.id }, table: 'stockSignals', storeId: signal.storeId || user?.storeId });
                 }
             }
             else {
                 // Hors ligne -> queue pour le signalement
-                await performSyncOp({ url, method: 'DELETE', data: { id: signal.id } });
+                await performSyncOp({ url, method: 'DELETE', data: { id: signal.id }, table: 'stockSignals', storeId: signal.storeId || user?.storeId });
             }
             // Mettre à jour l'état local pour rafraîchir l'UI
             setCompletedSignals(prev => prev.filter(s => s.id !== signal.id));

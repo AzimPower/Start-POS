@@ -64,6 +64,14 @@ interface ExpenseAdvanced {
     createdAt: number;
     updatedAt: number;
 }
+const createInitialExpenseFormData = () => ({
+    amount: '',
+    description: '',
+    date: new Date().toISOString().slice(0, 16),
+    directProductId: '',
+    directProductQuantity: '',
+    categoryId: '',
+});
 export default function Expenses() {
     const { user } = useAuth();
     const { isBackendReachable, isOnline, manualSync, lastCheck } = useNetwork();
@@ -114,14 +122,69 @@ export default function Expenses() {
         setChartType(value);
     }, []);
     // Form states
-    const [formData, setFormData] = useState({
-        amount: '',
-        description: '',
-        date: new Date().toISOString().slice(0, 16), // Format YYYY-MM-DDTHH:mm
-        directProductId: '',
-        directProductQuantity: '',
-        categoryId: '',
-    });
+    const [formData, setFormData] = useState(createInitialExpenseFormData);
+    const [currentStep, setCurrentStep] = useState(0);
+    const stepLabels = ['Type', 'Affectation', 'Montant'];
+    const selectedFormProduct = useMemo(() => {
+        return products.find(p => p.id === formData.directProductId) || null;
+    }, [products, formData.directProductId]);
+    const selectedFormCategory = useMemo(() => {
+        return expenseCategories.find(c => c.id === formData.categoryId) || null;
+    }, [expenseCategories, formData.categoryId]);
+    const filteredCategoriesForForm = useMemo(() => {
+        return expenseCategories.filter(c => c.type === expenseType);
+    }, [expenseCategories, expenseType]);
+    const isStockManagedDirectProduct = Boolean(selectedFormProduct &&
+        user?.storeId &&
+        selectedFormProduct.stock &&
+        Object.keys(selectedFormProduct.stock).includes(user.storeId));
+    const resetExpenseForm = useCallback(() => {
+        setExpenseType('direct');
+        setFormData(createInitialExpenseFormData());
+        setEditingExpense(null);
+        setCurrentStep(0);
+    }, []);
+    const handleExpenseTypeSelect = useCallback((value: 'direct' | 'indirect' | 'operational') => {
+        setExpenseType(value);
+        setFormData(prev => ({
+            ...prev,
+            directProductId: value === 'direct' ? prev.directProductId : '',
+            directProductQuantity: value === 'direct' ? prev.directProductQuantity : '',
+            categoryId: value === expenseType ? prev.categoryId : '',
+        }));
+    }, [expenseType]);
+    const isStepValid = (step: number) => {
+        if (step === 0) {
+            return true;
+        }
+        if (step === 1) {
+            if (expenseType === 'direct') {
+                if (!formData.directProductId) {
+                    return false;
+                }
+                if (isStockManagedDirectProduct) {
+                    const qty = Number(formData.directProductQuantity);
+                    return Number.isFinite(qty) && qty > 0;
+                }
+                return true;
+            }
+            return formData.categoryId.trim().length > 0;
+        }
+        if (step === 2) {
+            const amount = Number(formData.amount);
+            return Number.isFinite(amount) && amount > 0 && formData.date.trim().length > 0;
+        }
+        return true;
+    };
+    const canGoNext = isStepValid(currentStep);
+    const isLastStep = currentStep === stepLabels.length - 1;
+    const goNext = () => {
+        if (!canGoNext) {
+            return;
+        }
+        setCurrentStep(prev => Math.min(prev + 1, stepLabels.length - 1));
+    };
+    const goPrev = () => setCurrentStep(prev => Math.max(prev - 1, 0));
     // Calcul du total sélectionné dès le chargement de la page
     useEffect(() => {
         // Toujours filtrer sur aujourd'hui au chargement
@@ -486,6 +549,7 @@ export default function Expenses() {
             directProductQuantity: exp.directProduct?.quantity ? String(exp.directProduct.quantity) : '',
             categoryId: exp.categoryId || '',
         });
+        setCurrentStep(0);
         setShowAddDialog(true);
     }, []);
     const handleDeleteExpense = useCallback(async (id: string) => {
@@ -747,16 +811,8 @@ export default function Expenses() {
             catch (e) {
             }
             // Reset du formulaire et fermeture du dialog après actualisation
-            setFormData({
-                amount: '',
-                description: '',
-                date: new Date().toISOString().slice(0, 16),
-                directProductId: '',
-                directProductQuantity: '',
-                categoryId: '',
-            });
             setShowAddDialog(false);
-            setEditingExpense(null);
+            resetExpenseForm();
             // Opérations en arrière-plan (async sans await)
             Promise.all([
                 // Synchronisation backend
@@ -894,9 +950,6 @@ export default function Expenses() {
         const category = expenseCategories.find(c => c.id === categoryId);
         return category ? category.name : 'Catégorie inconnue';
     }, [expenseCategories]);
-    const getFilteredCategories = useCallback(() => {
-        return expenseCategories.filter(c => c.type === expenseType);
-    }, [expenseCategories, expenseType]);
     // Fonction pour filtrer les dépenses selon les critères (mémorisée)
     // NOTE: on base le filtrage sur `filteredExpenses` (TOUS les résultats de la période)
     // puis on pagine pour l'affichage via `displayedExpenses`.
@@ -1147,128 +1200,166 @@ export default function Expenses() {
             Suivi des dépenses avec calcul automatique des marges
           </p>
         </div>
-        <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <Dialog open={showAddDialog} onOpenChange={(open) => {
+            setShowAddDialog(open);
+            if (!open) {
+                resetExpenseForm();
+            }
+        }}>
           <DialogTrigger asChild>
-            <Button className="w-full sm:w-auto">
+            <Button className="w-full sm:w-auto" onClick={resetExpenseForm}>
               <Plus className="w-4 h-4 mr-2"/>
               Nouvelle Dépense
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Ajouter une Dépense</DialogTitle>
+              <DialogTitle>{editingExpense ? 'Modifier la dépense' : 'Ajouter une dépense'}</DialogTitle>
             </DialogHeader>
-            
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Sélection du type */}
-              <div className="grid grid-cols-3 gap-4">
-                <Button type="button" variant={expenseType === 'direct' ? 'default' : 'outline'} onClick={() => setExpenseType('direct')} className="flex flex-col h-20">
-                  <Package className="w-6 h-6 mb-1"/>
-                  <span className="text-xs">Directe</span>
-                  <span className="text-xs text-muted-foreground">1 produit</span>
-                </Button>
-                <Button type="button" variant={expenseType === 'indirect' ? 'default' : 'outline'} onClick={() => setExpenseType('indirect')} className="flex flex-col h-20">
-                  <Receipt className="w-6 h-6 mb-1"/>
-                  <span className="text-xs">Indirecte</span>
-                  <span className="text-xs text-muted-foreground">Plusieurs produits</span>
-                </Button>
-                <Button type="button" variant={expenseType === 'operational' ? 'default' : 'outline'} onClick={() => setExpenseType('operational')} className="flex flex-col h-20">
-                  <Settings className="w-6 h-6 mb-1"/>
-                  <span className="text-xs">Opérationnelle</span>
-                  <span className="text-xs text-muted-foreground">Charges fixes</span>
-                </Button>
-              </div>
 
-              {/* Informations générales */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="date">Date et heure</Label>
-                  <Input id="date" type="datetime-local" value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} required/>
-                </div>
-                <div>
-                  <Label htmlFor="amount">Montant (FCFA)</Label>
-                  <Input id="amount" type="number" min="0" step="1" value={formData.amount} onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))} required/>
-                </div>
+            <div className="mb-4 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <span>{stepLabels[currentStep]}</span>
+                <span>{currentStep + 1}/{stepLabels.length}</span>
               </div>
-
-              <div>
-                <Label htmlFor="description">Description (optionnelle)</Label>
-                <Textarea id="description" value={formData.description} onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))} placeholder="Détails supplémentaires..."/>
+              <div className="flex gap-2">
+                {stepLabels.map((label, index) => (<div key={label} className={`h-2 flex-1 rounded-full transition-colors ${index <= currentStep ? 'bg-primary' : 'bg-muted/60'}`}/>))}
               </div>
+            </div>
 
-              {/* Formulaire conditionnel selon le type */}
-              {expenseType === 'direct' && (<div className="space-y-4 border-t pt-4">
-                  <h3 className="font-semibold">Dépense Directe - Achat de Produit</h3>
-                  <div className="grid grid-cols-1 gap-4">
-                    <div>
-                      <Label htmlFor="directProduct">Produit concerné</Label>
-                      <Select value={formData.directProductId} onValueChange={(value) => setFormData(prev => ({ ...prev, directProductId: value }))}>
-                        <SelectTrigger className={!formData.directProductId ? 'border-red-500' : ''}>
-                          <SelectValue placeholder="Sélectionner un produit"/>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {products.map(product => (<SelectItem key={product.id} value={product.id}>
-                              {product.name} ({product.unit})
-                            </SelectItem>))}
-                        </SelectContent>
-                      </Select>
-                      {expenseType === 'direct' && !formData.directProductId && (<p className="text-sm text-red-500 mt-1">
-                          Veuillez sélectionner un produit
-                        </p>)}
-                    </div>
-                    {/* Champ quantité si produit géré en stock */}
-                    {formData.directProductId && (() => {
-                const selectedProduct = products.find(p => p.id === formData.directProductId);
-                const isStockProduct = selectedProduct && selectedProduct.stock && user?.storeId && Object.keys(selectedProduct.stock).includes(user.storeId);
-                if (isStockProduct) {
-                    return (<div>
-                            <Label htmlFor="directProductQuantity">Quantité</Label>
-                            <Input id="directProductQuantity" type="number" min="1" step="1" value={formData.directProductQuantity} onChange={e => setFormData(prev => ({ ...prev, directProductQuantity: e.target.value }))} required/>
-                            {!formData.directProductQuantity && (<p className="text-sm text-red-500 mt-1">Veuillez saisir la quantité</p>)}
-                          </div>);
-                }
-                return null;
-            })()}
+            <form onSubmit={(e) => {
+            e.preventDefault();
+            if (isLastStep) {
+                void handleSubmit(e);
+                return;
+            }
+            if (canGoNext) {
+                goNext();
+            }
+        }} className="space-y-6">
+              {currentStep === 0 && (<div className="rounded-xl border border-border/60 bg-card/50 p-4 space-y-4 ring-1 ring-border/40">
+                  <div>
+                    <h3 className="text-sm font-semibold">Type de dépense</h3>
+                    <p className="text-xs text-muted-foreground">Choisissez le flux qui correspond le mieux à ce que vous enregistrez.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Button type="button" variant={expenseType === 'direct' ? 'default' : 'outline'} onClick={() => handleExpenseTypeSelect('direct')} className={`flex h-auto min-h-24 flex-col items-start gap-1 px-4 py-3 text-left ${expenseType === 'direct' ? 'text-primary-foreground' : ''}`}>
+                      <Package className="w-5 h-5"/>
+                      <span className="text-sm font-semibold">Directe</span>
+                      <span className={`text-xs whitespace-normal ${expenseType === 'direct' ? 'text-primary-foreground/90' : 'text-muted-foreground'}`}>Achat associé à un seul produit</span>
+                    </Button>
+                    <Button type="button" variant={expenseType === 'indirect' ? 'default' : 'outline'} onClick={() => handleExpenseTypeSelect('indirect')} className={`flex h-auto min-h-24 flex-col items-start gap-1 px-4 py-3 text-left ${expenseType === 'indirect' ? 'text-primary-foreground' : ''}`}>
+                      <Receipt className="w-5 h-5"/>
+                      <span className="text-sm font-semibold">Indirecte</span>
+                      <span className={`text-xs whitespace-normal ${expenseType === 'indirect' ? 'text-primary-foreground/90' : 'text-muted-foreground'}`}>Dépense répartie sur plusieurs produits</span>
+                    </Button>
+                    <Button type="button" variant={expenseType === 'operational' ? 'default' : 'outline'} onClick={() => handleExpenseTypeSelect('operational')} className={`flex h-auto min-h-24 flex-col items-start gap-1 px-4 py-3 text-left ${expenseType === 'operational' ? 'text-primary-foreground' : ''}`}>
+                      <Settings className="w-5 h-5"/>
+                      <span className="text-sm font-semibold">Opérationnelle</span>
+                      <span className={`text-xs whitespace-normal ${expenseType === 'operational' ? 'text-primary-foreground/90' : 'text-muted-foreground'}`}>Charges fixes ou frais généraux</span>
+                    </Button>
                   </div>
                 </div>)}
 
-              {(expenseType === 'indirect' || expenseType === 'operational') && (<div className="space-y-4 border-t pt-4">
-                  <h3 className="font-semibold">
-                    {expenseType === 'indirect' ? 'Dépense Indirecte' : 'Dépense Opérationnelle'}
-                  </h3>
+              {currentStep === 1 && (<div className="rounded-xl border border-border/60 bg-card/50 p-4 space-y-4">
                   <div>
-                    <Label htmlFor="category">Catégorie</Label>
-                    <Select value={formData.categoryId} onValueChange={(value) => setFormData(prev => ({ ...prev, categoryId: value }))}>
-                      <SelectTrigger className={!formData.categoryId ? 'border-red-500' : ''}>
-                        <SelectValue placeholder="Sélectionner une catégorie"/>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {getFilteredCategories().map(category => (<SelectItem key={category.id} value={category.id}>
-                            {category.name}
-                            {category.description && (<span className="text-muted-foreground ml-2">
-                                - {category.description}
-                              </span>)}
-                          </SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                    {(expenseType === 'indirect' || expenseType === 'operational') && !formData.categoryId && (<p className="text-sm text-red-500 mt-1">
-                        Veuillez sélectionner une catégorie
-                      </p>)}
-                    {getFilteredCategories().length === 0 && (<p className="text-sm text-muted-foreground mt-1">
-                        Aucune catégorie disponible pour ce type de dépense.
-                      </p>)}
+                    <h3 className="text-sm font-semibold">Affectation</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {expenseType === 'direct'
+                    ? 'Sélectionnez le produit concerné par l\'achat.'
+                    : 'Choisissez la catégorie qui décrit le mieux cette dépense.'}
+                    </p>
                   </div>
+
+                  {expenseType === 'direct' ? (<div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="directProduct">Produit concerné</Label>
+                        <Select value={formData.directProductId} onValueChange={(value) => setFormData(prev => ({ ...prev, directProductId: value, directProductQuantity: '' }))}>
+                          <SelectTrigger className={!formData.directProductId ? 'border-red-500' : ''}>
+                            <SelectValue placeholder="Sélectionner un produit"/>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {products.map(product => (<SelectItem key={product.id} value={product.id}>
+                                {product.name} ({product.unit})
+                              </SelectItem>))}
+                          </SelectContent>
+                        </Select>
+                        {!formData.directProductId && (<p className="text-sm text-red-500">Veuillez sélectionner un produit.</p>)}
+                      </div>
+
+                      {selectedFormProduct && (<div className="rounded-lg border border-border/60 bg-background/80 p-3 text-sm">
+                          <div className="font-medium">{selectedFormProduct.name}</div>
+                          <div className="text-muted-foreground">Unité: {selectedFormProduct.unit}</div>
+                          <div className="text-muted-foreground">
+                            {isStockManagedDirectProduct
+                            ? 'Ce produit est suivi en stock: la quantité est requise.'
+                            : 'Ce produit n\'est pas géré en stock: la quantité sera fixée à 1.'}
+                          </div>
+                        </div>)}
+
+                      {isStockManagedDirectProduct && (<div className="space-y-2">
+                          <Label htmlFor="directProductQuantity">Quantité achetée</Label>
+                          <Input id="directProductQuantity" type="number" min="1" step="1" value={formData.directProductQuantity} onChange={(e) => setFormData(prev => ({ ...prev, directProductQuantity: e.target.value }))} placeholder="Ex: 5"/>
+                          {!formData.directProductQuantity && (<p className="text-sm text-red-500">Veuillez saisir la quantité.</p>)}
+                        </div>)}
+                    </div>) : (<div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="category">Catégorie</Label>
+                        <Select value={formData.categoryId} onValueChange={(value) => setFormData(prev => ({ ...prev, categoryId: value }))}>
+                          <SelectTrigger className={!formData.categoryId ? 'border-red-500' : ''}>
+                            <SelectValue placeholder="Sélectionner une catégorie"/>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {filteredCategoriesForForm.map(category => (<SelectItem key={category.id} value={category.id}>
+                                {category.name}
+                              </SelectItem>))}
+                          </SelectContent>
+                        </Select>
+                        {!formData.categoryId && (<p className="text-sm text-red-500">Veuillez sélectionner une catégorie.</p>)}
+                        {filteredCategoriesForForm.length === 0 && (<p className="text-sm text-muted-foreground">Aucune catégorie disponible pour ce type de dépense.</p>)}
+                      </div>
+
+                      {selectedFormCategory?.description && (<div className="rounded-lg border border-border/60 bg-background/80 p-3 text-sm text-muted-foreground">
+                          {selectedFormCategory.description}
+                        </div>)}
+                    </div>)}
+                </div>)}
+
+              {currentStep === 2 && (<div className="rounded-xl border border-border/60 bg-card/50 p-4 space-y-4">
+                  <div>
+                    <h3 className="text-sm font-semibold">Montant et date</h3>
+                    <p className="text-xs text-muted-foreground">Renseignez le montant, la date et ajoutez une précision si besoin.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="amount">Montant (FCFA)</Label>
+                      <Input id="amount" type="number" min="0" step="1" value={formData.amount} onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))} placeholder="Ex: 25000" required/>
+                      {(!formData.amount || Number(formData.amount) <= 0) && (<p className="text-sm text-red-500">Veuillez saisir un montant valide.</p>)}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="date">Date et heure</Label>
+                      <Input id="date" type="datetime-local" value={formData.date} onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))} required/>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="description">Description (optionnelle)</Label>
+                    <Textarea id="description" value={formData.description} onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))} placeholder="Ex: achat urgent, livraison, précision fournisseur..."/>
+                  </div>
+
                 </div>)}
 
               <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)} className="w-1/2" disabled={loading}>
+                <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)} className="w-1/3" disabled={loading}>
                   Annuler
                 </Button>
-                <Button type="submit" className="w-1/2" disabled={loading || !formData.amount ||
-            (expenseType === 'direct' && !formData.directProductId) ||
-            ((expenseType === 'indirect' || expenseType === 'operational') && !formData.categoryId)}>
-                  {loading ? 'Traitement...' : 'Ajouter la dépense'}
+                <Button type="button" variant="outline" onClick={goPrev} className="w-1/3" disabled={currentStep === 0 || loading}>
+                  Précédent
                 </Button>
+                {!isLastStep ? (<Button type="button" className="w-1/3" onClick={goNext} disabled={!canGoNext || loading}>
+                    Suivant
+                  </Button>) : (<Button type="submit" className="w-1/3" disabled={loading}>
+                    {loading ? 'Traitement...' : editingExpense ? 'Mettre à jour' : 'Enregistrer'}
+                  </Button>)}
               </div>
             </form>
           </DialogContent>
