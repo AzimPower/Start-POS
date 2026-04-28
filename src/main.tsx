@@ -60,12 +60,28 @@ import '@/lib/versionDebug';
 function renderApp() {
     createRoot(document.getElementById("root")!).render(<App />);
 }
+function isIgnorableGlobalError(errorLike: any) {
+    const name = String(errorLike?.name || '').trim();
+    const message = String(errorLike?.message || errorLike || '').trim();
+    const combined = `${name} ${message}`.toLowerCase();
+    return combined.includes('aborterror') ||
+        combined.includes('the user aborted a request') ||
+        combined.includes('signal is aborted') ||
+        combined.includes('timeout');
+}
 // Gestion d'erreurs globales
 window.onerror = function (message, source, lineno, colno, error) {
+    if (isIgnorableGlobalError(error || message)) {
+        return true;
+    }
     showGlobalError(message);
     return false;
 };
 window.onunhandledrejection = function (event) {
+    if (isIgnorableGlobalError(event.reason)) {
+        event.preventDefault();
+        return;
+    }
     showGlobalError(event.reason || 'Erreur inconnue');
 };
 function showGlobalError(errorMsg: any) {
