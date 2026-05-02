@@ -1,44 +1,50 @@
 <?php
-// CORS & JSON headers
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once __DIR__ . '/_bootstrap.php';
 
-// Répondre immédiatement aux préflight / HEAD
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS' || $_SERVER['REQUEST_METHOD'] === 'HEAD') {
+init_api_headers(['GET', 'OPTIONS', 'HEAD']);
+
+if ($_SERVER['REQUEST_METHOD'] === 'HEAD') {
     http_response_code(200);
-    echo json_encode(['success' => true]);
     exit;
 }
 
 $start = microtime(true);
+$claims = require_auth();
+$checkDatabase = isset($_GET['db']) && $_GET['db'] === '1';
 
-// Charger la config et tenter une requête minimale BD
-require_once __DIR__ . '/../config.php'; // fournit $pdo ou termine avec 500 si échec
+if (!$checkDatabase) {
+    echo json_encode([
+        'success' => true,
+        'message' => 'Authenticated API reachable',
+        'userId' => (string)($claims['sub'] ?? ''),
+        'db' => 'not_checked',
+        'latency_ms' => (int)((microtime(true) - $start) * 1000),
+        'timestamp' => (int)(microtime(true) * 1000),
+    ]);
+    exit;
+}
+
+require_once __DIR__ . '/../config.php';
 
 try {
-    // Requête simple pour valider lecture (évite dépendre d'une table métier spécifique)
     $stmt = $pdo->query('SELECT 1');
-    $db_ok = $stmt !== false;
+    $dbOk = $stmt !== false;
 } catch (Throwable $e) {
     http_response_code(500);
     echo json_encode([
         'success' => false,
         'message' => 'Database check failed',
         'error' => $e->getMessage(),
-        'timestamp' => (int)(microtime(true) * 1000)
+        'timestamp' => (int)(microtime(true) * 1000),
     ]);
     exit;
 }
 
-$duration_ms = (int) ((microtime(true) - $start) * 1000);
-
 echo json_encode([
     'success' => true,
     'message' => 'Server healthy',
-    'db' => $db_ok,
-    'latency_ms' => $duration_ms,
-    'timestamp' => (int)(microtime(true) * 1000)
+    'db' => $dbOk,
+    'latency_ms' => (int)((microtime(true) - $start) * 1000),
+    'timestamp' => (int)(microtime(true) * 1000),
 ]);
 ?>

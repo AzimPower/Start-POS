@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { getEmailSettings } from '@/lib/emailSettingsCache';
 import { useNetwork } from '@/hooks/useNetwork';
+import { fetchAndMerge } from '@/lib/sync';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +21,7 @@ import { toast } from 'sonner';
 import { emailService } from '@/lib/emailService';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { BACKEND_BASE } from '@/lib/backend';
 interface Product {
     id: string;
     name: string;
@@ -191,8 +193,6 @@ export default function Expenses() {
         setFilterOption('today');
         (async () => {
             await loadData();
-            const db = await getDB();
-            await loadExpensesForRange(db, 'today');
         })();
     }, []);
     // Attacher l'event listener pour le scroll
@@ -212,12 +212,6 @@ export default function Expenses() {
                 await loadData();
                 // ✅ Après sync backend, recharger l'affichage des dépenses
                 // (loadData fait un merge intelligent, donc les modifs locales sont préservées)
-                try {
-                    const db = await getDB();
-                    await loadExpensesForRange(db, filterOption, customStart, customEnd);
-                }
-                catch (e) {
-                }
             };
             reloadData();
         }
@@ -251,11 +245,20 @@ export default function Expenses() {
         setLoading(true);
         try {
             const db = await getDB();
+            await loadReferenceDataFromLocal(db);
+            await loadExpensesForRange(db, filterOption, customStart, customEnd);
+            setLoading(false);
             if (isBackendReachable) {
                 try {
+                    const referenceParams = user?.storeId ? { storeId: user.storeId } : undefined;
+                    await Promise.all([
+                        fetchAndMerge(`${BACKEND_BASE}/api/products.php`, 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), referenceParams),
+                        fetchAndMerge(`${BACKEND_BASE}/api/expense_categories.php`, 'expenseCategories', 'expenseCategories', undefined, referenceParams),
+                    ]);
+                    await loadReferenceDataFromLocal(db);
                     // ...existing code...
                     // Dépenses - charger TOUTES les dépenses, pas seulement la première page
-                    let expensesAdvancedUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
+                    let expensesAdvancedUrl = `${BACKEND_BASE}/api/expenses_advanced.php`;
                     const params = [];
                     if (user?.storeId)
                         params.push(`storeId=${user.storeId}`);
@@ -323,6 +326,7 @@ export default function Expenses() {
                         await tx.done;
                         // Ne pas mettre à jour les states ici, c'est géré par loadExpensesForRange
                     }
+                    await loadExpensesForRange(db, filterOption, customStart, customEnd);
                 }
                 catch (error) {
                     toast.error('Erreur de connexion au serveur, chargement des données locales');
@@ -339,9 +343,6 @@ export default function Expenses() {
         }
         catch (error) {
             toast.error('Erreur lors du chargement des données');
-        }
-        finally {
-            setLoading(false);
         }
     };
     // Load expenses for a specific date range with proper pagination
@@ -404,8 +405,7 @@ export default function Expenses() {
         catch (e) {
         }
     };
-    const loadFromLocal = async (db: any) => {
-        // Load products
+    const loadReferenceDataFromLocal = async (db: any) => {
         const productsData = await db.getAll('products');
         let filteredProducts = productsData;
         if (user?.storeId) {
@@ -413,13 +413,15 @@ export default function Expenses() {
                 (p.stock && Object.keys(p.stock || {}).includes(user.storeId))));
         }
         setProducts(filteredProducts);
-        // Load expense categories
         const categoriesData = await db.getAll('expenseCategories');
         let filteredCategories = categoriesData;
         if (user?.storeId) {
             filteredCategories = categoriesData.filter((c: any) => c.storeId === user.storeId && c.active);
         }
         setExpenseCategories(filteredCategories);
+    };
+    const loadFromLocal = async (db: any) => {
+        await loadReferenceDataFromLocal(db);
         // Ne pas charger les dépenses ici, c'est géré par loadExpensesForRange
         await loadExpensesPage(db, 0, pageSize, true);
     };
@@ -441,7 +443,7 @@ export default function Expenses() {
     const loadExpensesPage = async (db: any, offset: number, limit: number, reset = false) => {
         if (isBackendReachable) {
             try {
-                let expensesAdvancedUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
+                let expensesAdvancedUrl = `${BACKEND_BASE}/api/expenses_advanced.php`;
                 const params = [];
                 if (user?.storeId)
                     params.push(`storeId=${user.storeId}`);
@@ -566,13 +568,13 @@ export default function Expenses() {
                 table: 'expensesAdvanced',
                 operation: 'DELETE',
                 data: { id },
-                url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php?id=${id}`,
+                url: `${BACKEND_BASE}/api/expenses_advanced.php?id=${id}`,
                 storeId: user?.storeId || '',
                 createdAt: Date.now()
             });
             // 3. Synchronisation backend en arrière-plan (sans attendre)
             performSyncOp({
-                url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php?id=${id}`,
+                url: `${BACKEND_BASE}/api/expenses_advanced.php?id=${id}`,
                 method: 'DELETE',
                 data: { id }
             }).catch(e => {
@@ -653,7 +655,7 @@ export default function Expenses() {
                 // Toujours recharger le produit depuis le backend si possible pour avoir le stock à jour
                 if (isBackendReachable && selectedProduct) {
                     try {
-                        const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
+                        const response = await fetch(`${BACKEND_BASE}/api/products.php?id=${selectedProduct.id}`);
                         if (response.ok) {
                             const freshProduct = await response.json();
                             if (freshProduct && freshProduct.id) {
@@ -695,7 +697,7 @@ export default function Expenses() {
                         trackStock: true,
                     };
                     await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                        url: `${BACKEND_BASE}/api/products.php`,
                         method: 'PUT',
                         data: productDataForBackend,
                     });
@@ -723,7 +725,7 @@ export default function Expenses() {
                     // Si le backend est disponible, recharger le produit pour avoir le stock le plus récent
                     if (isBackendReachable && selectedProduct) {
                         try {
-                            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${selectedProduct.id}`);
+                            const response = await fetch(`${BACKEND_BASE}/api/products.php?id=${selectedProduct.id}`);
                             if (response.ok) {
                                 const freshProduct = await response.json();
                                 if (freshProduct && freshProduct.id) {
@@ -760,7 +762,7 @@ export default function Expenses() {
                             };
                             if (isBackendReachable) {
                                 try {
-                                    const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php', {
+                                    const response = await fetch(`${BACKEND_BASE}/api/products.php`, {
                                         method: 'PUT',
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify(productDataForBackend)
@@ -774,7 +776,7 @@ export default function Expenses() {
                                         table: 'products',
                                         operation: 'PUT',
                                         data: productDataForBackend,
-                                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                                        url: `${BACKEND_BASE}/api/products.php`,
                                         storeId: user.storeId,
                                         createdAt: Date.now()
                                     });
@@ -786,7 +788,7 @@ export default function Expenses() {
                                     table: 'products',
                                     operation: 'PUT',
                                     data: productDataForBackend,
-                                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                                    url: `${BACKEND_BASE}/api/products.php`,
                                     storeId: user.storeId,
                                     createdAt: Date.now()
                                 });
@@ -806,6 +808,7 @@ export default function Expenses() {
             // ✅ CORRECTION : Ne pas appeler loadData() qui efface IndexedDB et recharge du backend
             // Charger seulement depuis IndexedDB local pour afficher immédiatement la modification
             try {
+                await loadReferenceDataFromLocal(db);
                 await loadExpensesForRange(db, filterOption, customStart, customEnd);
             }
             catch (e) {
@@ -817,7 +820,7 @@ export default function Expenses() {
             Promise.all([
                 // Synchronisation backend
                 performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                    url: `${BACKEND_BASE}/api/expenses_advanced.php`,
                     method: isEdit ? 'PUT' : 'POST',
                     data: finalExpense
                 }).catch(e => {
@@ -942,14 +945,23 @@ export default function Expenses() {
             default: return type;
         }
     };
-    const getProductName = useCallback((productId: string) => {
-        const product = products.find(p => p.id === productId);
-        return product ? product.name : 'Produit inconnu';
+    const productNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        products.forEach((product) => map.set(product.id, product.name));
+        return map;
     }, [products]);
-    const getCategoryName = useCallback((categoryId: string) => {
-        const category = expenseCategories.find(c => c.id === categoryId);
-        return category ? category.name : 'Catégorie inconnue';
+    const categoryNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        expenseCategories.forEach((category) => map.set(category.id, category.name));
+        return map;
     }, [expenseCategories]);
+    const getProductName = useCallback((productId: string) => {
+        return productNameById.get(productId) || 'Produit inconnu';
+    }, [productNameById]);
+    const getCategoryName = useCallback((categoryId: string) => {
+        const categoryName = categoryNameById.get(categoryId);
+        return categoryName || 'Catégorie inconnue';
+    }, [categoryNameById]);
     // Fonction pour filtrer les dépenses selon les critères (mémorisée)
     // NOTE: on base le filtrage sur `filteredExpenses` (TOUS les résultats de la période)
     // puis on pagine pour l'affichage via `displayedExpenses`.
@@ -1707,7 +1719,7 @@ function CategoryManagement({ expenseCategories, onCategoriesChange, storeId, pr
                 };
                 await db.put('expenseCategories', updatedCategory);
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php',
+                    url: `${BACKEND_BASE}/api/expense_categories.php`,
                     method: 'PUT',
                     data: updatedCategory
                 });
@@ -1727,7 +1739,7 @@ function CategoryManagement({ expenseCategories, onCategoriesChange, storeId, pr
                 };
                 await db.add('expenseCategories', newCategory);
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php',
+                    url: `${BACKEND_BASE}/api/expense_categories.php`,
                     method: 'POST',
                     data: newCategory
                 });
@@ -1763,7 +1775,7 @@ function CategoryManagement({ expenseCategories, onCategoriesChange, storeId, pr
             const db = await getDB();
             await db.delete('expenseCategories', categoryId);
             await performSyncOp({
-                url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php?id=${categoryId}`,
+                url: `${BACKEND_BASE}/api/expense_categories.php?id=${categoryId}`,
                 method: 'DELETE',
                 data: { id: categoryId }
             });

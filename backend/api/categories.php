@@ -1,12 +1,12 @@
 <?php
 // Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -14,10 +14,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 switch ($method) {
     case 'GET':
-        $stmt = $pdo->query('SELECT * FROM categories');
+        $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
+        $sql = 'SELECT * FROM categories';
+        if ($storeId) {
+            $sql .= ' WHERE storeId = ?';
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$storeId]);
+        } else {
+            $stmt = $pdo->query($sql);
+        }
         $categories = $stmt->fetchAll();
         echo json_encode($categories);
         break;
@@ -28,7 +37,7 @@ switch ($method) {
         $description = $data['description'] ?? null;
         $createdAt = $data['createdAt'] ?? time()*1000;
         // storeId: si non fourni ou vide, NULL (catégorie par défaut), sinon valeur reçue
-        $storeId = isset($data['storeId']) && $data['storeId'] !== '' ? $data['storeId'] : null;
+        $storeId = isset($data['storeId']) && $data['storeId'] !== '' ? ensure_store_access($authClaims, $data['storeId']) : ensure_store_access($authClaims, null);
         $sql = 'INSERT INTO categories (id, name, description, createdAt, storeId) VALUES (?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
@@ -41,13 +50,18 @@ switch ($method) {
         echo json_encode(['success' => true, 'id' => $id, 'storeId' => $storeId]);
         break;
     case 'PUT':
-        parse_str(file_get_contents('php://input'), $data);
-        $sql = 'UPDATE categories SET name=?, description=?, createdAt=? WHERE id=?';
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data)) {
+            parse_str(file_get_contents('php://input'), $data);
+        }
+        $storeId = ensure_store_access($authClaims, $data['storeId'] ?? null);
+        $sql = 'UPDATE categories SET name=?, description=?, createdAt=?, storeId=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $data['name'],
             $data['description'],
             $data['createdAt'],
+            $storeId,
             $data['id']
         ]);
         echo json_encode(['success' => true]);
@@ -55,6 +69,12 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            if (!is_super_admin_claims($authClaims)) {
+                $checkStmt = $pdo->prepare('SELECT storeId FROM categories WHERE id = ? LIMIT 1');
+                $checkStmt->execute([$id]);
+                $targetStoreId = $checkStmt->fetchColumn();
+                ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+            }
             $stmt = $pdo->prepare('DELETE FROM categories WHERE id=?');
             $stmt->execute([$id]);
             echo json_encode(['success' => true]);

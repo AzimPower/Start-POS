@@ -6,6 +6,7 @@ import { AlertCircle, Phone, Mail, MessageSquare, RefreshCw } from 'lucide-react
 import { Button } from '@/components/ui/button';
 import { getDB } from '@/lib/db';
 import type { StoreAccessReason } from '@/lib/status';
+import { BACKEND_BASE } from '@/lib/backend';
 
 interface SubscriptionExpiredProps {
     storeName?: string;
@@ -50,7 +51,7 @@ export default function SubscriptionExpired({ storeName, reason = 'expired', onC
     const handleCheckAgain = async () => {
         setChecking(true);
         try {
-            const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1&_ts=${Date.now()}`, { cache: 'no-store' });
+            const response = await fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1&_ts=${Date.now()}`, { cache: 'no-store' });
             if (response.ok) {
                 const stores = await response.json();
                 const db = await getDB();

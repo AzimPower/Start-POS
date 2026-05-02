@@ -16,6 +16,7 @@ import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { BACKEND_BASE } from '@/lib/backend';
 
 interface Sale {
     id: string;
@@ -119,7 +120,7 @@ export default function CustomerReceipts() {
 
             if (isOnline) {
                 try {
-                    const response = await fetch(buildBypassUrl('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
+                    const response = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales.php`, {
                         storeId: user?.storeId,
                     }), { cache: 'no-store' });
 
@@ -161,7 +162,7 @@ export default function CustomerReceipts() {
 
         if (isOnline) {
             try {
-                const storesResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
+                const storesResponse = await fetch(`${BACKEND_BASE}/api/stores.php`);
 
                 if (storesResponse.ok) {
                     const backendStoresPayload = await storesResponse.json();
@@ -199,7 +200,7 @@ export default function CustomerReceipts() {
 
         if (isOnline) {
             try {
-                let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
+                let url = `${BACKEND_BASE}/api/customers.php`;
                 if (user?.storeId) {
                     url += `?storeId=${user.storeId}`;
                 }

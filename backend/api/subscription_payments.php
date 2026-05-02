@@ -1,19 +1,13 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once '../config.php';
+require_once __DIR__ . '/_bootstrap.php';
+
+init_api_headers(['GET', 'POST', 'DELETE', 'OPTIONS']);
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
-require_once '../config.php';
+$claims = require_auth();
 
 // Auto-create table if it doesn't exist yet
 try {
@@ -44,6 +38,12 @@ try {
             $storeId = isset($_GET['storeId']) && $_GET['storeId'] !== '' ? $_GET['storeId'] : null;
             $limit   = isset($_GET['limit'])   ? max(1, (int)$_GET['limit'])  : 200;
             $offset  = isset($_GET['offset'])  ? max(0, (int)$_GET['offset']) : 0;
+
+            if ($storeId !== null) {
+                $storeId = ensure_store_access($claims, $storeId);
+            } elseif (!is_super_admin_claims($claims)) {
+                $storeId = ensure_store_access($claims, null);
+            }
 
             if ($storeId) {
                 $stmt = $pdo->prepare(
@@ -84,7 +84,7 @@ try {
             }
 
             $id        = $data['id']        ?? uniqid('sp_', true);
-            $storeId   = $data['storeId'];
+            $storeId   = ensure_store_access($claims, (string)$data['storeId']);
             $storeName = $data['storeName'] ?? '';
             $months    = isset($data['months']) ? (int)$data['months'] : 1;
             $amount    = (float)$data['amount'];
@@ -107,14 +107,21 @@ try {
                 echo json_encode(['success' => false, 'error' => 'Identifiant manquant']);
                 exit;
             }
-            $stmt = $pdo->prepare('DELETE FROM subscription_payments WHERE id = ?');
-            $stmt->execute([$id]);
-            if ($stmt->rowCount() === 0) {
+
+            $lookup = $pdo->prepare('SELECT storeId FROM subscription_payments WHERE id = ? LIMIT 1');
+            $lookup->execute([$id]);
+            $existing = $lookup->fetch(PDO::FETCH_ASSOC);
+            if (!$existing) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'error' => 'Enregistrement introuvable']);
-            } else {
-                echo json_encode(['success' => true]);
+                exit;
             }
+
+            ensure_store_access($claims, (string)($existing['storeId'] ?? ''));
+
+            $stmt = $pdo->prepare('DELETE FROM subscription_payments WHERE id = ?');
+            $stmt->execute([$id]);
+            echo json_encode(['success' => true]);
             break;
 
         default:

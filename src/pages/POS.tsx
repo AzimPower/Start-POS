@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+﻿import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
@@ -20,6 +20,8 @@ import { assignReceiptMetadata, formatReceiptNumber } from '@/lib/receiptNumber'
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
 import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
+import { BACKEND_BASE } from '@/lib/backend';
+import * as secureStorage from '@/lib/secureStorage';
 interface Product {
     id: string;
     name: string;
@@ -52,12 +54,12 @@ interface Customer {
 interface CartItem {
     product: Product;
     quantity: number;
-    priceLabel?: string; // Pour identifier le prix variable sélectionné
+    priceLabel?: string; // Pour identifier le prix variable sÃ©lectionnÃ©
 }
 export default function POS() {
     const [showDraftCommentDialog, setShowDraftCommentDialog] = useState(false);
     const [draftComment, setDraftComment] = useState('');
-    // Formatage pour affichage simple (sans décimales)
+    // Formatage pour affichage simple (sans dÃ©cimales)
     function formatMoneyDisplay(value: number | string) {
         const num = typeof value === 'string' ? parseFloat(value) : value;
         if (isNaN(num))
@@ -66,7 +68,7 @@ export default function POS() {
     }
     // Formate un nombre avec espace entre les milliers
     function formatNumberWithSpaces(value: string) {
-        // Ne garder que la partie entière
+        // Ne garder que la partie entiÃ¨re
         const num = value.replace(/\D/g, "");
         if (!num)
             return "";
@@ -111,6 +113,7 @@ export default function POS() {
     }>({ open: false, product: null });
     const [customPrice, setCustomPrice] = useState('');
     const { user } = useAuth();
+    const canViewExactStock = user?.role === 'admin' || user?.role === 'super_admin';
     const navigate = useNavigate();
     const { isBackendReachable, manualSync } = useNetwork();
     const [products, setProducts] = useState<Product[]>([]);
@@ -135,15 +138,17 @@ export default function POS() {
     const [shiftsChecked, setShiftsChecked] = useState(false);
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
     const loadedOnceRef = useRef(false);
+    const activeShiftIdRef = useRef<string | null>(null);
+    const printerMacRef = useRef<string | null>(null);
     const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
     const [isLoadingMoreProducts, setIsLoadingMoreProducts] = useState(false);
     const [productOffset, setProductOffset] = useState(0);
     const PRODUCTS_PER_PAGE = 20;
-    // Système de favoris
+    // SystÃ¨me de favoris
     const [favorites, setFavorites] = useState<{
         [productId: string]: number;
     }>({});
-    // Charger les favoris spécifiques à l'utilisateur
+    // Charger les favoris spÃ©cifiques Ã  l'utilisateur
     useEffect(() => {
         if (user?.id) {
             const savedKey = `product_favorites_${user.id}`;
@@ -154,7 +159,7 @@ export default function POS() {
             setFavorites({});
         }
     }, [user?.id]);
-    // Mémoriser les calculs du panier pour optimiser les performances
+    // MÃ©moriser les calculs du panier pour optimiser les performances
     const cartCalculations = useMemo(() => {
         const subtotal = cart.reduce((sum, item) => {
             const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
@@ -195,7 +200,7 @@ export default function POS() {
             // ignore
         }
     };
-    // Montant espèces par défaut = montant total (optimisé)
+    // Montant espÃ¨ces par dÃ©faut = montant total (optimisÃ©)
     useEffect(() => {
         if (!showPayment)
             return;
@@ -226,19 +231,19 @@ export default function POS() {
                 ]);
             }
             catch (error) {
-                toast.error('Erreur de chargement des données');
+                toast.error('Erreur de chargement des donnÃ©es');
             }
         };
         loadAllData();
         loadedOnceRef.current = true;
     }, [user]);
-    // Synchronisation séparée quand le backend devient accessible
+    // Synchronisation sÃ©parÃ©e quand le backend devient accessible
     useEffect(() => {
         if (!user || !isBackendReachable || !loadedOnceRef.current)
             return;
         const syncData = async () => {
             try {
-                // Synchronisation en arrière-plan sans bloquer l'UI
+                // Synchronisation en arriÃ¨re-plan sans bloquer l'UI
                 await loadData();
             }
             catch (error) {
@@ -254,24 +259,64 @@ export default function POS() {
             setClientInputReadOnly(true);
         }
     }, [showPayment]);
-    // 🔄 Vérifier périodiquement si un shift a été ouvert/fermé (local DB, toujours actif)
+    useEffect(() => {
+        let cancelled = false;
+        const loadPrinterPreferences = async () => {
+            try {
+                let storedId = await secureStorage.getItem('printer_mac');
+                if (!storedId) {
+                    storedId = localStorage.getItem('printer_mac');
+                }
+                if (!cancelled) {
+                    printerMacRef.current = storedId || null;
+                }
+            }
+            catch (e) {
+                if (!cancelled) {
+                    printerMacRef.current = localStorage.getItem('printer_mac');
+                }
+            }
+        };
+        loadPrinterPreferences();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    useEffect(() => {
+        if (!showPayment) {
+            return;
+        }
+        const autoPrintSetting = localStorage.getItem('auto_print');
+        const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
+        const printerMac = printerMacRef.current || localStorage.getItem('printer_mac');
+        if (!autoPrint || !printerMac || NativePrinter.isConnected()) {
+            return;
+        }
+        void NativePrinter.connect(printerMac).then((result) => {
+            if (result?.ok) {
+                printerMacRef.current = printerMac;
+            }
+        }).catch(() => {
+        });
+    }, [showPayment]);
+    // ðŸ”„ VÃ©rifier pÃ©riodiquement si un shift a Ã©tÃ© ouvert/fermÃ© (local DB, toujours actif)
     useEffect(() => {
         if (!user)
             return;
         const checkActiveShift = async () => {
             try {
                 const userShift = await resolveUserOpenShift(user?.id, user?.storeId);
-                // Si le shift actif a changé (nouvel ID ou fermé)
-                if (userShift?.id !== activeShift?.id) {
+                // Si le shift actif a changÃ© (nouvel ID ou fermÃ©)
+                if ((userShift?.id || null) !== activeShiftIdRef.current) {
                     setActiveShift(userShift || null);
                 }
             }
             catch (error) {
             }
         };
-        // Vérifier toutes les 3 secondes (réduit de 10s pour détecter la fermeture rapidement)
-        const interval = setInterval(checkActiveShift, 3000);
-        // Écouter l'événement de fermeture de shift depuis les autres onglets
+        // VÃ©rifier toutes les 3 secondes (rÃ©duit de 10s pour dÃ©tecter la fermeture rapidement)
+        const interval = setInterval(checkActiveShift, 15000);
+        // Ã‰couter l'Ã©vÃ©nement de fermeture de shift depuis les autres onglets
         const handleStorageEvent = (e: StorageEvent) => {
             if (e.key === 'shift_closed_event') {
                 checkActiveShift();
@@ -282,8 +327,8 @@ export default function POS() {
             clearInterval(interval);
             window.removeEventListener('storage', handleStorageEvent);
         };
-    }, [user, activeShift?.id]);
-    // 👁️ Recharger le shift quand la page devient visible (retour depuis Shifts ou autre page)
+    }, [user?.id, user?.storeId]);
+    // ðŸ‘ï¸ Recharger le shift quand la page devient visible (retour depuis Shifts ou autre page)
     useEffect(() => {
         if (!user)
             return;
@@ -291,8 +336,8 @@ export default function POS() {
             if (document.visibilityState === 'visible') {
                 try {
                     const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
-                    // Toujours mettre à jour l'état (shift fermé ou ouvert)
-                    if (userShift?.id !== activeShift?.id) {
+                    // Toujours mettre Ã  jour l'Ã©tat (shift fermÃ© ou ouvert)
+                    if ((userShift?.id || null) !== activeShiftIdRef.current) {
                         setActiveShift(userShift || null);
                     }
                 }
@@ -302,18 +347,24 @@ export default function POS() {
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [user, activeShift?.id, isBackendReachable]);
+    }, [user?.id, user?.storeId, isBackendReachable]);
+    useEffect(() => {
+        activeShiftIdRef.current = activeShift?.id || null;
+    }, [activeShift?.id]);
     const loadDraftSales = async () => {
         const db = await getDB();
-        const allSales = await db.getAll('sales');
-        const drafts = allSales.filter(s => s.draft && s.storeId === user?.storeId);
+        const drafts = user?.storeId
+            ? (await db.getAllFromIndex('sales', 'by-store', user.storeId)).filter((s: any) => s.draft)
+            : (await db.getAll('sales')).filter((s: any) => s.draft);
         setDraftSales(drafts);
     };
     const loadCategories = async () => {
         const db = await getDB();
-        const cats = await db.getAll('categories');
-        // Filtrer les catégories selon la boutique courante
-        // Normalise les catégories pour inclure storeId
+        const cats = user?.storeId
+            ? await db.getAllFromIndex('categories', 'by-store', user.storeId)
+            : await db.getAll('categories');
+        // Filtrer les catÃ©gories selon la boutique courante
+        // Normalise les catÃ©gories pour inclure storeId
         const normalizedCats = cats.map(cat => ({
             ...cat,
             storeId: (cat as any).storeId || ''
@@ -325,7 +376,10 @@ export default function POS() {
         setCategories(filteredCats);
     };
     const loadData = async () => {
-        setShiftsChecked(false);
+        const hasCachedPosView = shiftsChecked && (products.length > 0 || Boolean(activeShiftIdRef.current));
+        if (!hasCachedPosView) {
+            setShiftsChecked(false);
+        }
         setLoading(true);
         try {
             const db = await getDB();
@@ -345,18 +399,18 @@ export default function POS() {
                 catch (e) {
                 }
             }
-            // 1. Charger et afficher les données locales immédiatement
+            // 1. Charger et afficher les donnÃ©es locales immÃ©diatement
             await loadFromLocal(db);
             await loadLocalData(db);
             await updatePendingSyncCount();
-            // Débloquer l'interface dès que les données essentielles sont chargées
+            // DÃ©bloquer l'interface dÃ¨s que les donnÃ©es essentielles sont chargÃ©es
             setLoading(false);
-            // 2. Synchroniser en arrière-plan si backend reachable (sans bloquer l'UI)
+            // 2. Synchroniser en arriÃ¨re-plan si backend reachable (sans bloquer l'UI)
             if (isBackendReachable) {
-                // Synchronisation en arrière-plan
+                // Synchronisation en arriÃ¨re-plan
                 try {
-                    // 🔄 SHIFTS - Synchroniser AVANT tout pour que tous les appareils aient le même shift actif
-                    let shiftsUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php';
+                    // ðŸ”„ SHIFTS - Synchroniser AVANT tout pour que tous les appareils aient le mÃªme shift actif
+                    let shiftsUrl = `${BACKEND_BASE}/api/shifts.php`;
                     if (user?.storeId)
                         shiftsUrl += `?storeId=${user.storeId}`;
                     const shiftsResponse = await fetch(shiftsUrl);
@@ -364,7 +418,7 @@ export default function POS() {
                         const backendShifts = await shiftsResponse.json();
                         if (Array.isArray(backendShifts)) {
                             await mergeBackendShifts(backendShifts);
-                            // Recharger le shift actif après synchronisation
+                            // Recharger le shift actif aprÃ¨s synchronisation
                             const userShift = await resolveUserOpenShift(user?.id, user?.storeId);
                             if (userShift) {
                                 setActiveShift(userShift);
@@ -374,7 +428,7 @@ export default function POS() {
                         }
                     }
                     // Produits
-                    let productsUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php';
+                    let productsUrl = `${BACKEND_BASE}/api/products.php`;
                     if (user?.storeId)
                         productsUrl += `?storeId=${user.storeId}`;
                     const productsResponse = await fetch(productsUrl);
@@ -401,7 +455,7 @@ export default function POS() {
                     }
                     // Ventes - Synchroniser TOUTES les ventes sans pagination pour POS
                     try {
-                        const salesResponse = await fetch(buildBypassUrl('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
+                        const salesResponse = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales.php`, {
                             all: 1,
                             storeId: user?.storeId,
                         }), { cache: 'no-store' });
@@ -416,7 +470,7 @@ export default function POS() {
                     catch (e) {
                     }
                     // Clients
-                    let customersUrl = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
+                    let customersUrl = `${BACKEND_BASE}/api/customers.php`;
                     if (user?.storeId)
                         customersUrl += `?storeId=${user.storeId}`;
                     const customersResponse = await fetch(customersUrl);
@@ -433,11 +487,11 @@ export default function POS() {
                 }
                 catch (error) {
                 }
-                // La synchronisation se fait en arrière-plan, pas besoin de setLoading(false)
+                // La synchronisation se fait en arriÃ¨re-plan, pas besoin de setLoading(false)
             }
         }
         catch (error) {
-            toast.error('Erreur lors du chargement des données');
+            toast.error('Erreur lors du chargement des donnÃ©es');
             setLoading(false);
         }
     };
@@ -448,7 +502,7 @@ export default function POS() {
         const productsWithStock = productsData.map((p: any) => ({ ...p, stock: p.stock || {} }));
         let filteredProducts = productsWithStock;
         if (user?.storeId) {
-            // Garder les produits qui appartiennent explicitement à la boutique
+            // Garder les produits qui appartiennent explicitement Ã  la boutique
             // ou qui ont un suivi de stock pour cette boutique
             filteredProducts = productsWithStock.filter((p: any) => {
                 if (p.storeId && p.storeId === user.storeId)
@@ -460,7 +514,9 @@ export default function POS() {
         }
         setProducts(filteredProducts);
         // Load customers
-        const customersData = await db.getAll('customers') as Customer[];
+        const customersData = user?.storeId
+            ? await db.getAllFromIndex('customers', 'by-store', user.storeId) as Customer[]
+            : await db.getAll('customers') as Customer[];
         let filteredCustomers = customersData;
         if (user?.storeId) {
             filteredCustomers = customersData.filter(c => c.storeId === user.storeId);
@@ -501,7 +557,7 @@ export default function POS() {
                 return false;
             return true;
         });
-        // Trier par favoris d'abord (par ordre d'ancienneté), puis les autres
+        // Trier par favoris d'abord (par ordre d'anciennetÃ©), puis les autres
         return filtered.sort((a, b) => {
             const aIsFav = favorites[a.id];
             const bIsFav = favorites[b.id];
@@ -551,7 +607,7 @@ export default function POS() {
         });
     }, [user?.id]);
     const addToCart = (product: Product) => {
-        // Si le produit a des prix variables, ouvrir le dialog de sélection
+        // Si le produit a des prix variables, ouvrir le dialog de sÃ©lection
         if (product.variablePrices && product.variablePrices.length > 0) {
             setVariablePriceDialog({ open: true, product });
             return;
@@ -572,7 +628,7 @@ export default function POS() {
             setCart([...cart, { product, quantity: 1 }]);
         }
     };
-    // Composant ProductCard optimisé
+    // Composant ProductCard optimisÃ©
     const ProductCard = useCallback(({ product }: {
         product: Product;
     }) => (<Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => addToCart(product)} style={{ minHeight: 140 }}>
@@ -604,11 +660,17 @@ export default function POS() {
             ? `${Math.min(...product.variablePrices.map(vp => vp.price))} - ${Math.max(...product.variablePrices.map(vp => vp.price))} FCFA`
             : product.salePrice !== undefined && product.salePrice !== null && !isNaN(Number(product.salePrice)) && Number(product.salePrice) > 0
                 ? `${Number(product.salePrice).toFixed(0)} FCFA`
-                : <span className="text-red-500">Prix à définir</span>}
+                : <span className="text-red-500">{'Prix \u00e0 d\u00e9finir'}</span>}
         </p>
         <p className="text-[10px] text-muted-foreground">
           Stock: {product.trackStock !== false && Object.keys(product.stock || {}).length > 0
-            ? (user?.storeId ? `${product.stock?.[user.storeId] || 0} ${product.unit}` : <span className="text-muted-foreground text-[10px]">—</span>)
+            ? (user?.storeId
+                ? (canViewExactStock
+                    ? `${product.stock?.[user.storeId] || 0} ${product.unit}`
+                    : Number(product.stock?.[user.storeId] || 0) > 0
+                        ? 'Disponible'
+                        : 'Rupture')
+                : <span className="text-muted-foreground text-[10px]">{'\u2014'}</span>)
             : <span className="text-muted-foreground text-[10px]">Non suivi</span>}
         </p>
       </CardContent>
@@ -740,24 +802,32 @@ export default function POS() {
                 nextStock: number;
             }> = [];
             const updatedProducts: Product[] = [];
+            const productsToPersist: Product[] = [];
             if (!opts?.draft) {
                 const soldQuantities = new Map<string, number>();
                 for (const item of cart) {
                     soldQuantities.set(item.product.id, (soldQuantities.get(item.product.id) || 0) + item.quantity);
                 }
+                const productsById = new Map(products.map((product) => [product.id, product]));
                 for (const [productId, soldQuantity] of soldQuantities.entries()) {
-                    const product = await db.get('products', productId);
+                    const product = productsById.get(productId) || await db.get('products', productId);
                     if (product && product.stock && user!.storeId in product.stock) {
                         const previousStock = Number(product.stock[user!.storeId] || 0);
                         const nextStock = previousStock - soldQuantity;
-                        product.stock[user!.storeId] = nextStock;
-                        await db.put('products', product);
-                        updatedProducts.push(product as Product);
+                        const updatedProduct = {
+                            ...product,
+                            stock: {
+                                ...product.stock,
+                                [user!.storeId]: nextStock,
+                            },
+                        } as Product;
+                        updatedProducts.push(updatedProduct);
+                        productsToPersist.push(updatedProduct);
                         stockTransitions.push({
-                            productId: product.id,
-                            productName: product.name,
-                            unit: product.unit,
-                            minStock: product.minStock,
+                            productId: updatedProduct.id,
+                            productName: updatedProduct.name,
+                            unit: updatedProduct.unit,
+                            minStock: updatedProduct.minStock,
                             previousStock,
                             nextStock,
                         });
@@ -775,7 +845,17 @@ export default function POS() {
                     return newCounts;
                 });
             }
-            await db.put('sales', sale);
+            if (productsToPersist.length > 0) {
+                const tx = db.transaction(['products', 'sales'], 'readwrite');
+                await Promise.all([
+                    ...productsToPersist.map((product) => tx.objectStore('products').put(product as any)),
+                    tx.objectStore('sales').put(sale as any),
+                    tx.done,
+                ]);
+            }
+            else {
+                await db.put('sales', sale);
+            }
             // 3. Affichage immédiat du reçu et reset UI
             let paymentDetails = [];
             if (sale.paymentMethod === 'mixed') {
@@ -825,6 +905,7 @@ export default function POS() {
             }
             catch (e) { }
             setShowReceipt(true);
+            setLoading(false);
             if (!opts?.draft && stockTransitions.length > 0) {
                 void Promise.all(stockTransitions.map((transition) => notifyStockThresholdChange({
                     ...transition,
@@ -835,108 +916,103 @@ export default function POS() {
                 }))).catch(() => {
                 });
             }
-            // Impression automatique (inchangée)
-            try {
-                const autoPrintSetting = localStorage.getItem('auto_print');
-                const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
-                if (autoPrint) {
-                    try {
-                        const lines: string[] = [];
-                        const centerText = (s: string, w: number) => {
-                            const str = (s || '').toString();
-                            if (str.length >= w)
-                                return str;
-                            const left = Math.floor((w - str.length) / 2);
-                            return ' '.repeat(left) + str;
-                        };
-                        const paper = localStorage.getItem('printer_paper') || '80';
-                        const width = paper === '58' ? 32 : 48;
-                        const headerLine = centerText(receiptData.storeName || 'Magasin', width);
-                        lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
-                        if (receiptData.storeAddress) {
-                            const addrLine = centerText(receiptData.storeAddress, width);
-                            lines.push('\x1bE\x01' + addrLine + '\x1bE\x00');
-                        }
-                        lines.push('');
-                        const dateText = receiptData.date ? new Date(receiptData.date).toLocaleString('fr-FR') : new Date(receiptData.createdAt).toLocaleString('fr-FR');
-                        lines.push(NativePrinter.formatColumns(dateText, `Recu N°: ${receiptData.receiptNumber}`, width));
-                        lines.push('--------------------------------');
-                        for (const it of (receiptData.items || [])) {
-                            const name = it.name || '';
-                            const qty = it.quantity || 0;
-                            const price = isNaN(it.price) ? 0 : Math.round(it.price);
-                            const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
-                            const qtyText = `${qty} x ${price} FCFA`;
-                            const totalText = `${totalItem} FCFA`;
-                            const leftFull = (name + ' ' + qtyText).trim();
-                            if (leftFull.length + 1 + totalText.length <= width) {
-                                lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
+            void (async () => {
+                try {
+                    const autoPrintSetting = localStorage.getItem('auto_print');
+                    const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
+                    if (autoPrint) {
+                        try {
+                            const lines: string[] = [];
+                            const centerText = (s: string, w: number) => {
+                                const str = (s || '').toString();
+                                if (str.length >= w)
+                                    return str;
+                                const left = Math.floor((w - str.length) / 2);
+                                return ' '.repeat(left) + str;
+                            };
+                            const paper = localStorage.getItem('printer_paper') || '80';
+                            const width = paper === '58' ? 32 : 48;
+                            const headerLine = centerText(receiptData.storeName || 'Magasin', width);
+                            lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
+                            if (receiptData.storeAddress) {
+                                const addrLine = centerText(receiptData.storeAddress, width);
+                                lines.push('\x1bE\x01' + addrLine + '\x1bE\x00');
                             }
-                            else {
-                                const firstLineLeft = name;
-                                if (firstLineLeft.length + 1 + totalText.length <= width) {
-                                    lines.push(NativePrinter.formatColumns(firstLineLeft, totalText, width));
-                                    lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                            lines.push('');
+                            const dateText = receiptData.date ? new Date(receiptData.date).toLocaleString('fr-FR') : new Date(receiptData.createdAt).toLocaleString('fr-FR');
+                            lines.push(NativePrinter.formatColumns(dateText, 'Recu N°: ' + receiptData.receiptNumber, width));
+                            lines.push('--------------------------------');
+                            for (const it of (receiptData.items || [])) {
+                                const name = it.name || '';
+                                const qty = it.quantity || 0;
+                                const price = isNaN(it.price) ? 0 : Math.round(it.price);
+                                const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
+                                const qtyText = qty + ' x ' + price + ' FCFA';
+                                const totalText = totalItem + ' FCFA';
+                                const leftFull = (name + ' ' + qtyText).trim();
+                                if (leftFull.length + 1 + totalText.length <= width) {
+                                    lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
                                 }
                                 else {
-                                    lines.push(NativePrinter.formatColumns(name, totalText, width));
-                                    lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                                    const firstLineLeft = name;
+                                    if (firstLineLeft.length + 1 + totalText.length <= width) {
+                                        lines.push(NativePrinter.formatColumns(firstLineLeft, totalText, width));
+                                        lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                                    }
+                                    else {
+                                        lines.push(NativePrinter.formatColumns(name, totalText, width));
+                                        lines.push(NativePrinter.formatColumns(qtyText, '', width));
+                                    }
                                 }
                             }
-                        }
-                        lines.push('--------------------------------');
-                        lines.push(NativePrinter.formatColumns('Sous-total:', `${Math.round(receiptData.subtotal || 0)} FCFA`, width));
-                        lines.push(NativePrinter.formatColumns('TVA:', `${Math.round(receiptData.tax || 0)} FCFA`, width));
-                        const totalLine = NativePrinter.formatColumns('TOTAL:', `${Math.round(receiptData.total || 0)} FCFA`, width);
-                        lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
-                        lines.push('');
-                        const paymentTitle = NativePrinter.formatColumns('Mode de paiement:', receiptData.paymentMethod || '', width);
-                        lines.push('\x1bE\x01' + paymentTitle + '\x1bE\x00');
-                        if (receiptData.paymentDetails && receiptData.paymentDetails.length > 0) {
-                            for (const p of receiptData.paymentDetails) {
-                                lines.push(NativePrinter.formatColumns(p.label + ':', `${Math.round(p.amount)} FCFA`, width));
+                            lines.push('--------------------------------');
+                            lines.push(NativePrinter.formatColumns('Sous-total:', Math.round(receiptData.subtotal || 0) + ' FCFA', width));
+                            lines.push(NativePrinter.formatColumns('TVA:', Math.round(receiptData.tax || 0) + ' FCFA', width));
+                            const totalLine = NativePrinter.formatColumns('TOTAL:', Math.round(receiptData.total || 0) + ' FCFA', width);
+                            lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
+                            lines.push('');
+                            const paymentTitle = NativePrinter.formatColumns('Mode de paiement:', receiptData.paymentMethod || '', width);
+                            lines.push('\x1bE\x01' + paymentTitle + '\x1bE\x00');
+                            if (receiptData.paymentDetails && receiptData.paymentDetails.length > 0) {
+                                for (const p of receiptData.paymentDetails) {
+                                    lines.push(NativePrinter.formatColumns(p.label + ':', Math.round(p.amount) + ' FCFA', width));
+                                }
                             }
-                        }
-                        else {
-                            if (receiptData.cashReceived !== undefined && receiptData.cashReceived !== null) {
-                                lines.push(NativePrinter.formatColumns('Espèces:', `${Math.round(receiptData.cashReceived)} FCFA`, width));
+                            else {
+                                if (receiptData.cashReceived !== undefined && receiptData.cashReceived !== null) {
+                                    lines.push(NativePrinter.formatColumns('Espèces:', Math.round(receiptData.cashReceived) + ' FCFA', width));
+                                }
+                                if (receiptData.change !== undefined && receiptData.change !== null) {
+                                    lines.push(NativePrinter.formatColumns('Rendu:', Math.round(receiptData.change) + ' FCFA', width));
+                                }
                             }
-                            if (receiptData.change !== undefined && receiptData.change !== null) {
-                                lines.push(NativePrinter.formatColumns('Rendu:', `${Math.round(receiptData.change)} FCFA`, width));
+                            lines.push('');
+                            lines.push('Merci pour votre visite !');
+                            const mac = printerMacRef.current || localStorage.getItem('printer_mac') || undefined;
+                            const ok = await NativePrinter.printText(lines, mac as any);
+                            if (!ok) {
+                                toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
                             }
-                        }
-                        lines.push('');
-                        lines.push('Merci pour votre visite !');
-                        let mac: string | undefined = undefined;
-                        try {
-                            const s = await (await import('@/lib/secureStorage')).getItem('printer_mac');
-                            mac = s || localStorage.getItem('printer_mac') || undefined;
                         }
                         catch (e) {
-                            mac = localStorage.getItem('printer_mac') || undefined;
+                            toast.error('Échec impression automatique');
                         }
-                        const ok = await NativePrinter.printText(lines, mac as any);
-                        if (!ok) {
-                            toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
-                        }
-                    }
-                    catch (e) {
-                        toast.error('Échec impression automatique');
                     }
                 }
-            }
-            catch (err) {
-            }
-            const syncResult = await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
-                method: 'POST',
-                data: sale,
-            });
-            toast.success(opts?.draft
-                ? 'Brouillon enregistré'
-                : syncResult.success
-                    ? 'Vente validée et synchronisée'
-                    : 'Vente validée (synchronisation en attente)');
+                catch (err) {
+                }
+                const syncResult = await performSyncOp({
+                    url: `${BACKEND_BASE}/api/sales.php`,
+                    method: 'POST',
+                    data: sale,
+                });
+                toast.success(opts?.draft
+                    ? 'Brouillon enregistré'
+                    : syncResult.success
+                        ? 'Vente validée et synchronisée'
+                        : 'Vente validée (synchronisation en attente)');
+            })();
+            return;
         }
         catch (error) {
             toast.error('Erreur lors de l\'enregistrement de la vente');
@@ -946,11 +1022,14 @@ export default function POS() {
         }
     };
     // If we haven't finished checking shifts yet, don't render the "no shift"
-    // card — return a neutral placeholder to avoid flashing the message. Once
+    // card â€” return a neutral placeholder to avoid flashing the message. Once
     // shiftsChecked is true we can show the card if there's indeed no active shift.
     if (!shiftsChecked) {
         return (<div className="p-6 flex items-center justify-center min-h-[80vh]">
-        {/* Intentionally empty while we check for an active shift */}
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <span className="text-sm">Chargement du point de vente...</span>
+        </div>
       </div>);
     }
     if (!activeShift) {
@@ -1006,7 +1085,7 @@ export default function POS() {
           <div className="flex w-full items-center gap-3">
             <Select value={selectedCategory} onValueChange={setSelectedCategory}>
               <SelectTrigger className="min-w-[180px]">
-                <SelectValue placeholder="Filtrer par catégorie"/>
+                <SelectValue placeholder="Filtrer par catÃ©gorie"/>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Toutes les catégories</SelectItem>
@@ -1021,7 +1100,7 @@ export default function POS() {
         </div>
   <div className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-2">
     {filteredProducts.length === 0 ? (<div className="col-span-full text-center text-muted-foreground py-6 text-xs">
-        Aucun produit ne correspond à la recherche ou à la catégorie sélectionnée.
+        Aucun produit ne correspond à  la recherche ou à  la catégorie sélectionnée.
       </div>) : (<>
         {displayedProducts.map(product => (<div key={product.id} className="relative">
             <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => addToCart(product)} style={{ minHeight: 140 }}>
@@ -1044,7 +1123,13 @@ export default function POS() {
                 </p>
                 <p className="text-[10px] text-muted-foreground">
                   Stock: {product.trackStock !== false && Object.keys(product.stock || {}).length > 0
-                    ? (user?.storeId ? `${product.stock?.[user.storeId] || 0} ${product.unit}` : <span className="text-muted-foreground text-[10px]">—</span>)
+                    ? (user?.storeId
+                        ? (canViewExactStock
+                            ? `${product.stock?.[user.storeId] || 0} ${product.unit}`
+                            : Number(product.stock?.[user.storeId] || 0) > 0
+                                ? 'Disponible'
+                                : 'Rupture')
+                        : <span className="text-muted-foreground text-[10px]">â€”</span>)
                     : <span className="text-muted-foreground text-[10px]">Non suivi</span>}
                 </p>
               </CardContent>
@@ -1093,7 +1178,7 @@ export default function POS() {
                 </Button>
                 {showClientList && (<div style={{ position: 'absolute', right: 0, top: '110%', zIndex: 20, background: 'white', border: '1px solid #e5e7eb', borderRadius: 8, minWidth: 220, boxShadow: '0 2px 8px #0001', padding: 8 }}>
                     <input ref={clientInputRef} type="text" placeholder="Rechercher ou ajouter..." value={clientSearch} onChange={e => setClientSearch(e.target.value)} readOnly={clientInputReadOnly} onMouseDown={(e) => {
-                // User interacted with the field via mouse — enable input and focus
+                // User interacted with the field via mouse â€” enable input and focus
                 if (clientInputReadOnly) {
                     e.preventDefault();
                     setClientInputReadOnly(false);
@@ -1164,7 +1249,7 @@ export default function POS() {
                       <p className="font-bold text-primary">
                         {item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice)) && Number(item.product.salePrice) > 0
                     ? (Number(item.product.salePrice) * item.quantity).toFixed(0) + ' FCFA'
-                    : <span className="text-red-500">Prix à définir</span>}
+                    : <span className="text-red-500">Prix Ã  dÃ©finir</span>}
                       </p>
                     </div>
                   </CardContent>
@@ -1202,7 +1287,7 @@ export default function POS() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="p-4 bg-muted rounded-lg">
-              <p className="text-sm text-muted-foreground">Total à payer</p>
+              <p className="text-sm text-muted-foreground">{'Total \u00e0 payer'}</p>
               <p className="text-2xl font-bold text-primary">{formatMoneyDisplay(cartCalculations.total)} FCFA</p>
             </div>
 
@@ -1227,14 +1312,14 @@ export default function POS() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">Espèces</SelectItem>
+                  <SelectItem value="cash">{'Esp\u00e8ces'}</SelectItem>
                   <SelectItem value="mobile_money">Mobile Money</SelectItem>
                   <SelectItem value="mixed">Mixte</SelectItem>
                 </SelectContent>
               </Select>
               {paymentMethod === 'mixed' && (<div className="flex gap-2">
                   <div className="flex-1">
-                    <Label>Espèces</Label>
+                    <Label>{'Esp\u00e8ces'}</Label>
                     <Input type="text" inputMode="numeric" placeholder="0" value={formatNumberWithSpaces(cashAmount)} onChange={e => {
                 const total = cartCalculations.total;
                 let cash = parseInt(e.target.value.replace(/\s/g, "")) || 0;
@@ -1261,7 +1346,7 @@ export default function POS() {
                   </div>
                 </div>)}
               {paymentMethod === 'cash' && (<div className="flex-1">
-                  <Label>Montant espèces</Label>
+                  <Label>{'Montant esp\u00e8ces'}</Label>
                   <Input type="text" inputMode="numeric" placeholder="0" value={formatNumberWithSpaces(cashAmount)} onChange={e => setCashAmount(e.target.value.replace(/\s/g, ""))} required/>
                 </div>)}
               {paymentMethod === 'mobile_money' && (<div className="flex-1">
@@ -1290,7 +1375,7 @@ export default function POS() {
           <div className="space-y-4">
             <Label>Nom</Label>
             <Input type="text" value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="Nom du client"/>
-            <Label>Téléphone (8 chiffres)</Label>
+            <Label>{'T\u00e9l\u00e9phone (8 chiffres)'}</Label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{
             background: '#f3f4f6',
@@ -1340,20 +1425,23 @@ export default function POS() {
                 await db.add('customers', newCustomer);
                 if (isBackendReachable) {
                     try {
-                        const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
+                        const response = await fetch(`${BACKEND_BASE}/api/customers.php`, {
                             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCustomer)
                         });
                         if (!response.ok)
                             throw new Error(`Erreur backend: ${response.status}`);
                     }
                     catch (err) {
-                        await performSyncOp({ url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', method: 'POST', data: newCustomer });
+                        await performSyncOp({ url: `${BACKEND_BASE}/api/customers.php`, method: 'POST', data: newCustomer });
                     }
                 }
                 else {
-                    await performSyncOp({ url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', method: 'POST', data: newCustomer });
+                    await performSyncOp({ url: `${BACKEND_BASE}/api/customers.php`, method: 'POST', data: newCustomer });
                 }
-                setCustomers(await db.getAll('customers'));
+                const refreshedCustomers = user?.storeId
+                    ? await db.getAllFromIndex('customers', 'by-store', user.storeId)
+                    : await db.getAll('customers');
+                setCustomers(refreshedCustomers as Customer[]);
                 setSelectedCustomerId(newCustomer.id);
                 setShowAddCustomer(false);
                 setShowClientList(false);
@@ -1446,14 +1534,14 @@ export default function POS() {
                 loadDraftSales();
                 // Supprimer aussi du backend pour éviter qu'il ne revienne à la prochaine sync
                 try {
-                    await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php?id=${draft.id}`, {
+                    await fetch(`${BACKEND_BASE}/api/sales.php?id=${draft.id}`, {
                         method: 'DELETE',
                     });
                 }
                 catch (e) {
                     // En cas d'échec, mettre en file d'attente
                     await performSyncOp({
-                        url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php?id=${draft.id}`,
+                        url: `${BACKEND_BASE}/api/sales.php?id=${draft.id}`,
                         method: 'DELETE',
                         data: { id: draft.id },
                     });
@@ -1494,14 +1582,14 @@ export default function POS() {
       <Dialog open={stockWarning.open} onOpenChange={open => setStockWarning({ ...stockWarning, open })}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Stock négatif</DialogTitle>
+            <DialogTitle>{'Stock n\u00e9gatif'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-red-600">
-              Attention, le stock sera négatif pour : <br />
+              {'Attention, le stock sera n\u00e9gatif pour : '}<br />
               <span className="font-bold">{stockWarning.products.join(', ')}</span>
             </p>
-            <p className="text-sm">Voulez-vous poursuivre la vente malgré tout&nbsp;?</p>
+            <p className="text-sm">{'Voulez-vous poursuivre la vente malgr\u00e9 tout\u00a0?'}</p>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => setStockWarning({ open: false, products: [] })}>Annuler</Button>
               <Button onClick={() => {
@@ -1520,7 +1608,7 @@ export default function POS() {
             <DialogTitle>Choisir le prix</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm">Sélectionnez le prix pour <strong>{variablePriceDialog.product?.name}</strong></p>
+            <p className="text-sm">{'S\u00e9lectionnez le prix pour '}<strong>{variablePriceDialog.product?.name}</strong></p>
             <div className="grid gap-2">
               {variablePriceDialog.product?.variablePrices?.map((vp, index) => (<Button key={index} variant="outline" className="justify-between h-auto p-4" onClick={() => {
                 const product = variablePriceDialog.product!;
@@ -1555,10 +1643,10 @@ export default function POS() {
       <Dialog open={customPriceDialog.open} onOpenChange={(open) => setCustomPriceDialog({ open, product: customPriceDialog.product })}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Définir le prix du produit</DialogTitle>
+            <DialogTitle>{'D\u00e9finir le prix du produit'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm">Ce produit n'a pas de prix de vente défini. Veuillez saisir le prix à appliquer.</p>
+            <p className="text-sm">{'Ce produit n\'a pas de prix de vente d\u00e9fini. Veuillez saisir le prix \u00e0 appliquer.'}</p>
             <Label>Prix de vente (FCFA)</Label>
             <Input type="text" inputMode="numeric" value={formatNumberWithSpaces(customPrice)} onChange={e => setCustomPrice(e.target.value.replace(/\s/g, ""))} autoFocus/>
             <div className="flex gap-2 justify-end">
@@ -1581,3 +1669,7 @@ export default function POS() {
       </Dialog>
     </div>);
 }
+
+
+
+

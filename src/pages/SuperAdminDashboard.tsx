@@ -10,7 +10,7 @@ import { Store, Users, TrendingUp, AlertTriangle, CheckCircle, XCircle, RefreshC
 import { format, isAfter, isBefore, addDays, differenceInDays } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { toast } from 'sonner';
-const BACKEND = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
+import { BACKEND_BASE } from '@/lib/backend';
 interface StoreData {
     id: string;
     name: string;
@@ -118,17 +118,18 @@ export default function SuperAdminDashboard() {
         setIsLoading(true);
         try {
             const [storesRes, usersRes] = await Promise.all([
-                fetch(`${BACKEND}/api/stores.php?include_inactive=1`),
-                fetch(`${BACKEND}/api/users.php`),
+                fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1`),
+                fetch(`${BACKEND_BASE}/api/users.php`),
             ]);
             if (storesRes.ok) {
-                const data: StoreData[] = await storesRes.json();
+                const rawStores = await storesRes.json();
+                const data: StoreData[] = Array.isArray(rawStores) ? rawStores : [];
                 setStores(data);
                 // Load per-store stats for the current month
                 const now = new Date();
                 const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
                 const endOfMonth = now.getTime();
-                const statsPromises = data.map((store) => fetch(`${BACKEND}/api/sales_stats.php?storeId=${store.id}&start=${startOfMonth}&end=${endOfMonth}&groupBy=months`)
+                const statsPromises = data.map((store) => fetch(`${BACKEND_BASE}/api/sales_stats.php?storeId=${store.id}&start=${startOfMonth}&end=${endOfMonth}&groupBy=months`)
                     .then((r) => (r.ok ? r.json() : null))
                     .then((json) => ({
                     storeId: store.id,
@@ -141,15 +142,16 @@ export default function SuperAdminDashboard() {
                 setStoreStats(statsResults);
             }
             if (usersRes.ok) {
-                const data: UserData[] = await usersRes.json();
+                const rawUsers = await usersRes.json();
+                const data: UserData[] = Array.isArray(rawUsers) ? rawUsers : [];
                 setUsers(data);
             }
             // Load encaissements
             try {
-                const pRes = await fetch(`${BACKEND}/api/subscription_payments.php?limit=500`);
+                const pRes = await fetch(`${BACKEND_BASE}/api/subscription_payments.php?limit=500`);
                 if (pRes.ok) {
                     const pJson = await pRes.json();
-                const parsedPayments: PaymentRecord[] = (pJson.data || []).map((payment: PaymentRecord) => ({
+                const parsedPayments: PaymentRecord[] = (Array.isArray(pJson?.data) ? pJson.data : []).map((payment: PaymentRecord) => ({
                   ...payment,
                   amount: Number(payment.amount || 0),
                 }));

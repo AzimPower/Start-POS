@@ -1,17 +1,10 @@
 <?php
+require_once './_bootstrap.php';
+init_api_headers();
 require_once '../config.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
-header('Content-Type: application/json');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 function format_settings_row(array $row) {
     return [
@@ -65,16 +58,22 @@ try {
     switch ($method) {
         case 'GET':
             if (isset($_GET['storeId'])) {
+                $storeId = ensure_store_access($authClaims, $_GET['storeId']);
                 $stmt = $pdo->prepare("SELECT * FROM email_settings WHERE store_id = ?");
-                $stmt->execute([$_GET['storeId']]);
+                $stmt->execute([$storeId]);
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($result) {
                     echo json_encode(format_settings_row($result));
                 } else {
-                    echo json_encode(default_settings_payload($_GET['storeId']));
+                    echo json_encode(default_settings_payload($storeId));
                 }
             } else {
+                if (!is_super_admin_claims($authClaims)) {
+                    http_response_code(403);
+                    echo json_encode(['error' => 'storeId is required']);
+                    break;
+                }
                 $stmt = $pdo->query("SELECT * FROM email_settings ORDER BY updated_at DESC");
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -94,7 +93,7 @@ try {
                 break;
             }
             
-            $storeId = $input['storeId'];
+            $storeId = ensure_store_access($authClaims, $input['storeId']);
             $shifts = isset($input['shifts']) ? (int)$input['shifts'] : 1;
             $stockSignals = isset($input['stockSignals']) ? (int)$input['stockSignals'] : 1;
             $stockAdjustments = isset($input['stockAdjustments']) ? (int)$input['stockAdjustments'] : 1;
@@ -209,6 +208,12 @@ try {
             
         case 'DELETE':
             if (isset($_GET['id'])) {
+                if (!is_super_admin_claims($authClaims)) {
+                    $lookup = $pdo->prepare("SELECT store_id FROM email_settings WHERE id = ?");
+                    $lookup->execute([$_GET['id']]);
+                    $targetStoreId = $lookup->fetchColumn();
+                    ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+                }
                 $stmt = $pdo->prepare("DELETE FROM email_settings WHERE id = ?");
                 $stmt->execute([$_GET['id']]);
                 echo json_encode(['success' => true]);

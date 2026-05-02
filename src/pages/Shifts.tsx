@@ -22,8 +22,9 @@ import { Badge } from '@/components/ui/badge';
 import ShiftReceiptDetails from './ShiftReceiptDetails';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerTrigger, DrawerClose } from '@/components/ui/drawer';
-import { fetchAndMerge, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistClosedShiftMarker, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
+import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistClosedShiftMarker, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { BACKEND_BASE } from '@/lib/backend';
 interface Shift {
     id: string;
     userId: string;
@@ -69,6 +70,15 @@ function canViewShift(shift: any, user: any) {
         return sameId(shift?.storeId, user.storeId);
     }
     return sameId(shift?.userId, user?.id);
+}
+async function getVisibleShiftsFromLocal(db: any, user: any) {
+    if (user?.role === 'admin' && user?.storeId) {
+        return db.getAllFromIndex('shifts', 'by-store', user.storeId);
+    }
+    if (user?.id) {
+        return db.getAllFromIndex('shifts', 'by-user', user.id);
+    }
+    return db.getAll('shifts');
 }
 // Fonctions de formatage dÃ©finies hors du composant (stables)
 const formatDateFn = (timestamp: number) => {
@@ -258,7 +268,7 @@ export default function Shifts() {
         salesRefreshInFlight.current = true;
         try {
             const params = user?.storeId ? { storeId: String(user.storeId) } : undefined;
-            await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', 'sales', 'sales', undefined, params);
+            await fetchAndMerge(`${BACKEND_BASE}/api/sales.php`, 'sales', 'sales', undefined, params);
             await reconcileSalesToLastClosedShift(user?.storeId);
             const db = await getDB();
             const mergedSales = await db.getAll('sales');
@@ -281,8 +291,7 @@ export default function Shifts() {
             salesCacheTimestamp.current = Date.now();
             shiftsCache.current.clear();
             setSalesVersion(v => v + 1);
-        }
-        catch (e) {
+        } catch (e) {
         }
     }, []);
     // Gestionnaires d'Ã©vÃ©nements optimisÃ©s avec useCallback
@@ -317,7 +326,7 @@ export default function Shifts() {
         if (options?.syncFromBackend && isOnline && isBackendReachable) {
             try {
                 const params = user?.storeId ? { storeId: String(user.storeId) } : undefined;
-                await fetchAndMerge('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', 'users', 'users', (remoteUser: any) => ({
+                await fetchAndMerge(`${BACKEND_BASE}/api/users.php`, 'users', 'users', (remoteUser: any) => ({
                     ...remoteUser,
                     storeId: remoteUser?.storeId || '',
                     storeIds: normalizeStoreIds(remoteUser?.storeIds, remoteUser?.storeId),
@@ -440,20 +449,22 @@ export default function Shifts() {
             try {
                 // 1. Charger UNIQUEMENT caissiers + shifts locaux (ultra rapide)
                 const db = await getDB();
-                await Promise.all([
+                const [, initialShifts] = await Promise.all([
                     loadCashiers(),
                     loadFromLocal(db)
                 ]);
                 if (cancelled)
                     return;
                 setDataLoaded(true);
-                // 2. Charger les ventes en arriÃ¨re-plan (pour les calculs d'encaisse)
-                db.getAll('sales').then((allSales: any[]) => {
-                    if (cancelled || !allSales)
-                        return;
-                    salesCache.current = allSales;
-                    salesCacheTimestamp.current = Date.now();
-                }).catch(() => { });
+                // 2. Charger les ventes en arriÃ¨re-plan seulement si un shift ouvert est visible
+                if (Array.isArray(initialShifts) && initialShifts.some((shift: Shift) => shift.status === 'open')) {
+                    db.getAll('sales').then((allSales: any[]) => {
+                        if (cancelled || !allSales)
+                            return;
+                        salesCache.current = allSales;
+                        salesCacheTimestamp.current = Date.now();
+                    }).catch(() => { });
+                }
                 // 3. Sync backend immÃ©diatement si en ligne (non bloquant)
                 if (isOnline) {
                     loadCashiers({ syncFromBackend: true }).catch(() => { });
@@ -505,6 +516,7 @@ export default function Shifts() {
             uniqueById.set(String(s.id), s);
         return Array.from(uniqueById.values()).sort((a, b) => getShiftSortTs(b) - getShiftSortTs(a));
     }, [shifts, debouncedSearch, selectedCashier, selectedStatus, cashierById]);
+    const hasVisibleOpenShift = useMemo(() => filteredShifts.some((shift) => shift.status === 'open'), [filteredShifts]);
     // Calculs asynchrones optimisÃ©s avec cache intelligent et index Sales par shiftId
     useEffect(() => {
         let mounted = true;
@@ -541,9 +553,9 @@ export default function Shifts() {
                 difference: number | null;
             }> = {};
             const encaissesResults: Record<string, number> = {};
-            // Utiliser le cache des ventes (dÃ©jÃ  chargÃ© lors de l'init)
-            let allSales = salesCache.current;
-            if (hasOpenShifts || allSales.length === 0) {
+            // Utiliser le cache des ventes seulement si un shift ouvert en a besoin
+            let allSales = hasOpenShifts ? salesCache.current : [];
+            if (hasOpenShifts && allSales.length === 0) {
                 const db = await getDB();
                 allSales = await db.getAll('sales');
                 salesCache.current = allSales;
@@ -663,7 +675,7 @@ export default function Shifts() {
                 setSyncing(true);
                 try {
                     // Appeler SEULEMENT shifts.php - les ventes et users sont dÃ©jÃ  en local
-                    let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php';
+                    let url = `${BACKEND_BASE}/api/shifts.php`;
                     if (user?.storeId)
                         url += `?storeId=${user.storeId}`;
                     const response = await fetch(url);
@@ -671,10 +683,13 @@ export default function Shifts() {
                         const backendShifts = await response.json();
                         if (Array.isArray(backendShifts) && backendShifts.length > 0) {
                             await mergeBackendShifts(backendShifts);
-                            await mergeOverlappingShiftsForUserStore(user?.id, user?.storeId, {
+                            const mergedShiftIds = await mergeOverlappingShiftsForUserStore(user?.id, user?.storeId, {
                                 backendShiftIds: new Set(backendShifts.map((shift: any) => String(shift?.id || '')).filter(Boolean)),
                                 rebuildShiftSyncOps: true,
                             });
+                            if (mergedShiftIds.length > 0) {
+                                await forceSyncNow();
+                            }
                             // Invalider le cache des calculs
                             shiftsCache.current.clear();
                             // Relire depuis le local en respectant la pagination
@@ -708,7 +723,7 @@ export default function Shifts() {
     };
     const loadShiftsPage = async (db: any, offset: number, limit: number, reset = false) => {
         try {
-            const all = await db.getAll('shifts');
+            const all = await getVisibleShiftsFromLocal(db, user);
             all.sort((a: any, b: any) => getShiftSortTs(b) - getShiftSortTs(a));
             const normalized = all.map((s: any) => normalizeShiftRecord(s));
             const visible = normalized.filter((s: any) => canViewShift(s, user));
@@ -735,7 +750,7 @@ export default function Shifts() {
             return page;
         }
         catch (e) {
-            const all = await db.getAll('shifts');
+            const all = await getVisibleShiftsFromLocal(db, user);
             const normalized = all.map((s: any) => normalizeShiftRecord(s));
             normalized.sort((a: any, b: any) => getShiftSortTs(b) - getShiftSortTs(a));
             const filtered = user?.role === 'admin' && !user?.storeId ? normalized : normalized.filter((s: any) => canViewShift(s, user));
@@ -768,15 +783,16 @@ export default function Shifts() {
         refreshInFlight.current = true;
         try {
             const db = await getDB();
-            await loadShiftsPage(db, 0, pageSize, true);
+            const page = await loadShiftsPage(db, 0, pageSize, true);
             await loadCashiers({ syncFromBackend: isOnline && isBackendReachable });
-            await refreshLocalSalesCache(db);
+            if (Array.isArray(page) && page.some((shift: Shift) => shift.status === 'open')) {
+                await refreshLocalSalesCache(db);
+            }
             if (isOnline && isBackendReachable) {
                 loadShifts().catch(() => { });
                 refreshSalesFromBackend().catch(() => { });
             }
-        }
-        catch (e) {
+        } catch (e) {
         }
         finally {
             refreshInFlight.current = false;
@@ -813,7 +829,7 @@ export default function Shifts() {
         };
     }, [refreshShiftsView]);
     useEffect(() => {
-        if (!filteredShifts.some(shift => shift.status === 'open')) {
+        if (!hasVisibleOpenShift) {
             return;
         }
         const interval = window.setInterval(() => {
@@ -821,9 +837,9 @@ export default function Shifts() {
             if (isOnline && isBackendReachable) {
                 refreshSalesFromBackend().catch(() => { });
             }
-        }, 5000);
+        }, 15000);
         return () => window.clearInterval(interval);
-    }, [filteredShifts, isOnline, isBackendReachable, refreshLocalSalesCache, refreshSalesFromBackend]);
+    }, [hasVisibleOpenShift, isOnline, isBackendReachable, refreshLocalSalesCache, refreshSalesFromBackend]);
     const listScrollRef = useRef<HTMLDivElement | null>(null);
     const handleListScroll = useCallback(async () => {
         const el = listScrollRef.current;
@@ -1086,7 +1102,7 @@ export default function Shifts() {
             if (!isOnline || !isBackendReachable) {
                 await db.add('shifts', newShift);
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php',
+                    url: `${BACKEND_BASE}/api/shifts.php`,
                     method: 'POST',
                     table: 'shifts',
                     storeId: user!.storeId,
@@ -1104,7 +1120,7 @@ export default function Shifts() {
                 return;
             }
             try {
-                const checkUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?storeId=${user!.storeId}`;
+                const checkUrl = `${BACKEND_BASE}/api/shifts.php?storeId=${user!.storeId}`;
                 const checkResponse = await fetch(checkUrl);
                 if (!checkResponse.ok) {
                     throw new Error(`Erreur backend: ${checkResponse.status}`);
@@ -1138,7 +1154,7 @@ export default function Shifts() {
                 return;
             }
             try {
-                const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', {
+                const response = await fetch(`${BACKEND_BASE}/api/shifts.php`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1147,7 +1163,7 @@ export default function Shifts() {
                 });
                 if (response.status === 409) {
                     try {
-                        const existingUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?storeId=${user!.storeId}`;
+                        const existingUrl = `${BACKEND_BASE}/api/shifts.php?storeId=${user!.storeId}`;
                         const existingResp = await fetch(existingUrl);
                         if (existingResp.ok) {
                             const allShifts = await existingResp.json();
@@ -1301,7 +1317,7 @@ export default function Shifts() {
                 await db.delete('shifts', activeShift.id);
                 if (isOnline) {
                     try {
-                        const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`, {
+                        const response = await fetch(`${BACKEND_BASE}/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`, {
                             method: 'DELETE'
                         });
                         if (!response.ok) {
@@ -1310,7 +1326,7 @@ export default function Shifts() {
                     }
                     catch (error) {
                         await performSyncOp({
-                            url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`,
+                            url: `${BACKEND_BASE}/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`,
                             method: 'DELETE',
                             data: { id: activeShift.id },
                         });
@@ -1318,7 +1334,7 @@ export default function Shifts() {
                 }
                 else {
                     await performSyncOp({
-                        url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`,
+                        url: `${BACKEND_BASE}/api/shifts.php?id=${encodeURIComponent(activeShift.id)}`,
                         method: 'DELETE',
                         data: { id: activeShift.id },
                     });
@@ -1502,7 +1518,7 @@ export default function Shifts() {
             // Si en ligne, synchroniser immÃ©diatement avec le backend
             if (isOnline) {
                 try {
-                    const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', {
+                    const response = await fetch(`${BACKEND_BASE}/api/shifts.php`, {
                         method: 'PUT',
                         headers: {
                             'Content-Type': 'application/json',
@@ -1516,7 +1532,7 @@ export default function Shifts() {
                 catch (error) {
                     // Mettre en file via performSyncOp (gÃ¨re mise en file si offline)
                     await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php',
+                        url: `${BACKEND_BASE}/api/shifts.php`,
                         method: 'PUT',
                         data: updatedShift
                     });
@@ -1525,7 +1541,7 @@ export default function Shifts() {
             else {
                 // Hors ligne : mettre en file via performSyncOp
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php',
+                    url: `${BACKEND_BASE}/api/shifts.php`,
                     method: 'PUT',
                     data: updatedShift
                 });
@@ -1874,6 +1890,7 @@ export default function Shifts() {
       </Card>
     </div>);
 }
+
 
 
 

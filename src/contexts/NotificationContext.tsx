@@ -103,7 +103,7 @@ export function NotificationProvider({ children }: {
         void loadNotifications();
         const intervalId = window.setInterval(() => {
             void loadNotifications();
-        }, 45000);
+        }, 120000);
         return () => {
             disposed = true;
             window.clearInterval(intervalId);

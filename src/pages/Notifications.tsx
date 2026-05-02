@@ -43,6 +43,13 @@ function mergeUsersById(currentUsers: UserOption[], incomingUsers: UserOption[])
     }
     return Array.from(usersById.values());
 }
+function normalizeSearchValue(value: string) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
 function NotificationList({ title, description, notifications, emptyState, onMarkAsRead, storesById, usersById, showReadCount = false, canDelete = false, onDelete, deleteLabel = 'Supprimer', toolbar, selectable = false, selectedIds, onToggleSelection, paginate = false, pageSize = 5, }: {
     title: string;
     description: string;
@@ -228,20 +235,19 @@ export default function Notifications() {
         acc[item.id] = item.username;
         return acc;
     }, user ? { [user.id]: user.username } : {});
-    const inboxQuery = inboxSearch.trim().toLowerCase();
+    const inboxQuery = normalizeSearchValue(inboxSearch);
     const filteredInboxNotifications = notifications.filter((notification) => {
       if (!inboxQuery) {
         return true;
       }
-      const haystack = [
+      const haystack = normalizeSearchValue([
         notification.title,
         notification.message,
         getNotificationTypeLabel(notification.type),
         getNotificationTargetSummary(notification, { storesById, usersById }),
       ]
         .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
+        .join(' '));
       return haystack.includes(inboxQuery);
     });
     const filteredInboxIds = filteredInboxNotifications.map((notification) => notification.id);

@@ -1,16 +1,10 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
 require_once '../config.php';
+require_once __DIR__ . '/_bootstrap.php';
+
+init_api_headers(['GET', 'OPTIONS']);
+$claims = require_auth();
+$currentUserId = trim((string)($claims['sub'] ?? ''));
 
 $start = isset($_GET['start']) ? intval($_GET['start']) : null; // timestamps in ms
 $end = isset($_GET['end']) ? intval($_GET['end']) : null;
@@ -23,6 +17,18 @@ $endHour = $_GET['endHour'] ?? null; // "18:00" format
 if (!$start || !$end) {
     echo json_encode(['error' => 'start and end parameters required']);
     exit;
+}
+
+if ($userId !== null && $userId !== '' && !is_super_admin_claims($claims) && (string)$userId !== $currentUserId) {
+    http_response_code(403);
+    echo json_encode(['error' => 'User access denied']);
+    exit;
+}
+
+if ($storeId !== null && $storeId !== '') {
+    $storeId = ensure_store_access($claims, (string)$storeId);
+} elseif (!$userId && !is_super_admin_claims($claims)) {
+    $storeId = ensure_store_access($claims, null);
 }
 
 // Build where clause

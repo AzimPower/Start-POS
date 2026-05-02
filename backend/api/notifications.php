@@ -1,20 +1,17 @@
 <?php
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once '../config.php';
+require_once __DIR__ . '/_bootstrap.php';
+
+init_api_headers(['GET', 'POST', 'PUT', 'OPTIONS']);
 header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
-require_once '../config.php';
-
 $method = $_SERVER['REQUEST_METHOD'];
+$claims = require_auth();
+$currentUserId = trim((string)($claims['sub'] ?? ''));
+$currentRole = trim((string)($claims['role'] ?? ''));
+$currentStoreIds = get_claim_store_ids($claims);
 
 function read_json_body() {
     $raw = file_get_contents('php://input');
@@ -292,7 +289,10 @@ try {
 
             if ($view === 'created') {
                 $senderUserId = trim((string)($_GET['senderUserId'] ?? ''));
-                require_super_admin_sender($pdo, $senderUserId);
+                if ($senderUserId !== '' && $senderUserId !== $currentUserId) {
+                    json_error('senderUserId invalide', 403);
+                }
+                require_super_admin_sender($pdo, $currentUserId);
 
                 $stmt = $pdo->prepare(
                     'SELECT n.*, u.username AS senderUsername,
@@ -303,26 +303,34 @@ try {
                      ORDER BY n.createdAt DESC
                      LIMIT ?'
                 );
-                $stmt->bindValue(1, $senderUserId);
+                $stmt->bindValue(1, $currentUserId);
                 $stmt->bindValue(2, $limit, PDO::PARAM_INT);
                 $stmt->execute();
                 echo json_encode($stmt->fetchAll());
                 break;
             }
 
-            $userId = trim((string)($_GET['userId'] ?? ''));
-            $role = trim((string)($_GET['role'] ?? ''));
-            $storeId = trim((string)($_GET['storeId'] ?? ''));
-            $storeIds = normalize_store_ids($_GET['storeIds'] ?? null);
+            $requestedUserId = trim((string)($_GET['userId'] ?? ''));
+            if ($requestedUserId !== '' && $requestedUserId !== $currentUserId) {
+                json_error('userId invalide', 403);
+            }
+
+            $requestedStoreId = trim((string)($_GET['storeId'] ?? ''));
+            if ($requestedStoreId !== '') {
+                ensure_store_access($claims, $requestedStoreId);
+            }
+
+            $userId = $currentUserId;
+            $role = $currentRole;
+            $storeIds = $currentStoreIds;
             $now = (int)round(microtime(true) * 1000);
 
             if ($userId === '' || $role === '') {
                 json_error('userId et role sont requis');
             }
 
-            if ($storeId !== '') {
-                $storeIds[] = $storeId;
-                $storeIds = array_values(array_unique($storeIds));
+            if ($requestedStoreId !== '' && !in_array($requestedStoreId, $storeIds, true)) {
+                $storeIds[] = $requestedStoreId;
             }
 
             $params = [$userId, $userId, $now, $role, $userId];
@@ -369,7 +377,11 @@ try {
         case 'POST':
             $data = read_json_body();
             $senderUserId = trim((string)($data['senderUserId'] ?? ''));
-            $sender = require_active_sender($pdo, $senderUserId);
+            if ($senderUserId !== '' && $senderUserId !== $currentUserId) {
+                json_error('senderUserId invalide', 403);
+            }
+
+            $sender = require_active_sender($pdo, $currentUserId);
             $payload = validate_notification_payload($data);
 
             if ($payload['targetType'] === 'store_admins') {
@@ -426,9 +438,12 @@ try {
             $action = trim((string)($data['action'] ?? ''));
 
             if ($action === 'mark_read') {
-                $userId = trim((string)($data['userId'] ?? ''));
                 $notificationId = trim((string)($data['notificationId'] ?? ''));
-                if ($userId === '' || $notificationId === '') {
+                $userId = trim((string)($data['userId'] ?? ''));
+                if ($userId !== '' && $userId !== $currentUserId) {
+                    json_error('userId invalide', 403);
+                }
+                if ($notificationId === '') {
                     json_error('userId et notificationId sont requis');
                 }
 
@@ -446,7 +461,7 @@ try {
                 $stmt->execute([
                     generate_entity_id('read_'),
                     $notificationId,
-                    $userId,
+                    $currentUserId,
                     (int)round(microtime(true) * 1000),
                 ]);
 
@@ -457,11 +472,14 @@ try {
             if ($action === 'delete') {
                 $senderUserId = trim((string)($data['senderUserId'] ?? ''));
                 $notificationId = trim((string)($data['notificationId'] ?? ''));
-                if ($senderUserId === '' || $notificationId === '') {
+                if ($senderUserId !== '' && $senderUserId !== $currentUserId) {
+                    json_error('senderUserId invalide', 403);
+                }
+                if ($notificationId === '') {
                     json_error('senderUserId et notificationId sont requis');
                 }
 
-                require_notification_sender($pdo, $notificationId, $senderUserId);
+                require_notification_sender($pdo, $notificationId, $currentUserId);
 
                 $stmt = $pdo->prepare('UPDATE notifications SET active = 0 WHERE id = ?');
                 $stmt->execute([$notificationId]);
@@ -471,9 +489,12 @@ try {
             }
 
             if ($action === 'dismiss') {
-                $userId = trim((string)($data['userId'] ?? ''));
                 $notificationId = trim((string)($data['notificationId'] ?? ''));
-                if ($userId === '' || $notificationId === '') {
+                $userId = trim((string)($data['userId'] ?? ''));
+                if ($userId !== '' && $userId !== $currentUserId) {
+                    json_error('userId invalide', 403);
+                }
+                if ($notificationId === '') {
                     json_error('userId et notificationId sont requis');
                 }
 
@@ -491,7 +512,7 @@ try {
                 $stmt->execute([
                     generate_entity_id('dismiss_'),
                     $notificationId,
-                    $userId,
+                    $currentUserId,
                     (int)round(microtime(true) * 1000),
                 ]);
 

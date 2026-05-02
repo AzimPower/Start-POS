@@ -3,10 +3,12 @@ import { getDB } from '@/lib/db';
 import { getEmailSettings } from '@/lib/emailSettingsCache';
 import * as secureStorage from '@/lib/secureStorage';
 import { refreshAllFromBackend } from '@/lib/sync';
-import { backendAvailable } from '@/lib/backend';
+import { BACKEND_BASE, backendAvailable } from '@/lib/backend';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { isActiveFlag } from '@/lib/status';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { hashPasswordForCache } from '@/lib/auth';
+import { clearAuthToken, setAuthToken } from '@/lib/apiAuth';
 function resolvePrimaryStoreId(storeId?: string | null, storeIds?: Array<string | null | undefined>): string {
     const candidates = [storeId, ...(storeIds || [])];
     for (const candidate of candidates) {
@@ -36,6 +38,9 @@ const forceRefreshAdminCache = async (storeId: string) => {
 };
 // Function to cache admin data locally for a specific store
 const cacheAdminData = async (storeId: string) => {
+    const remoteAttempted = false;
+    const remoteReachable = true;
+    const localUser = null;
     try {
         const cacheStoreId = resolvePrimaryStoreId(storeId);
         if (!cacheStoreId) {
@@ -55,11 +60,11 @@ const cacheAdminData = async (storeId: string) => {
         catch (e) {
         }
         // Vérifier la connectivité avant de tenter la récupération
-        if (!navigator.onLine) {
+        if (!await backendAvailable()) {
             return null;
         }
         // Récupérer tous les users depuis le backend
-        const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
+        const usersResponse = await fetch(`${BACKEND_BASE}/api/users.php`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json'
@@ -114,6 +119,9 @@ const cacheAdminData = async (storeId: string) => {
                 };
                 await db.put('adminCache', adminCache);
                 return adminCache;
+            }
+            else if (remoteAttempted && !remoteReachable && !localUser) {
+                localStorage.setItem('pos-login-last-error', 'Connexion au serveur instable. RÃ©essayez dans un instant.');
             }
             else {
                 // Fallback : chercher un admin avec email dans n'importe quel store
@@ -242,7 +250,7 @@ const sendLoginNotificationEmail = async (userData: User) => {
         // 2. Si pas trouvé en local, fallback vers backend
         if (!admin) {
             try {
-                const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+                const usersResponse = await fetch(`${BACKEND_BASE}/api/users.php`);
                 if (usersResponse.ok) {
                     const users = await usersResponse.json();
                     admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
@@ -367,6 +375,7 @@ interface User {
 }
 interface UserRecord extends User {
     password?: string;
+    passwordHash?: string;
     pin?: string;
     pinEnabled?: boolean;
     createdAt?: number;
@@ -492,22 +501,38 @@ export function AuthProvider({ children }: {
             else
                 candidatePhones.push(`+226${raw}`);
             candidatePhones.push(raw.replace(/^\+/, ''));
-            const backendIsUp = await backendAvailable();
+            let backendIsUp = false;
+            let remoteAttempted = false;
+            let remoteReachable = false;
+            try {
+                backendIsUp = await backendAvailable(5000, true);
+            }
+            catch (e) {
+                backendIsUp = false;
+            }
             let remoteUser: UserRecord | undefined = undefined;
             let localUser: UserRecord | undefined = undefined;
             // 1. Toujours prioriser la vérification sur le serveur si possible
             if (backendIsUp) {
                 try {
-                    const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+                    remoteAttempted = true;
+                    const res = await fetch(`${BACKEND_BASE}/api/auth_login.php`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phoneCandidates: candidatePhones, password }),
+                    });
+                    remoteReachable = true;
                     if (res.ok) {
-                        const remoteUsers = (await res.json()) as UserRecord[];
-                        remoteUser = remoteUsers.find((u) => candidatePhones.includes(String(u.phone || '')) && u.password === password);
+                        remoteUser = (await res.json()) as UserRecord;
                         if (remoteUser) {
+                            if ((remoteUser as any).token) {
+                                await setAuthToken(String((remoteUser as any).token));
+                            }
                             const primaryStoreId = resolvePrimaryStoreId(remoteUser.storeId, (remoteUser as any).storeIds);
                             let remoteStoreIsInactive = false;
                             if (remoteUser.role !== 'super_admin' && primaryStoreId) {
                                 try {
-                                    const storesRes = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1&_ts=' + Date.now(), { cache: 'no-store' });
+                                    const storesRes = await fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1&_ts=` + Date.now(), { cache: 'no-store' });
                                     if (storesRes.ok) {
                                         const remoteStores = await storesRes.json();
                                         const currentStore = Array.isArray(remoteStores)
@@ -536,7 +561,7 @@ export function AuthProvider({ children }: {
                                     id: remoteUser.id,
                                     username: remoteUser.username,
                                     phone: remoteUser.phone,
-                                    password: remoteUser.password || '',
+                                    passwordHash: await hashPasswordForCache(password),
                                     pin: remoteUser.pin || '',
                                     pinEnabled: (remoteUser as any).pinEnabled || false,
                                     role: remoteUser.role,
@@ -611,6 +636,9 @@ export function AuthProvider({ children }: {
                             return true;
                         }
                     }
+                    if (res.status === 401 || res.status === 403) {
+                        localStorage.setItem('pos-login-last-error', 'NumÃ©ro de tÃ©lÃ©phone ou mot de passe incorrect');
+                    }
                 }
                 catch (e) {
                 }
@@ -619,7 +647,11 @@ export function AuthProvider({ children }: {
             for (const p of candidatePhones) {
                 try {
                     localUser = (await db.getFromIndex('users', 'by-phone', p)) as UserRecord | undefined;
-                    if (localUser && localUser.password === password) {
+                    const localPasswordHash = localUser?.passwordHash;
+                    const candidateHash = localPasswordHash ? await hashPasswordForCache(password) : '';
+                    const legacyPasswordMatches = !!(localUser && localUser.password === password);
+                    const hashedPasswordMatches = !!(localUser && localPasswordHash && localPasswordHash === candidateHash);
+                    if (localUser && (legacyPasswordMatches || hashedPasswordMatches)) {
                         const primaryStoreId = resolvePrimaryStoreId(localUser.storeId, (localUser as any).storeIds);
                         let localStoreIsInactive = false;
                         if (localUser.role !== 'super_admin' && primaryStoreId) {
@@ -690,7 +722,7 @@ export function AuthProvider({ children }: {
                 }
             }
             // Si aucune méthode n'a fonctionné
-            if (!backendIsUp) {
+            if (!remoteAttempted && !backendIsUp) {
                 localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
             }
             else {
@@ -706,6 +738,7 @@ export function AuthProvider({ children }: {
         setUser(null);
         setPendingUser(null);
         setIsLocked(false);
+        clearAuthToken().catch(() => { });
         // remove from secure storage and localStorage (fire-and-forget)
         secureStorage.removeItem('pos-user').catch(() => { });
         try {

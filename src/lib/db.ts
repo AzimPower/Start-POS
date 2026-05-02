@@ -1,5 +1,4 @@
-import { connectionState, queueSyncOp } from './sync';
-import { backendAvailable } from './backend';
+import { canReachBackendForWrite, queueSyncOp } from './sync';
 interface CachedNotificationPayload {
     id: string;
     title: string;
@@ -48,14 +47,13 @@ export async function performSyncOp(op: {
     notifyOnSuccess?: any;
 }) {
     // Ensure backend is reachable before attempting a direct call.
-    if (connectionState.isOnline) {
-        const backendUp = await backendAvailable().catch(() => false);
-        if (!backendUp) {
+    const backendUp = await canReachBackendForWrite().catch(() => false);
+    if (!backendUp) {
             // Internet may be present but API is unreachable — queue operation instead
-            await queueSyncOp(op);
-            return { success: false, queued: true, reason: 'backend_unreachable' };
-        }
-        try {
+        await queueSyncOp(op);
+        return { success: false, queued: true, reason: 'backend_unreachable' };
+    }
+    try {
             const res = await fetch(op.url, {
                 method: op.method || 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -75,12 +73,6 @@ export async function performSyncOp(op: {
             await queueSyncOp(op);
             return { success: false, error: e, queued: true };
         }
-    }
-    else {
-        // Hors-ligne, on met en attente
-        await queueSyncOp(op);
-        return { success: false, queued: true };
-    }
 }
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // Define the database schema
@@ -147,7 +139,8 @@ interface POSDB extends DBSchema {
             username: string;
             phone: string; // Téléphone unique pour la connexion
             email?: string; // Email optionnel
-            password: string;
+            password?: string; // Legacy only, kept for migration compatibility
+            passwordHash?: string;
             role: 'super_admin' | 'admin' | 'cashier' | 'manager';
             storeId: string;
             storeIds?: string[]; // support multi-magasin (mapping user_stores)
@@ -197,6 +190,9 @@ interface POSDB extends DBSchema {
             createdAt: number;
             storeId: string;
         };
+        indexes: {
+            'by-store': string;
+        };
     };
     products: {
         key: string;
@@ -237,6 +233,7 @@ interface POSDB extends DBSchema {
         };
         indexes: {
             'by-phone': string;
+            'by-store': string;
         };
     };
     shifts: {
@@ -473,7 +470,7 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
     if (dbInstance)
         return dbInstance;
-    dbInstance = await openDB<POSDB>('pos-db', 16, {
+    dbInstance = await openDB<POSDB>('pos-db', 18, {
         upgrade(db, oldVersion, newVersion, transaction) {
             if (!db.objectStoreNames.contains('notificationInbox')) {
                 const notificationInboxStore = db.createObjectStore('notificationInbox', { keyPath: 'cacheKey' });
@@ -513,7 +510,14 @@ export async function getDB() {
             }
             // Categories
             if (!db.objectStoreNames.contains('categories')) {
-                db.createObjectStore('categories', { keyPath: 'id' });
+                const categoryStore = db.createObjectStore('categories', { keyPath: 'id' });
+                categoryStore.createIndex('by-store', 'storeId');
+            }
+            else {
+                const categoryStore = transaction.objectStore('categories');
+                if (!categoryStore.indexNames.contains('by-store')) {
+                    categoryStore.createIndex('by-store', 'storeId');
+                }
             }
             // Products
             if (!db.objectStoreNames.contains('products')) {
@@ -525,6 +529,13 @@ export async function getDB() {
             if (!db.objectStoreNames.contains('customers')) {
                 const customerStore = db.createObjectStore('customers', { keyPath: 'id' });
                 customerStore.createIndex('by-phone', 'phone');
+                customerStore.createIndex('by-store', 'storeId');
+            }
+            else {
+                const customerStore = transaction.objectStore('customers');
+                if (!customerStore.indexNames.contains('by-store')) {
+                    customerStore.createIndex('by-store', 'storeId');
+                }
             }
             // Shifts
             if (!db.objectStoreNames.contains('shifts')) {
@@ -544,6 +555,10 @@ export async function getDB() {
             }
             else {
                 const salesStore = transaction.objectStore('sales');
+                const legacySalesStore = salesStore as unknown as IDBObjectStore;
+                if (legacySalesStore.indexNames.contains('by-store-draft')) {
+                    legacySalesStore.deleteIndex('by-store-draft');
+                }
                 if (!salesStore.indexNames.contains('by-store-createdAt')) {
                     salesStore.createIndex('by-store-createdAt', ['storeId', 'createdAt']);
                 }
@@ -659,7 +674,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
             username: 'superadmin',
             phone: '+22600000000', // Téléphone par défaut pour super admin
             email: 'superadmin@example.com',
-            password: 'super123',
+            passwordHash: '4e4c56e4a15f89f05c2f4c72613da2a18c9665d4f0d6acce16415eb06f9be776',
             role: 'super_admin',
             storeId: '',
             active: true,
@@ -684,7 +699,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
             username: 'admin',
             phone: '1111111111', // Téléphone par défaut pour admin
             email: 'admin@example.com',
-            password: 'admin123',
+            passwordHash: '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
             role: 'admin',
             storeId: defaultStore.id,
             active: true,

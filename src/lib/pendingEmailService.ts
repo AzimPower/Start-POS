@@ -1,5 +1,24 @@
 import { getDB, generateId } from './db';
 import { emailService } from './emailService';
+import { BACKEND_BASE, backendAvailable } from './backend';
+
+const DEFAULT_ADMIN_EMAIL = (import.meta.env.VITE_DEFAULT_ADMIN_EMAIL || '').trim();
+
+function getDefaultAdminFallback(storeId?: string): Array<{
+    id: string;
+    username: string;
+    email: string;
+}> {
+    if (!DEFAULT_ADMIN_EMAIL) {
+        return [];
+    }
+
+    return [{
+        id: `default-admin-${storeId || 'global'}`,
+        username: 'Admin par defaut',
+        email: DEFAULT_ADMIN_EMAIL,
+    }];
+}
 /**
  * Récupère STRICTEMENT les admins du store spécifique depuis le cache local
  */
@@ -14,7 +33,7 @@ export async function getAllStoreAdmins(storeId: string): Promise<Array<{
             return [{
                     id: 'no-store-admin',
                     username: 'Admin par défaut',
-                    email: 'powerstartbf@gmail.com'
+                    email: DEFAULT_ADMIN_EMAIL
                 }];
         }
         // 1. Récupérer UNIQUEMENT depuis le cache de ce store spécifique
@@ -79,7 +98,7 @@ export async function getAllStoreAdmins(storeId: string): Promise<Array<{
         return [{
                 id: 'default-admin-' + storeId,
                 username: 'Admin par défaut',
-                email: 'powerstartbf@gmail.com'
+                email: DEFAULT_ADMIN_EMAIL
             }];
     }
     catch (error) {
@@ -87,7 +106,7 @@ export async function getAllStoreAdmins(storeId: string): Promise<Array<{
         return [{
                 id: 'error-fallback-' + storeId,
                 username: 'Admin par défaut',
-                email: 'powerstartbf@gmail.com'
+                email: DEFAULT_ADMIN_EMAIL
             }];
     }
 }
@@ -99,7 +118,7 @@ export async function getAdminEmail(storeId: string): Promise<string | null> {
     try {
         const db = await getDB();
         if (!storeId || storeId.trim() === '') {
-            const defaultAdminEmail = 'powerstartbf@gmail.com';
+            const defaultAdminEmail = DEFAULT_ADMIN_EMAIL;
             return defaultAdminEmail;
         }
         // 1. Toujours essayer de récupérer l'admin depuis le cache local d'abord
@@ -116,19 +135,14 @@ export async function getAdminEmail(storeId: string): Promise<string | null> {
         catch (e) {
         }
         // 2. Si pas trouvé en local, vérifier la connectivité avant backend
-        if (!navigator.onLine) {
-            const defaultAdminEmail = 'powerstartbf@gmail.com';
-            return defaultAdminEmail;
-        }
-        const { backendAvailable } = await import('./backend');
-        const backendUp = await backendAvailable();
+        const backendUp = await backendAvailable().catch(() => false);
         if (!backendUp) {
-            const defaultAdminEmail = 'powerstartbf@gmail.com';
+            const defaultAdminEmail = DEFAULT_ADMIN_EMAIL;
             return defaultAdminEmail;
         }
         // 3. Backend accessible, tentative de récupération
         try {
-            const usersResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php');
+            const usersResponse = await fetch(`${BACKEND_BASE}/api/users.php`);
             if (usersResponse.ok) {
                 const users = await usersResponse.json();
                 const admin = users.find((u: any) => u.role === 'admin' && u.email && u.email.trim() !== '');
@@ -153,7 +167,7 @@ export async function getAdminEmail(storeId: string): Promise<string | null> {
         catch (backendError) {
         }
         // 4. En dernier recours, utiliser email admin par défaut
-        const defaultAdminEmail = 'powerstartbf@gmail.com';
+        const defaultAdminEmail = DEFAULT_ADMIN_EMAIL;
         return defaultAdminEmail;
     }
     catch (error) {
@@ -234,7 +248,7 @@ class PendingEmailService {
             // Fallback vers l'ancien système avec email par défaut
             const defaultResult = await this.sendOrQueue({
                 name: 'Admin',
-                email: 'powerstartbf@gmail.com',
+                email: DEFAULT_ADMIN_EMAIL,
                 message: emailData.message,
                 storeName: emailData.storeName,
                 type: emailData.type,
@@ -247,7 +261,7 @@ class PendingEmailService {
                 sent: defaultResult.sent ? 1 : 0,
                 queued: defaultResult.queued ? 1 : 0,
                 results: [{
-                        email: 'powerstartbf@gmail.com',
+                        email: DEFAULT_ADMIN_EMAIL,
                         sent: defaultResult.sent,
                         queued: defaultResult.queued,
                         id: defaultResult.id
@@ -317,13 +331,8 @@ class PendingEmailService {
         id?: string;
     }> {
         // Utiliser le même système que pour les ventes/dépenses
-        const { backendAvailable } = await import('./backend');
+        const backendUp = await backendAvailable().catch(() => false);
         // Vérifier si on est en ligne ET si le backend est accessible
-        if (!navigator.onLine) {
-            const id = await this.queueEmail(emailData);
-            return { sent: false, queued: true, id };
-        }
-        const backendUp = await backendAvailable();
         if (!backendUp) {
             const id = await this.queueEmail(emailData);
             return { sent: false, queued: true, id };

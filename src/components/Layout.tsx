@@ -4,36 +4,41 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import NotificationBell from '@/components/NotificationBell';
-import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
-import { getDB } from '@/lib/db';
-import { isActiveFlag } from '@/lib/status';
-import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, Shield, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard, } from 'lucide-react';
+import { refreshAllFromBackend, forceSyncNow, getPendingSyncSnapshot, type PendingSyncEntrySnapshot, type SyncLogSnapshot } from '@/lib/sync';
+import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard, Bug, RefreshCw } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+
 interface LayoutProps {
     children: ReactNode;
 }
+
 export default function Layout({ children }: LayoutProps) {
     const { user, logout } = useAuth();
-    const network = useNetwork();
+    const network = useNetwork({ notifyOnStatusChange: true });
     const [isFullSyncing, setIsFullSyncing] = useState(false);
-    const [storeCount, setStoreCount] = useState<number>(0);
-    useEffect(() => {
-        if (!user)
-            return;
-        getDB().then(db => db.getAll('stores')).then(stores => {
-            if (user.role === 'super_admin') {
-            setStoreCount(stores.filter(s => isActiveFlag(s.active)).length);
-            }
-            else {
-                // Pour un admin, ne compter que les magasins auxquels il est lié
-                const userStoreIds: string[] = (user as any).storeIds?.length > 0
-                    ? (user as any).storeIds
-                    : (user.storeId ? [user.storeId] : []);
-                setStoreCount(stores.filter(s => isActiveFlag(s.active) && userStoreIds.includes(s.id)).length);
-            }
-        }).catch(() => { });
-    }, [user]);
-    // Handler pour synchronisation complète (queue + refresh)
+    const [showSyncDebug, setShowSyncDebug] = useState(false);
+    const [isLoadingSyncDebug, setIsLoadingSyncDebug] = useState(false);
+    const [pendingEntries, setPendingEntries] = useState<PendingSyncEntrySnapshot[]>([]);
+    const [syncLogs, setSyncLogs] = useState<SyncLogSnapshot[]>([]);
+
+    const loadSyncDebug = async () => {
+        setIsLoadingSyncDebug(true);
+        try {
+            const snapshot = await getPendingSyncSnapshot();
+            setPendingEntries(snapshot.pending);
+            setSyncLogs(snapshot.logs);
+        }
+        catch (e) {
+            setPendingEntries([]);
+            setSyncLogs([]);
+        }
+        finally {
+            setIsLoadingSyncDebug(false);
+        }
+    };
+
+    // Handler pour synchronisation complete (queue + refresh)
     const handleFullSync = async () => {
         if (!network.isOnline || isFullSyncing)
             return;
@@ -45,11 +50,14 @@ export default function Layout({ children }: LayoutProps) {
         catch (e) {
         }
         finally {
+            await network.refreshPendingCount();
             setIsFullSyncing(false);
         }
     };
+
     const navigate = useNavigate();
     const location = useLocation();
+
     // Save the last active path so we can restore it after PIN unlock.
     useEffect(() => {
         try {
@@ -63,38 +71,42 @@ export default function Layout({ children }: LayoutProps) {
             // ignore storage errors
         }
     }, [location.pathname]);
+
+    useEffect(() => {
+        if (!showSyncDebug) {
+            return;
+        }
+        loadSyncDebug().catch(() => { });
+    }, [showSyncDebug]);
+
     const [menuOpen, setMenuOpen] = useState(false);
     const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => ({
         principal: true,
         vente: true,
         gestion: true,
-        // Par défaut, garder l'admin ouvert pour le super_admin
+        // Par defaut, garder l'admin ouvert pour le super_admin
         admin: (typeof window !== 'undefined' && JSON.parse(localStorage.getItem('pos-user') || 'null')?.role === 'super_admin') || false,
     }));
+
     const menuItems = [
-        // Rendre 'Tableau' disponible pour tous les rôles
+        // Rendre 'Tableau' disponible pour tous les roles
         { icon: LayoutDashboard, label: 'Tableau', path: '/dashboard', roles: ['admin', 'super_admin'], group: 'principal' },
         { icon: ShoppingCart, label: 'Vente', path: '/pos', roles: ['admin', 'cashier', 'manager'], group: 'vente' },
         { icon: Clock, label: 'Services', path: '/shifts', roles: ['admin', 'cashier', 'manager'], group: 'vente' },
-        { icon: FileText, label: 'Reçus', path: '/receipts', roles: ['admin', 'cashier', 'manager'], group: 'vente' },
+        { icon: FileText, label: 'Recus', path: '/receipts', roles: ['admin', 'cashier', 'manager'], group: 'vente' },
         { icon: Users, label: 'Clients', path: '/customers', roles: ['admin', 'cashier', 'manager'], group: 'gestion' },
-        { icon: DollarSign, label: 'Dépenses', path: '/expenses', roles: ['admin', 'cashier', 'manager'], group: 'gestion' },
+        { icon: DollarSign, label: 'Depenses', path: '/expenses', roles: ['admin', 'cashier', 'manager'], group: 'gestion' },
         { icon: AlertTriangle, label: 'Stock', path: '/stock-signals', roles: ['admin', 'cashier', 'manager'], group: 'gestion' },
         { icon: Package, label: 'Produits', path: '/products', roles: ['admin', 'manager'], group: 'gestion' },
         { icon: UserCircle, label: 'Utilisateurs', path: '/users', roles: ['admin', 'super_admin'], group: 'admin' },
         { icon: Store, label: 'Magasins', path: '/stores', roles: ['admin', 'super_admin'], group: 'admin' },
         { icon: CreditCard, label: 'Encaissements', path: '/subscription-payments', roles: ['super_admin'], group: 'admin' },
         { icon: Bell, label: 'Notifications', path: '/notifications', roles: ['super_admin'], group: 'admin' },
-        { icon: Menu, label: 'Paramètres', path: '/settings', roles: ['admin', 'cashier', 'manager'], group: 'admin' },
+        { icon: Menu, label: 'Parametres', path: '/settings', roles: ['admin', 'cashier', 'manager'], group: 'admin' },
     ];
-    const filteredMenu = menuItems.filter(item => {
-        if (!item.roles.includes(user?.role || ''))
-            return false;
-        // Masquer "Magasins" pour les non-super_admin s'il y a moins de 2 magasins
-        if (item.path === '/stores' && user?.role !== 'super_admin' && storeCount < 2)
-            return false;
-        return true;
-    });
+
+    const filteredMenu = menuItems.filter(item => item.roles.includes(user?.role || ''));
+
     const groupOrder = ['principal', 'vente', 'gestion', 'admin'] as const;
     const groupLabels: Record<(typeof groupOrder)[number], string> = {
         principal: 'Essentiel',
@@ -102,17 +114,25 @@ export default function Layout({ children }: LayoutProps) {
         gestion: 'Gestion',
         admin: 'Administration',
     };
+
     const toggleGroup = (group: (typeof groupOrder)[number]) => {
         // Ne pas permettre le collapse pour le super_admin (toujours ouvert)
-        // Ne pas permettre le collapse pour la section 'principal' (Essentiel) — toujours ouverte
+        // Ne pas permettre le collapse pour la section 'principal' (Essentiel) - toujours ouverte
         if (user?.role === 'super_admin' || group === 'principal')
             return;
         setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
     };
+
     const handleLogout = () => {
         logout();
         navigate('/login');
         setMenuOpen(false);
+    };
+    const formatTimestamp = (value?: number) => {
+        if (!value) {
+            return 'Inconnue';
+        }
+        return new Date(value).toLocaleString('fr-FR');
     };
     const NavContent = () => (<nav className="flex flex-col h-full overflow-y-auto">
       <div className="p-6 border-b border-sidebar-border">
@@ -127,7 +147,7 @@ export default function Layout({ children }: LayoutProps) {
             </p>
           </div>
         </div>
-        {/* État réseau pour desktop */}
+        {/* Etat reseau pour desktop */}
         <div className="hidden lg:flex flex-col gap-2 mt-4">
           
           <div className="flex items-center gap-2">
@@ -140,7 +160,10 @@ export default function Layout({ children }: LayoutProps) {
               {isFullSyncing ? 'Synchronisation...' : (network.isSyncing ? 'Sync...' : 'Synchroniser')}
             </Button>
           </div>
-          {network.pendingCount > 0 && (<span className="inline-flex items-center justify-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800 font-semibold">{network.pendingCount}</span>)}
+          {network.pendingCount > 0 && (<button type="button" onClick={() => setShowSyncDebug(true)} className="inline-flex items-center justify-center gap-1 rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800 transition-colors hover:bg-yellow-200" title="Voir le détail des synchronisations en attente">
+              <Bug className="h-3.5 w-3.5"/>
+              {network.pendingCount}
+            </button>)}
         </div>
       </div>
 
@@ -180,12 +203,13 @@ export default function Layout({ children }: LayoutProps) {
             {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrateur' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
           </p>
         </div>
-        <Button variant="ghost" className="w-full bg-white/10 text-white hover:bg-white/20 hover:shadow-sm" onClick={handleLogout} aria-label="Déconnexion">
+        <Button variant="ghost" className="w-full bg-white/10 text-white hover:bg-white/20 hover:shadow-sm" onClick={handleLogout} aria-label="Deconnexion">
           <LogOut className="w-4 h-4 mr-2 text-white"/>
-          Déconnexion
+          Deconnexion
         </Button>
       </div>
     </nav>);
+
     return (<div className="min-h-screen flex bg-background">
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex fixed top-0 left-0 h-screen w-64 bg-sidebar flex-col border-r border-sidebar-border z-40 overflow-y-auto sidebar-scrollable max-h-screen" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
@@ -214,12 +238,12 @@ export default function Layout({ children }: LayoutProps) {
               <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
                 <ShoppingCart className="w-4 h-4 text-white"/>
               </div>
-              <span className="font-bold text-white text-base tracking-wide">Système POS</span>
+              <span className="font-bold text-white text-base tracking-wide">Systeme POS</span>
             </div>
 
             {/* Right: Network status + sync */}
             <div className="flex items-center gap-2">
-              {/* Badge réseau */}
+              {/* Badge reseau */}
               <span className={`inline-flex items-center justify-center w-9 h-9 rounded-lg ${network.isBackendReachable
             ? 'bg-green-500 text-white shadow-sm'
             : 'bg-red-500 text-white shadow-sm'}`} title={network.isBackendReachable ? 'Serveur OK' : 'Serveur inaccessible'} aria-live="polite">
@@ -235,18 +259,76 @@ export default function Layout({ children }: LayoutProps) {
                 </svg>
               </button>
 
-              {/* Badge opérations en attente */}
-              {network.pendingCount > 0 && (<span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-yellow-400 text-yellow-900 shadow">
+              {/* Badge operations en attente */}
+              {network.pendingCount > 0 && (<button type="button" onClick={() => setShowSyncDebug(true)} className="inline-flex min-w-[22px] items-center justify-center gap-1 rounded-full bg-yellow-400 px-1.5 text-[10px] font-bold text-yellow-900 shadow" title="Voir le détail des synchronisations en attente">
+                  <Bug className="h-3 w-3"/>
                   {network.pendingCount}
-                </span>)}
+                </button>)}
             </div>
           </div>
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 pt-[60px] lg:pt-0">
+        <main className="flex-1 pt-[64px] lg:pt-0">
           {children}
         </main>
       </div>
+      <Dialog open={showSyncDebug} onOpenChange={setShowSyncDebug}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Diagnostic synchronisation</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+              <div className="text-sm text-muted-foreground">
+                {network.pendingCount} élément(s) signalé(s) en attente
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => loadSyncDebug()} disabled={isLoadingSyncDebug}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${isLoadingSyncDebug ? 'animate-spin' : ''}`}/>
+                Actualiser
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">Opérations en attente</h3>
+              <div className="max-h-[34vh] space-y-2 overflow-y-auto rounded-lg border border-border/60 bg-background p-2">
+                {pendingEntries.length === 0 ? (<div className="px-2 py-3 text-sm text-muted-foreground">Aucune opération en attente dans les files locales.</div>) : (pendingEntries.map((entry) => (<div key={`${entry.source}-${entry.id}`} className="rounded-md border border-border/50 bg-muted/20 p-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-medium">
+                        <span>{entry.table || 'table inconnue'}</span>
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] uppercase text-slate-700">{entry.source}</span>
+                        <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] uppercase text-blue-700">{entry.method || entry.operation || 'POST'}</span>
+                      </div>
+                      <div className="mt-2 space-y-1 text-muted-foreground">
+                        <div>ID: {String(entry.id)}</div>
+                        <div>URL: {entry.url || 'inconnue'}</div>
+                        <div>Créée: {formatTimestamp(entry.createdAt)}</div>
+                        <div>Tentatives: {entry.attempts ?? 0}</div>
+                        {entry.storeId ? <div>Store: {entry.storeId}</div> : null}
+                        {entry.lastError ? <div>Erreur: {entry.lastError}</div> : null}
+                        {entry.data ? <div className="rounded bg-slate-950/90 p-2 font-mono text-[11px] text-slate-100">{JSON.stringify(entry.data, null, 2)}</div> : null}
+                      </div>
+                    </div>)))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">Derniers logs de sync</h3>
+              <div className="max-h-[26vh] space-y-2 overflow-y-auto rounded-lg border border-border/60 bg-background p-2">
+                {syncLogs.length === 0 ? (<div className="px-2 py-3 text-sm text-muted-foreground">Aucun log disponible.</div>) : (syncLogs.map((entry) => (<div key={entry.id} className="rounded-md border border-border/50 bg-muted/20 p-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-medium">
+                        <span>{entry.message}</span>
+                        <span className={`rounded px-2 py-0.5 text-[11px] uppercase ${entry.level === 'error' ? 'bg-red-100 text-red-700' : entry.level === 'warn' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>{entry.level}</span>
+                      </div>
+                      <div className="mt-2 space-y-1 text-muted-foreground">
+                        <div>Quand: {formatTimestamp(entry.createdAt)}</div>
+                        {entry.entity ? <div>Entité: {entry.entity}</div> : null}
+                        {entry.details ? <div className="rounded bg-slate-950/90 p-2 font-mono text-[11px] text-slate-100">{JSON.stringify(entry.details, null, 2)}</div> : null}
+                      </div>
+                    </div>)))}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>);
 }

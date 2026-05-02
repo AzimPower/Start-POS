@@ -22,8 +22,6 @@ export default function useAndroidBackButton() {
         async function addListener() {
             const handleBack = (ev?: any, source?: string, mod?: any) => {
                 try {
-                    if (process.env.NODE_ENV === 'development') {
-                    }
                     try {
                         ev && typeof ev.preventDefault === 'function' && ev.preventDefault();
                     }
@@ -48,8 +46,6 @@ export default function useAndroidBackButton() {
                         catch (e) { }
                         if (!canGoBack && s.length > 1)
                             canGoBack = true;
-                    }
-                    if (process.env.NODE_ENV === 'development') {
                     }
                     if (canGoBack) {
                         try {

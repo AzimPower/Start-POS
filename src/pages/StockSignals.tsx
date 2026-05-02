@@ -17,9 +17,10 @@ import { Progress } from '@/components/ui/progress';
 import { AlertTriangle, TrendingUp, TrendingDown, Package, DollarSign, Clock, CheckCircle, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { pendingEmailService } from '@/lib/pendingEmailService';
-import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { buildBypassUrl, buildProjectedLocalSales, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { getPendingSyncOps, hasPendingStockOperations } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { BACKEND_BASE } from '@/lib/backend';
 interface Product {
     id: string;
     name: string;
@@ -119,6 +120,21 @@ const toSafeNumber = (value: unknown): number => {
 const toOptionalTimestamp = (value: unknown): number | null => {
     const parsed = toSafeNumber(value);
     return parsed > 0 ? parsed : null;
+};
+const formatDateTimeLocal = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) {
+        return '';
+    }
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+const parseDateTimeLocal = (value?: string): number | null => {
+    if (!value) {
+        return null;
+    }
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
 };
 const STOCK_SIGNALS_API_PATH = '/backend/api/stock_signals.php';
 const EXPENSES_ADVANCED_API_PATH = '/backend/api/expenses_advanced.php';
@@ -232,10 +248,14 @@ const isBogusStockSignal = (signal: Partial<StockSignal> | null | undefined): bo
     const realMargin = toSafeNumber(signal.realMargin);
     const quantityBought = toSafeNumber(signal.quantityBought);
     const quantitySold = toSafeNumber(signal.quantitySold);
-    const hasEpochDates = startDate <= 0 || endDate <= 0 || endDate < startDate;
+    const hasInvalidDateRange = startDate <= 0 || endDate <= 0 || endDate < startDate;
+    const hasFutureEndDate = endDate > Date.now() + (5 * 60 * 1000);
     const hasEmptyMetrics = purchaseAmount === 0 && revenue === 0 && margin === 0 && realMargin === 0;
     const hasBrokenQuantities = quantityBought === 0 && quantitySold > 0;
-    return hasEpochDates && (hasEmptyMetrics || hasBrokenQuantities);
+    if (hasInvalidDateRange || hasFutureEndDate) {
+        return true;
+    }
+    return hasEmptyMetrics || hasBrokenQuantities;
 };
 export default function StockSignals() {
     const { user } = useAuth();
@@ -480,10 +500,26 @@ export default function StockSignals() {
             if (refreshedExpense) {
                 setSelectedExpense(refreshedExpense);
             }
-            const endTime = endIso ? new Date(endIso).getTime() : Date.now();
+            const endTime = parseDateTimeLocal(endIso) ?? Date.now();
+            const now = Date.now();
             const startTime = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
                 ? expenseForCalculation.directProduct.startDate
                 : expenseForCalculation.date;
+            if (!Number.isFinite(startTime) || startTime <= 0) {
+                toast.error('La date de début du stock est invalide. Corrigez la dépense avant de signaler la fin du stock.');
+                setShowEndDateDialog(true);
+                return;
+            }
+            if (startTime > now) {
+                toast.error('La date de début du stock est dans le futur. Corrigez la date de la dépense avant de signaler la fin du stock.');
+                setShowEndDateDialog(false);
+                return;
+            }
+            if (endTime > now) {
+                toast.error('La date de fin ne peut pas être dans le futur.');
+                setShowEndDateDialog(true);
+                return;
+            }
             if (endTime < startTime) {
                 toast.error('La date de fin doit être postérieure ou égale à la date de début / date d\'achat. Choisissez une autre date.');
                 setShowEndDateDialog(true);
@@ -532,6 +568,11 @@ export default function StockSignals() {
                 return;
             }
             const effectiveStartDate = periodSalesData.adjustedStartDate || startTime;
+            if (effectiveStartDate > endTime) {
+                toast.error('La date choisie doit être après l\'heure du dernier signalement valide du produit.');
+                setShowEndDateDialog(true);
+                return;
+            }
             const totalRevenue = Number(totalSalesData?.totalRevenue) || 0;
             const periodRevenue = Number(periodSalesData.totalRevenue) || 0;
             const totalQuantity = Number(periodSalesData.totalQuantity) || 0;
@@ -559,15 +600,25 @@ export default function StockSignals() {
             else {
                 marginPercentage = periodRevenue > 0 ? (margin / periodRevenue) * 100 : 0;
             }
+            realMargin = Number.isFinite(realMargin) ? realMargin : 0;
+            margin = Number.isFinite(margin) ? margin : 0;
+            marginPercentage = Number.isFinite(marginPercentage) ? marginPercentage : 0;
+            if (expectedRevenue !== null && !Number.isFinite(expectedRevenue)) {
+                expectedRevenue = null;
+            }
             const referenceProductId = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
                 ? expenseForCalculation.directProduct.productId
                 : expenseForCalculation.categoryId;
             const marginHistory = completedSignals
                 .filter(s => s.productId === referenceProductId)
-                .map(s => s.marginPercentage);
+                .map(s => Number(s.marginPercentage))
+                .filter((value) => Number.isFinite(value));
             let averageMargin = null;
             if (marginHistory.length > 0)
                 averageMargin = marginHistory.reduce((a, b) => a + b, 0) / marginHistory.length;
+            if (averageMargin !== null && !Number.isFinite(averageMargin)) {
+                averageMargin = null;
+            }
             let surplusMargin = null;
             let missingMargin = null;
             if (typeof targetMargin === 'number' && targetMargin < 100) {
@@ -584,6 +635,12 @@ export default function StockSignals() {
                     surplusMargin = 0;
                     missingMargin = 0;
                 }
+            }
+            if (surplusMargin !== null && !Number.isFinite(surplusMargin)) {
+                surplusMargin = 0;
+            }
+            if (missingMargin !== null && !Number.isFinite(missingMargin)) {
+                missingMargin = 0;
             }
             setMarginCalculation({
                 totalRevenue,
@@ -653,7 +710,7 @@ export default function StockSignals() {
     }, [isOnline, user?.storeId]);
     const loadProductsFromBackend = async (db: any) => {
         try {
-            let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php';
+            let url = `${BACKEND_BASE}/api/products.php`;
             if (user?.storeId)
                 url += `?storeId=${user.storeId}`;
             const response = await fetch(url);
@@ -676,7 +733,7 @@ export default function StockSignals() {
     };
     const loadExpenseCategoriesFromBackend = async (db: any) => {
         try {
-            let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expense_categories.php';
+            let url = `${BACKEND_BASE}/api/expense_categories.php`;
             if (user?.storeId)
                 url += `?storeId=${user.storeId}`;
             const response = await fetch(url);
@@ -696,7 +753,7 @@ export default function StockSignals() {
     };
     const loadExpensesAdvancedFromBackend = async (db: any, options?: { id?: string; }) => {
         try {
-            let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php';
+            let url = `${BACKEND_BASE}/api/expenses_advanced.php`;
             const params = new URLSearchParams();
             if (user?.storeId)
                 params.set('storeId', user.storeId);
@@ -756,7 +813,7 @@ export default function StockSignals() {
             if (options?.productId)
                 params.set('productId', options.productId);
             const query = params.toString();
-            const url = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php${query ? `?${query}` : ''}`;
+            const url = `${BACKEND_BASE}/api/stock_signals.php${query ? `?${query}` : ''}`;
             const response = await fetch(url);
             if (response.ok) {
                 const backendSignals = normalizeBackendCollection(await response.json());
@@ -809,7 +866,7 @@ export default function StockSignals() {
             if (options?.endDate) {
                 params.set('endDate', String(options.endDate));
             }
-            const response = await fetch(buildBypassUrl('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', params), { cache: 'no-store' });
+            const response = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales.php`, params), { cache: 'no-store' });
             if (response.ok) {
                 const backendSales = normalizeBackendCollection(await response.json());
                 await mergeBackendSalesIntoLocalDb(db, backendSales, { restrictToBackendIds: Boolean(options?.startDate || options?.endDate) });
@@ -826,7 +883,7 @@ export default function StockSignals() {
         if (uniqueSignals.length === 0)
             return;
         const db = await getDB();
-        const url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+        const url = `${BACKEND_BASE}/api/stock_signals.php`;
         for (const signal of uniqueSignals) {
             cleanedInvalidSignalIdsRef.current.add(signal.id);
             try {
@@ -853,7 +910,7 @@ export default function StockSignals() {
             }
         }
         await updatePendingSyncCount();
-    }, [isOnline]);
+    }, [isOnline, user?.storeId]);
     const processData = useCallback(async (db: any) => {
         const [productsData, categoriesData, signalsData, expensesData] = await Promise.all([
             db.getAll('products'),
@@ -864,13 +921,11 @@ export default function StockSignals() {
         // Traiter les signaux - utiliser un Set pour des lookups O(1)
         const userSignals = signalsData
             .sort((a: StockSignal, b: StockSignal) => b.createdAt - a.createdAt);
-        const invalidSignals = userSignals.filter((signal: StockSignal) => isBogusStockSignal(signal));
         const validSignals = userSignals.filter((signal: StockSignal) => !isBogusStockSignal(signal));
-        if (invalidSignals.length > 0) {
-            void cleanupInvalidStockSignals(invalidSignals);
-        }
         // Créer un Set pour des lookups rapides de signaux existants
-        const signalLookup = new Set(validSignals.map((s: StockSignal) => `${s.expenseId}_${s.productId}`));
+        const signalLookup = new Set(userSignals
+            .filter((s: StockSignal) => s.expenseId && s.productId)
+            .map((s: StockSignal) => `${s.expenseId}_${s.productId}`));
         // Filtrer les dépenses actives avec lookups optimisés
         const storeId = user?.storeId;
         const activeExpenses = expensesData.filter((expense: ExpenseAdvanced) => {
@@ -914,23 +969,11 @@ export default function StockSignals() {
         if (cached && (now - cached.timestamp) < CACHE_TTL) {
             return cached.data;
         }
-        let sales: Sale[];
-        if (user?.storeId) {
-            try {
-                sales = await db.getAllFromIndex('sales', 'by-store-createdAt', IDBKeyRange.bound([user.storeId, startDate], [user.storeId, endDate]));
-            }
-            catch (error) {
-                const storeSales = await getStoreScopedRecords<Sale>(db, 'sales', 'by-store');
-                sales = storeSales.filter((sale) => sale.createdAt >= startDate && sale.createdAt <= endDate);
-            }
-        }
-        else {
-            const allSales = await db.getAll('sales');
-            sales = allSales.filter((sale: Sale) => sale.createdAt >= startDate && sale.createdAt <= endDate);
-        }
+        const projectedSales = await buildProjectedLocalSales(db, { storeId: user?.storeId });
+        const sales = projectedSales.filter((sale: Sale) => sale.createdAt >= startDate && sale.createdAt <= endDate);
         salesCacheRef.current.set(cacheKey, { data: sales, timestamp: now });
         return sales;
-    }, [CACHE_TTL, getStoreScopedRecords, user?.storeId]);
+    }, [CACHE_TTL, user?.storeId]);
     const getSignalsForProducts = useCallback(async (db: any, productIds: string[]): Promise<StockSignal[]> => {
         const normalizedProductIds = Array.from(new Set(productIds)).sort();
         if (normalizedProductIds.length === 0) {
@@ -1001,7 +1044,7 @@ export default function StockSignals() {
         signalRefreshPromiseRef.current = refreshPromise;
         return refreshPromise;
     }, [CACHE_TTL, invalidateCaches, isBackendReachable, isOnline, processData]);
-    const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true) => {
+    const calculateSalesBetween = useCallback(async (startDate: number, endDate: number, productId: string, excludeAlreadySignaled: boolean = true, expenseId?: string) => {
         const db = await getDB();
         let adjustedStartDate = startDate;
         if (excludeAlreadySignaled) {
@@ -1017,7 +1060,7 @@ export default function StockSignals() {
                 }
             }
             if (latestEndDate > 0) {
-                adjustedStartDate = Math.max(startDate, latestEndDate + 60000);
+                adjustedStartDate = Math.max(startDate, latestEndDate + 1);
             }
         }
         const sales = await getSalesInRange(db, adjustedStartDate, endDate);
@@ -1046,7 +1089,7 @@ export default function StockSignals() {
         }
         return { totalQuantity, totalRevenue, adjustedStartDate };
     }, [getSalesInRange, getSignalsForProducts, user?.storeId]);
-    const calculateSalesForMultipleProducts = async (startDate: number, endDate: number, productIds: string[], excludeAlreadySignaled: boolean = true) => {
+    const calculateSalesForMultipleProducts = async (startDate: number, endDate: number, productIds: string[], excludeAlreadySignaled: boolean = true, expenseId?: string) => {
         const db = await getDB();
         const sales = await getSalesInRange(db, startDate, endDate);
         let stockSignals: StockSignal[] = [];
@@ -1085,7 +1128,7 @@ export default function StockSignals() {
                 // Calculer la date de début effective pour ce produit
                 let productStart = startDate;
                 if (excludeAlreadySignaled && latestEndDates[item.productId] > 0) {
-                    productStart = Math.max(startDate, latestEndDates[item.productId] + 60000);
+                    productStart = Math.max(startDate, latestEndDates[item.productId] + 1);
                 }
                 if (sale.createdAt < productStart)
                     continue;
@@ -1255,10 +1298,16 @@ export default function StockSignals() {
             const refreshedExpense = await db.get('expensesAdvanced', expense.id) || updatedExpense;
             setSelectedExpense(refreshedExpense);
             const startTime = refreshedExpense.type === 'direct' && refreshedExpense.directProduct ? refreshedExpense.directProduct.startDate : refreshedExpense.date;
-            const startIso = new Date(startTime).toISOString().slice(0, 16);
-            const nowIso = new Date().toISOString().slice(0, 16);
-            const defaultIso = nowIso < startIso ? startIso : nowIso;
-            setEndDateInput(defaultIso);
+            const now = Date.now();
+            if (!Number.isFinite(startTime) || startTime <= 0) {
+                toast.error('La date de début du stock est invalide. Corrigez la dépense avant de signaler la fin du stock.');
+                return;
+            }
+            if (startTime > now) {
+                toast.error('La date de début du stock est dans le futur. Corrigez la date de la dépense avant de signaler la fin du stock.');
+                return;
+            }
+            setEndDateInput(formatDateTimeLocal(now));
             setShowEndDateDialog(true);
         }
         catch (error) {
@@ -1273,17 +1322,30 @@ export default function StockSignals() {
         if (!selectedExpense || !marginCalculation || !user?.storeId)
             return;
         // Ensure chosen end date is valid (not before start)
-        const chosenEndDate = marginCalculation?.endTime || (endDateInput ? new Date(endDateInput).getTime() : Date.now());
+        const chosenEndDate = Number(marginCalculation?.endTime) || parseDateTimeLocal(endDateInput) || Date.now();
         const startTime = selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.startDate : selectedExpense.date;
         if (chosenEndDate < startTime) {
             toast.error('La date de fin sélectionnée est antérieure à la date d\'achat / début du stock. Veuillez choisir une date valide.');
+            return;
+        }
+        const signalStartDate = Number(marginCalculation.effectiveStartDate) || startTime;
+        if (!Number.isFinite(signalStartDate) || signalStartDate <= 0) {
+            toast.error('La date de début du calcul est invalide. Recalculez le signalement avant de confirmer.');
+            return;
+        }
+        if (chosenEndDate > Date.now()) {
+            toast.error('La date de fin ne peut pas être dans le futur.');
+            return;
+        }
+        if (chosenEndDate < signalStartDate) {
+            toast.error('La date de fin sélectionnée est antérieure au début réel du calcul. Veuillez choisir une date valide.');
             return;
         }
         setLoading(true);
         try {
             const db = await getDB();
             // S'assurer que toutes les valeurs sont des nombres valides avant de sauvegarder
-            const chosenEndDate = marginCalculation.endTime || (endDateInput ? new Date(endDateInput).getTime() : Date.now());
+            const chosenEndDate = Number(marginCalculation.endTime) || parseDateTimeLocal(endDateInput) || Date.now();
             const stockSignal: StockSignal = {
                 id: generateId(),
                 expenseId: selectedExpense.id,
@@ -1292,7 +1354,7 @@ export default function StockSignals() {
                     : selectedExpense.categoryId || 'indirect', // Pour les indirectes, utiliser categoryId
                 userId: user.id,
                 storeId: user.storeId,
-                startDate: Number(marginCalculation.effectiveStartDate) || selectedExpense.date,
+                startDate: signalStartDate,
                 endDate: chosenEndDate,
                 purchaseAmount: Number(marginCalculation.purchaseAmount) || 0,
                 quantityBought: Number(marginCalculation.quantityBought) || 0,
@@ -1328,14 +1390,14 @@ export default function StockSignals() {
             invalidateCaches();
             const [stockSignalSyncResp, expenseSyncResp] = await Promise.all([
                 performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php',
+                    url: `${BACKEND_BASE}/api/stock_signals.php`,
                     method: 'POST',
                     data: stockSignal,
                     table: 'stockSignals',
                     storeId: user.storeId,
                 }),
                 performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                    url: `${BACKEND_BASE}/api/expenses_advanced.php`,
                     method: 'PUT',
                     data: updatedExpense,
                     table: 'expensesAdvanced',
@@ -1354,14 +1416,14 @@ export default function StockSignals() {
             if (false && isOnline) {
                 try {
                     const [stockSignalResponse, expenseResponse] = await Promise.all([
-                        fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php', {
+                        fetch(`${BACKEND_BASE}/api/stock_signals.php`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
                             },
                             body: JSON.stringify(stockSignal)
                         }),
-                        fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', {
+                        fetch(`${BACKEND_BASE}/api/expenses_advanced.php`, {
                             method: 'PUT',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -1379,12 +1441,12 @@ export default function StockSignals() {
                 catch (error) {
                     // Queue via performSyncOp (will create queue entry if offline)
                     await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php',
+                        url: `${BACKEND_BASE}/api/stock_signals.php`,
                         method: 'POST',
                         data: stockSignal,
                     });
                     await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                        url: `${BACKEND_BASE}/api/expenses_advanced.php`,
                         method: 'PUT',
                         data: updatedExpense,
                     });
@@ -1463,7 +1525,7 @@ export default function StockSignals() {
                     // Si en ligne, synchroniser l'expense mise à jour avec le backend
                     if (isOnline) {
                         try {
-                            const expenseResponse = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php', {
+                            const expenseResponse = await fetch(`${BACKEND_BASE}/api/expenses_advanced.php`, {
                                 method: 'PUT',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -1476,7 +1538,7 @@ export default function StockSignals() {
                         }
                         catch (err) {
                             await performSyncOp({
-                                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                                url: `${BACKEND_BASE}/api/expenses_advanced.php`,
                                 method: 'PUT',
                                 data: updatedExpense,
                                 table: 'expensesAdvanced',
@@ -1487,7 +1549,7 @@ export default function StockSignals() {
                     else {
                         // Hors ligne -> queue pour l'expense
                         await performSyncOp({
-                            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/expenses_advanced.php',
+                            url: `${BACKEND_BASE}/api/expenses_advanced.php`,
                             method: 'PUT',
                             data: updatedExpense,
                             table: 'expensesAdvanced',
@@ -1499,7 +1561,7 @@ export default function StockSignals() {
             catch (err) {
             }
             // Supprimer le signalement côté backend si en ligne, sinon mettre en queue
-            const url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_signals.php';
+            const url = `${BACKEND_BASE}/api/stock_signals.php`;
             if (isOnline) {
                 try {
                     const resp = await fetch(`${url}?id=${encodeURIComponent(signal.id)}`, {
@@ -1552,7 +1614,7 @@ export default function StockSignals() {
                 // 2) Backend (source de vérité) si accessible
                 if (!isBackendReachable)
                     return;
-                const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1&_t=' + Date.now());
+                const res = await fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1&_t=${Date.now()}`);
                 if (!res.ok)
                     return;
                 const stores = await res.json();
@@ -1603,7 +1665,7 @@ export default function StockSignals() {
         catch (err) {
         }
         const syncResp = await performSyncOp({
-            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+            url: `${BACKEND_BASE}/api/stores.php`,
             method: 'POST',
             data: {
                 action: 'set_stock_signals_preferences',
@@ -2226,11 +2288,25 @@ export default function StockSignals() {
                                 </p>)}
               <div>
                 <Label>Date et heure de fin</Label>
-                {/* compute startIso for min attribute so user cannot pick earlier times */}
+                {/* compute bounds for the date picker */}
                 {selectedExpense && ((() => {
             const start = selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.startDate : selectedExpense.date;
-            const startIso = new Date(start).toISOString().slice(0, 16);
-            return (<Input type="datetime-local" value={endDateInput} min={startIso} onChange={(e: any) => setEndDateInput(e.target.value)}/>);
+            const now = Date.now();
+            const startIso = formatDateTimeLocal(start);
+            const nowIso = formatDateTimeLocal(now);
+            return (<Input type="datetime-local" value={endDateInput} min={startIso} max={nowIso} onChange={(e: any) => {
+                    const nextValue = e.target.value;
+                    const nextTime = parseDateTimeLocal(nextValue);
+                    if (nextTime !== null && nextTime < start) {
+                        setEndDateInput(startIso);
+                        return;
+                    }
+                    if (nextTime !== null && nextTime > now) {
+                        setEndDateInput(nowIso);
+                        return;
+                    }
+                    setEndDateInput(nextValue);
+                }}/>);
         })())}
               </div>
             <div className="flex gap-2 justify-end pt-2">

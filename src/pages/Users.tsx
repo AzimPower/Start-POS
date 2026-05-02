@@ -11,6 +11,8 @@ import { UserCircle, Edit, Trash2, Plus, Shield, RefreshCw,  User, Eye, EyeOff, 
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { hashPasswordForCache } from '@/lib/auth';
+import { BACKEND_BASE } from '@/lib/backend';
 
 function UserSummaryCard({ title, value, subtitle, icon: Icon, color }: {
     title: string;
@@ -138,7 +140,8 @@ interface UserData {
     username: string;
     phone: string;
     email?: string;
-    password: string;
+    password?: string;
+    passwordHash?: string;
     role: 'super_admin' | 'admin' | 'cashier' | 'manager';
     storeId: string;
     storeIds?: string[];
@@ -208,7 +211,7 @@ export default function Users() {
         if (connectionState.isOnline) {
             try {
                 // Ajouter storeId pour les admins (les super_admin peuvent voir tous les utilisateurs)
-                let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php';
+                let url = `${BACKEND_BASE}/api/users.php`;
                 if (user?.role === 'admin' && user?.storeId) {
                     url += `?storeId=${user.storeId}`;
                 }
@@ -234,23 +237,27 @@ export default function Users() {
                   const existingLocalUsers = await db.getAll('users');
                   const localUsersById = new Map(existingLocalUsers.map((existingUser: any) => [existingUser.id, existingUser]));
                     const tx = db.transaction('users', 'readwrite');
-                    await tx.store.clear();
-                    for (const u of storeUsers) {
-                        // Preserve existing local PIN if backend doesn't return one
-                        try {
+                    const normalizedStoreUsers = storeUsers.map((u: any) => {
                       const local = localUsersById.get(u.id as string);
-                            const merged = {
-                                ...u,
-                                pin: (u as any).pin ?? (local ? (local as any).pin : '')
-                            };
-                            await tx.store.put(merged);
-                        }
-                        catch (e) {
-                            // fallback: put remote as-is
-                            await tx.store.put(u);
-                        }
-                    }
-                    await tx.done;
+                      return {
+                        ...u,
+                        pin: (u as any).pin ?? (local ? (local as any).pin : ''),
+                        passwordHash: (local as any)?.passwordHash,
+                        password: (local as any)?.password,
+                      };
+                    });
+                    const remoteUserIds = new Set(normalizedStoreUsers.map((u: any) => String(u.id)));
+                    const usersToDelete = user?.role === 'admin' && user?.storeId
+                      ? existingLocalUsers.filter((existingUser: any) => {
+                        const existingStoreIds = normalizeStoreIds(existingUser.storeIds, existingUser.storeId);
+                        return existingStoreIds.includes(user.storeId) && !remoteUserIds.has(String(existingUser.id));
+                      })
+                      : existingLocalUsers.filter((existingUser: any) => !remoteUserIds.has(String(existingUser.id)));
+                    await Promise.all([
+                      ...usersToDelete.map((u: any) => tx.store.delete(u.id)),
+                      ...normalizedStoreUsers.map((u: any) => tx.store.put(u)),
+                      tx.done
+                    ]);
                       for (const syncedUser of storeUsers) {
                         await syncLocalUserStoreMappings(db, syncedUser.id, normalizeStoreIds((syncedUser as any).storeIds, (syncedUser as any).storeId));
                       }
@@ -297,7 +304,8 @@ export default function Users() {
             ? normalizeStoreIds(undefined, user.storeId)
             : normalizeStoreIds(formData.storeIds);
 
-        if (!formData.username.trim() || !formData.phone.trim() || !formData.password.trim() || requestedStoreIds.length === 0) {
+        const requiresPassword = !editingUser;
+        if (!formData.username.trim() || !formData.phone.trim() || (requiresPassword && !formData.password.trim()) || requestedStoreIds.length === 0) {
             toast.error('Tous les champs sont requis');
             return;
         }
@@ -323,13 +331,16 @@ export default function Users() {
         const db = await getDB();
         try {
             if (editingUser) {
+                const nextPasswordHash = formData.password.trim()
+                    ? await hashPasswordForCache(formData.password)
+                    : editingUser.passwordHash;
                 // Modification
                 const userData = {
                     ...editingUser,
                     username: formData.username,
                     phone: `+226${formData.phone}`,
                     email: formData.email.trim() || null,
-                    password: formData.password,
+                    passwordHash: nextPasswordHash,
                     role: finalRole,
                     storeIds: finalStoreIds,
                     storeId: finalStoreId,
@@ -339,10 +350,14 @@ export default function Users() {
                 await db.put('users', userData);
                   await syncLocalUserStoreMappings(db, userData.id, finalStoreIds);
                 if (connectionState.isOnline) {
-                    const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
+                    const remotePayload = {
+                        ...userData,
+                        ...(formData.password.trim() ? { password: formData.password } : {}),
+                    };
+                    const res = await fetch(`${BACKEND_BASE}/api/users.php`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(userData),
+                        body: JSON.stringify(remotePayload),
                     });
                     if (!res.ok) {
                         const text = await res.text();
@@ -351,9 +366,12 @@ export default function Users() {
                 }
                 else {
                     await queueSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+                        url: `${BACKEND_BASE}/api/users.php`,
                         method: 'PUT',
-                        data: userData,
+                        data: {
+                            ...userData,
+                            ...(formData.password.trim() ? { password: formData.password } : {}),
+                        },
                     });
                 }
                 toast.success('Utilisateur modifié');
@@ -384,7 +402,7 @@ export default function Users() {
                     username: formData.username,
                     phone: `+226${formData.phone}`,
                     email: formData.email.trim() || null,
-                    password: formData.password,
+                    passwordHash: await hashPasswordForCache(formData.password),
                     role: finalRole,
                     storeIds: finalStoreIds,
                     storeId: finalStoreId,
@@ -395,10 +413,14 @@ export default function Users() {
                 await db.add('users', newUser);
                   await syncLocalUserStoreMappings(db, newUser.id, finalStoreIds);
                 if (connectionState.isOnline) {
-                    const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php', {
+                    const remotePayload = {
+                        ...newUser,
+                        password: formData.password,
+                    };
+                    const res = await fetch(`${BACKEND_BASE}/api/users.php`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(newUser),
+                        body: JSON.stringify(remotePayload),
                     });
                     if (!res.ok) {
                         const text = await res.text();
@@ -407,9 +429,12 @@ export default function Users() {
                 }
                 else {
                     await queueSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+                        url: `${BACKEND_BASE}/api/users.php`,
                         method: 'POST',
-                        data: newUser,
+                        data: {
+                            ...newUser,
+                            password: formData.password,
+                        },
                     });
                 }
                 toast.success('Utilisateur créé');
@@ -437,7 +462,7 @@ export default function Users() {
             username: editUser.username,
             phone: phone8,
             email: editUser.email || '',
-            password: editUser.password || '',
+            password: '',
             role: editUser.role === 'super_admin' ? 'admin' : editUser.role as 'admin' | 'cashier' | 'manager',
           storeIds: normalizeStoreIds(editUser.storeIds, editUser.storeId),
             pin: editUser.pin || '',
@@ -456,13 +481,13 @@ export default function Users() {
             await db.delete('userStores', (mapping as any).id);
           }
             if (connectionState.isOnline) {
-                await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php?id=${id}`, {
+                await fetch(`${BACKEND_BASE}/api/users.php?id=${id}`, {
                     method: 'DELETE',
                 });
             }
             else {
                 await queueSyncOp({
-                    url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php?id=${id}`,
+                    url: `${BACKEND_BASE}/api/users.php?id=${id}`,
                     method: 'DELETE',
                     data: {},
                 });

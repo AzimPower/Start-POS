@@ -1,15 +1,57 @@
 // Module de synchronisation hors-ligne avec IndexedDB
 import { openDB } from 'idb';
-import { backendAvailable } from './backend';
+import { BACKEND_BASE, backendAvailable } from './backend';
+import { addNativeNetworkListener, getNativeNetworkStatus } from './nativeNetwork';
 export const SYNC_DB_NAME = 'pos_sync_db';
 export const SYNC_STORE = 'pending_ops';
+const API_BASE = `${BACKEND_BASE}/api`;
 // État de connexion et de synchronisation
 export const connectionState = {
-    isOnline: navigator.onLine,
+    isOnline: true,
     isSyncing: false,
     lastCheck: Date.now(),
 };
 const listeners = [];
+async function hasUsableNetworkConnection(forceBackendCheck = false) {
+    const nativeStatus = await getNativeNetworkStatus().catch(() => null);
+    if (nativeStatus?.connected) {
+        connectionState.isOnline = true;
+        return true;
+    }
+    if (navigator.onLine) {
+        connectionState.isOnline = true;
+        return true;
+    }
+    try {
+        const backendUp = await backendAvailable(5000, forceBackendCheck);
+        if (backendUp) {
+            connectionState.isOnline = true;
+            return true;
+        }
+    }
+    catch (e) {
+    }
+    connectionState.isOnline = false;
+    return false;
+}
+
+export async function canReachBackendForWrite() {
+    const hasNetwork = await hasUsableNetworkConnection(true);
+    if (!hasNetwork) {
+        return false;
+    }
+
+    try {
+        const backendUp = await backendAvailable(5000, true);
+        connectionState.isOnline = backendUp;
+        return backendUp;
+    }
+    catch (e) {
+        connectionState.isOnline = false;
+        return false;
+    }
+}
+
 function emitConnectionStateChange() {
     connectionState.lastCheck = Date.now();
     listeners.forEach((listener) => listener({ ...connectionState }));
@@ -73,6 +115,18 @@ async function writeSyncLog(entry: {
     }
 }
 // Récupérer toutes les opérations en attente
+async function readErrorResponse(res: Response) {
+    try {
+        const text = await res.text();
+        return text.slice(0, 500);
+    }
+    catch {
+        return '';
+    }
+}
+function formatSyncError(status: number, responseText?: string) {
+    return responseText ? `HTTP ${status}: ${responseText}` : `HTTP ${status}`;
+}
 export async function getPendingSyncOps() {
     const db = await getSyncDB();
     return db.getAll(SYNC_STORE);
@@ -80,7 +134,100 @@ export async function getPendingSyncOps() {
 // Compter les opérations en attente
 export async function getPendingSyncCount() {
     const db = await getSyncDB();
-    return db.count(SYNC_STORE);
+    const directCount = await db.count(SYNC_STORE);
+
+    try {
+        const { getDB } = await import('./db');
+        const mainDb = await getDB();
+        const queueCount = await mainDb.count('syncQueue');
+        return directCount + queueCount;
+    }
+    catch (e) {
+        return directCount;
+    }
+}
+
+export interface PendingSyncEntrySnapshot {
+    source: 'pending_ops' | 'syncQueue';
+    id: string | number;
+    table?: string;
+    method?: string;
+    operation?: string;
+    url?: string;
+    storeId?: string;
+    createdAt?: number;
+    attempts?: number;
+    data?: any;
+    lastError?: string;
+}
+
+export interface SyncLogSnapshot {
+    id: string;
+    level: 'info' | 'warn' | 'error';
+    message: string;
+    entity?: string;
+    details?: any;
+    createdAt: number;
+}
+
+export async function getPendingSyncSnapshot() {
+    const pendingOps = await getPendingSyncOps();
+    let syncQueue: any[] = [];
+    let syncLogs: any[] = [];
+
+    try {
+        const { getDB } = await import('./db');
+        const mainDb = await getDB();
+        syncQueue = await mainDb.getAll('syncQueue');
+        syncLogs = await mainDb.getAll('syncLogs' as any);
+    }
+    catch (e) {
+    }
+
+    const pending = pendingOps.map((op: any) => ({
+        source: 'pending_ops' as const,
+        id: op.id,
+        table: op.table,
+        method: op.method || 'POST',
+        operation: op.operation,
+        url: op.url,
+        storeId: op.storeId,
+        createdAt: op.createdAt,
+        attempts: op.attempts,
+        data: op.data,
+        lastError: op.lastError,
+    }));
+
+    const queued = syncQueue.map((op: any) => ({
+        source: 'syncQueue' as const,
+        id: op.id,
+        table: op.table,
+        method: op.method || op.operation || 'POST',
+        operation: op.operation,
+        url: op.url,
+        storeId: op.storeId,
+        createdAt: op.createdAt,
+        attempts: op.attempts,
+        data: op.data,
+        lastError: op.lastError,
+    }));
+
+    const logs = syncLogs
+        .sort((a: any, b: any) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0))
+        .slice(0, 25)
+        .map((entry: any) => ({
+        id: String(entry.id || ''),
+        level: entry.level || 'info',
+        message: entry.message || '',
+        entity: entry.entity,
+        details: entry.details,
+        createdAt: Number(entry.createdAt || 0),
+    }));
+
+    return {
+        pending: [...pending, ...queued].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)),
+        logs,
+    };
 }
 
 function shiftOpenedAt(shift: any) {
@@ -258,17 +405,82 @@ async function queueCanonicalShiftSync(shift: any, backendShiftIds?: Set<string>
     const { getDB } = await import('./db');
     const db = await getDB();
     const operation = backendShiftIds?.has(String(shift?.id || '')) ? 'update' : 'create';
-    await db.add('syncQueue', {
-        id: crypto.randomUUID(),
+    const shiftId = String(shift?.id || '');
+    const queueOps = await db.getAll('syncQueue');
+    const existingShiftOps = queueOps.filter((op: any) => {
+        const touchesShifts = String(op?.table || '') === 'shifts' || String(op?.url || '').includes('shifts.php');
+        return touchesShifts && String(op?.data?.id || '') === shiftId;
+    });
+    const [existingOp, ...duplicateOps] = existingShiftOps;
+    for (const duplicateOp of duplicateOps) {
+        await db.delete('syncQueue', duplicateOp.id);
+    }
+    await db.put('syncQueue', {
+        id: existingOp?.id || crypto.randomUUID(),
         table: 'shifts',
         operation,
         method: operation === 'create' ? 'POST' : 'PUT',
         data: shift,
-        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php',
-        createdAt: Date.now(),
+        url: `${API_BASE}/shifts.php`,
+        createdAt: existingOp?.createdAt || Date.now(),
         attempts: 0,
         storeId: shift?.storeId,
     });
+}
+
+async function upsertSyncQueueOp(match: (op: any) => boolean, nextOp: any) {
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const queueOps = await db.getAll('syncQueue');
+    const existingOps = queueOps.filter(match);
+    const [existingOp, ...duplicateOps] = existingOps;
+    for (const duplicateOp of duplicateOps) {
+        await db.delete('syncQueue', duplicateOp.id);
+    }
+    await db.put('syncQueue', {
+        ...nextOp,
+        id: existingOp?.id || nextOp.id || crypto.randomUUID(),
+        createdAt: existingOp?.createdAt || nextOp.createdAt || Date.now(),
+        attempts: 0,
+    });
+}
+
+async function queueBackendDuplicateShiftCleanup(duplicateIds: Set<string>, canonicalId: string, salesToUpdate: any[], backendShiftIds?: Set<string>) {
+    const backendDuplicateIds = Array.from(duplicateIds).filter((id) => backendShiftIds?.has(id));
+    if (backendDuplicateIds.length === 0 && salesToUpdate.length === 0) {
+        return;
+    }
+
+    for (const sale of salesToUpdate) {
+        await upsertSyncQueueOp(
+            (op: any) => String(op?.table || '') === 'sales' && String(op?.data?.id || '') === String(sale?.id || ''),
+            {
+                table: 'sales',
+                operation: 'update',
+                method: 'PUT',
+                data: sale,
+                url: `${API_BASE}/sales.php`,
+                storeId: sale?.storeId,
+            }
+        );
+    }
+
+    for (const duplicateId of backendDuplicateIds) {
+        await upsertSyncQueueOp(
+            (op: any) => {
+                const touchesShifts = String(op?.table || '') === 'shifts' || String(op?.url || '').includes('shifts.php');
+                const isDelete = ['DELETE', 'delete'].includes(String(op?.method || op?.operation || '').toUpperCase());
+                return touchesShifts && isDelete && getShiftOpTargetId(op) === duplicateId;
+            },
+            {
+                table: 'shifts',
+                operation: 'delete',
+                method: 'DELETE',
+                data: { id: duplicateId, mergedIntoShiftId: canonicalId },
+                url: `${API_BASE}/shifts.php?id=${encodeURIComponent(duplicateId)}`,
+            }
+        );
+    }
 }
 
 export async function mergeOverlappingShiftsForUserStore(userId?: string, storeId?: string, options?: {
@@ -330,6 +542,7 @@ export async function mergeOverlappingShiftsForUserStore(userId?: string, storeI
             if (shouldQueueSync) {
                 await queueCanonicalShiftSync(mergedShift, options?.backendShiftIds);
             }
+            await queueBackendDuplicateShiftCleanup(duplicateIds, canonicalId, salesToUpdate, options?.backendShiftIds);
         }
 
         mergedCanonicalIds.push(canonicalId);
@@ -345,7 +558,7 @@ async function handleShiftCreateConflict(op: any) {
         return false;
     }
     try {
-        const url = new URL('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php');
+        const url = new URL(`${API_BASE}/shifts.php`);
         url.searchParams.set('storeId', storeId);
         const response = await fetch(url.toString(), { cache: 'no-store' });
         if (!response.ok) {
@@ -419,7 +632,7 @@ export async function syncWithServer() {
         return { success: false, reason: 'already_syncing' };
     }
     // Vérifier la connexion internet et le backend (ping)
-    if (!navigator.onLine) {
+    if (!await hasUsableNetworkConnection(true)) {
         return { success: false, reason: 'offline' };
     }
     const backendUp = await backendAvailable();
@@ -464,12 +677,20 @@ export async function syncWithServer() {
                     successCount++;
                     writeSyncLog({ level: 'info', message: 'Op synchronisée (pending_ops)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                 }
-                else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && String(op?.method || 'POST').toUpperCase() === 'POST' && await handleShiftCreateConflict(op)) {
+                else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && ['POST', 'PUT'].includes(String(op?.method || 'POST').toUpperCase()) && await handleShiftCreateConflict(op)) {
+                    await removeSyncOp(op.id);
                     successCount++;
                     writeSyncLog({ level: 'info', message: 'Conflit shift résolu par fusion automatique (pending_ops)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                 }
                 else {
-                    writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (pending_ops)`, entity: op.table, details: { url: op.url, status: res.status } });
+                    const responseText = await readErrorResponse(res);
+                    const lastError = formatSyncError(res.status, responseText);
+                    await (await getSyncDB()).put(SYNC_STORE, {
+                        ...op,
+                        attempts: Number(op.attempts || 0) + 1,
+                        lastError,
+                    });
+                    writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (pending_ops)`, entity: op.table, details: { url: op.url, status: res.status, response: responseText } });
                 }
             }
             catch (e) {
@@ -482,7 +703,8 @@ export async function syncWithServer() {
             try {
                 const { getDB } = await import('./db');
                 const mainDb = await getDB();
-                const queueOps = await mainDb.getAll('syncQueue');
+                const queueOps = (await mainDb.getAll('syncQueue'))
+                    .sort((a: any, b: any) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
                 for (const op of queueOps) {
                     if (networkErrorOccurred)
                         break;
@@ -503,17 +725,29 @@ export async function syncWithServer() {
                             successCount++;
                             writeSyncLog({ level: 'info', message: 'Op synchronisée (syncQueue)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                         }
-                        else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && mappedMethod === 'POST' && await handleShiftCreateConflict(op)) {
+                        else if (res.status === 409 && String(op?.url || '').includes('shifts.php') && ['POST', 'PUT'].includes(mappedMethod) && await handleShiftCreateConflict(op)) {
                             await mainDb.delete('syncQueue', op.id);
                             successCount++;
                             writeSyncLog({ level: 'info', message: 'Conflit shift résolu par fusion automatique (syncQueue)', entity: op.table, details: { id: op.data?.id, url: op.url } });
                         }
                         else {
-                            writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (syncQueue)`, entity: op.table, details: { url: op.url, status: res.status } });
+                            const responseText = await readErrorResponse(res);
+                            const lastError = formatSyncError(res.status, responseText);
+                            await mainDb.put('syncQueue', {
+                                ...op,
+                                attempts: Number(op.attempts || 0) + 1,
+                                lastError,
+                            });
+                            writeSyncLog({ level: 'warn', message: `Erreur serveur ${res.status} (syncQueue)`, entity: op.table, details: { url: op.url, status: res.status, response: responseText } });
                         }
                     }
                     catch (e) {
                         networkErrorOccurred = true;
+                        await mainDb.put('syncQueue', {
+                            ...op,
+                            attempts: Number(op.attempts || 0) + 1,
+                            lastError: String(e),
+                        });
                         writeSyncLog({ level: 'warn', message: 'Erreur réseau (syncQueue)', entity: op.table, details: { error: String(e) } });
                     }
                 }
@@ -622,11 +856,11 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
         return null;
     const { getDB } = await import('./db');
     const db = await getDB();
-    if (options?.syncWithBackend && storeId && navigator.onLine) {
+    if (options?.syncWithBackend && storeId && await hasUsableNetworkConnection()) {
         const backendUp = await backendAvailable().catch(() => false);
         if (backendUp) {
             try {
-                const url = new URL('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php');
+                const url = new URL(`${API_BASE}/shifts.php`);
                 url.searchParams.set('storeId', String(storeId));
                 const response = await fetch(url.toString(), { cache: 'no-store' });
                 if (response.ok) {
@@ -952,14 +1186,14 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
         }
         await tx.done;
         // Propager les corrections vers le backend — tente direct, met en queue si échec
-        if (navigator.onLine) {
+        if (await hasUsableNetworkConnection()) {
             try {
-                const salesFetches = salesToUpdate.map((s: any) => fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', {
+                const salesFetches = salesToUpdate.map((s: any) => fetch(`${API_BASE}/sales.php`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(s),
                 }));
-                const shiftFetches = Array.from(shiftsToUpdate.values()).map((sh: any) => fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', {
+                const shiftFetches = Array.from(shiftsToUpdate.values()).map((sh: any) => fetch(`${API_BASE}/shifts.php`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(sh),
@@ -976,7 +1210,7 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
                         try {
                             await mainDb.add('syncQueue', {
                                 id: crypto.randomUUID(), table: 'sales', operation: 'update' as const,
-                                data: s, url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', createdAt: now, attempts: 0,
+                                data: s, url: `${API_BASE}/sales.php`, createdAt: now, attempts: 0,
                             });
                         }
                         catch (_) { }
@@ -985,7 +1219,7 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
                         try {
                             await mainDb.add('syncQueue', {
                                 id: crypto.randomUUID(), table: 'shifts', operation: 'update' as const,
-                                data: sh, url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/shifts.php', createdAt: now, attempts: 0,
+                                data: sh, url: `${API_BASE}/shifts.php`, createdAt: now, attempts: 0,
                             });
                         }
                         catch (_) { }
@@ -1000,7 +1234,7 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
     }
 }
 export async function refreshAllFromBackend(storeId?: string) {
-    if (!navigator.onLine)
+    if (!await hasUsableNetworkConnection())
         return;
     // Double-check backend reachability before attempting the full refresh
     try {
@@ -1013,26 +1247,25 @@ export async function refreshAllFromBackend(storeId?: string) {
         return;
     }
     const params = storeId ? { storeId } : undefined;
-    const BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api';
     // Batch 1 : données de référence (toutes indépendantes, téléchargées en parallèle)
     await Promise.all([
-        fetchAndMerge(`${BASE}/products.php`, 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params),
-        fetchAndMerge(`${BASE}/customers.php`, 'customers', 'customers', undefined, params),
-        fetchAndMerge(`${BASE}/categories.php`, 'categories', 'categories', undefined, params),
-        fetchAndMerge(`${BASE}/expense_categories.php`, 'expenseCategories', 'expenseCategories', undefined, params),
-        fetchAndMerge(`${BASE}/stores.php?include_inactive=1`, 'stores', 'stores', undefined, params),
-        fetchAndMerge(`${BASE}/users.php`, 'users', 'users', undefined, params),
+        fetchAndMerge(`${API_BASE}/products.php`, 'products', 'products', (p: any) => ({ ...p, stock: p.stock || {} }), params),
+        fetchAndMerge(`${API_BASE}/customers.php`, 'customers', 'customers', undefined, params),
+        fetchAndMerge(`${API_BASE}/categories.php`, 'categories', 'categories', undefined, params),
+        fetchAndMerge(`${API_BASE}/expense_categories.php`, 'expenseCategories', 'expenseCategories', undefined, params),
+        fetchAndMerge(`${API_BASE}/stores.php?include_inactive=1`, 'stores', 'stores', undefined, params),
+        fetchAndMerge(`${API_BASE}/users.php`, 'users', 'users', undefined, params),
     ]);
     // Batch 2 : shifts et sales (en parallèle, doivent être terminés avant la réconciliation)
     await Promise.all([
-        fetchAndMerge(`${BASE}/shifts.php`, 'shifts', 'shifts', undefined, params),
-        fetchAndMerge(`${BASE}/sales.php`, 'sales', 'sales', undefined, params),
+        fetchAndMerge(`${API_BASE}/shifts.php`, 'shifts', 'shifts', undefined, params),
+        fetchAndMerge(`${API_BASE}/sales.php`, 'sales', 'sales', undefined, params),
     ]);
     await reconcileSalesToLastClosedShift(storeId);
     // Batch 3 : autres données (en parallèle)
     await Promise.all([
-        fetchAndMerge(`${BASE}/expenses_advanced.php`, 'expensesAdvanced', 'expensesAdvanced', undefined, params),
-        fetchAndMerge(`${BASE}/stock_signals.php`, 'stockSignals', 'stockSignals', undefined, params),
+        fetchAndMerge(`${API_BASE}/expenses_advanced.php`, 'expensesAdvanced', 'expensesAdvanced', undefined, params),
+        fetchAndMerge(`${API_BASE}/stock_signals.php`, 'stockSignals', 'stockSignals', undefined, params),
     ]);
 }
 // Forcer la synchronisation manuelle
@@ -1070,3 +1303,8 @@ window.addEventListener('offline', () => {
     connectionState.isOnline = false;
     emitConnectionStateChange();
 });
+
+addNativeNetworkListener((status) => {
+    connectionState.isOnline = !!status.connected;
+    emitConnectionStateChange();
+}).catch(() => { });

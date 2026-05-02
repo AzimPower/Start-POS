@@ -244,10 +244,9 @@ async function executeOrQueueMutation(method: 'POST' | 'PUT', data: any, queueEn
     operation: 'create' | 'update';
     data: any;
 }) {
-    if (connectionState.isOnline && navigator.onLine) {
-        const backendUp = await backendAvailable().catch(() => false);
-        if (backendUp) {
-            let response: Response;
+    const backendUp = await backendAvailable().catch(() => false);
+    if (backendUp) {
+        let response: Response;
             try {
                 response = await fetch(NOTIFICATIONS_API, {
                     method,
@@ -280,7 +279,6 @@ async function executeOrQueueMutation(method: 'POST' | 'PUT', data: any, queueEn
                 return { queued: true, body: payload };
             }
             throw new Error(toErrorMessage(payload, response.status));
-        }
     }
     await addNotificationQueueEntry({
         table: NOTIFICATIONS_TABLE,
@@ -448,11 +446,7 @@ export async function fetchInboxNotifications(viewer: NotificationViewer): Promi
     const queueEntries = await getNotificationQueueEntries();
     const cachedItems = (await readInboxCache(viewer.id)).map((entry) => normalizeNotification(entry.notification));
     const localProjection = buildProjectedInboxNotifications(cachedItems, cachedItems, queueEntries, viewer);
-    if (!connectionState.isOnline || !navigator.onLine) {
-        return localProjection;
-    }
-    const backendUp = await backendAvailable().catch(() => false);
-    if (!backendUp) {
+    if (!await backendAvailable().catch(() => false)) {
         return localProjection;
     }
     const url = new URL(NOTIFICATIONS_API);
@@ -479,11 +473,7 @@ export async function fetchSentNotifications(senderUserId: string): Promise<AppN
     const queueEntries = await getNotificationQueueEntries();
     const cachedItems = (await readSentCache(senderUserId)).map((entry) => normalizeNotification(entry.notification));
     const localProjection = buildProjectedSentNotifications(cachedItems, cachedItems, queueEntries, senderUserId);
-    if (!connectionState.isOnline || !navigator.onLine) {
-        return localProjection;
-    }
-    const backendUp = await backendAvailable().catch(() => false);
-    if (!backendUp) {
+    if (!await backendAvailable().catch(() => false)) {
         return localProjection;
     }
     const url = new URL(NOTIFICATIONS_API);

@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { BACKEND_BASE } from '@/lib/backend';
 interface Customer {
     id: string;
     name: string;
@@ -131,7 +132,7 @@ export default function Customers() {
             if (isBackendReachable) {
                 try {
                     // Charger les clients depuis le backend (n'ajouter storeId que s'il est défini)
-                    let url = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php';
+                    let url = `${BACKEND_BASE}/api/customers.php`;
                     if (user?.storeId)
                         url += `?storeId=${user.storeId}`;
                     const response = await fetch(url);
@@ -280,7 +281,7 @@ export default function Customers() {
                 // Si en ligne, synchroniser immédiatement avec le backend
                 if (isBackendReachable) {
                     try {
-                        const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
+                        const response = await fetch(`${BACKEND_BASE}/api/customers.php`, {
                             method: 'PUT',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -299,7 +300,7 @@ export default function Customers() {
                             table: 'customers',
                             operation: 'PUT',
                             data: updated,
-                            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php',
+                            url: `${BACKEND_BASE}/api/customers.php`,
                             storeId: user.storeId,
                             createdAt: Date.now()
                         });
@@ -313,7 +314,7 @@ export default function Customers() {
                         table: 'customers',
                         operation: 'PUT',
                         data: updated,
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php',
+                        url: `${BACKEND_BASE}/api/customers.php`,
                         storeId: user.storeId,
                         createdAt: Date.now()
                     });
@@ -336,7 +337,7 @@ export default function Customers() {
                 // Si en ligne, synchroniser immédiatement avec le backend
                 if (isBackendReachable) {
                     try {
-                        const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php', {
+                        const response = await fetch(`${BACKEND_BASE}/api/customers.php`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -355,7 +356,7 @@ export default function Customers() {
                             table: 'customers',
                             operation: 'POST',
                             data: newCustomer,
-                            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php',
+                            url: `${BACKEND_BASE}/api/customers.php`,
                             storeId: user.storeId,
                             createdAt: Date.now()
                         });
@@ -369,7 +370,7 @@ export default function Customers() {
                         table: 'customers',
                         operation: 'POST',
                         data: newCustomer,
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php',
+                        url: `${BACKEND_BASE}/api/customers.php`,
                         storeId: user.storeId,
                         createdAt: Date.now()
                     });
@@ -409,7 +410,7 @@ export default function Customers() {
             // Si en ligne, synchroniser immédiatement avec le backend
             if (isBackendReachable) {
                 try {
-                    const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php?id=${id}`, {
+                    const response = await fetch(`${BACKEND_BASE}/api/customers.php?id=${id}`, {
                         method: 'DELETE',
                         headers: {
                             'Content-Type': 'application/json',
@@ -427,7 +428,7 @@ export default function Customers() {
                         table: 'customers',
                         operation: 'DELETE',
                         data: { id },
-                        url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php?id=${id}`,
+                        url: `${BACKEND_BASE}/api/customers.php?id=${id}`,
                         storeId: user?.storeId,
                         createdAt: Date.now()
                     });
@@ -441,7 +442,7 @@ export default function Customers() {
                     table: 'customers',
                     operation: 'DELETE',
                     data: { id },
-                    url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/customers.php?id=${id}`,
+                    url: `${BACKEND_BASE}/api/customers.php?id=${id}`,
                     storeId: user?.storeId,
                     createdAt: Date.now()
                 });

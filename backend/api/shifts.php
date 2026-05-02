@@ -1,12 +1,12 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -14,10 +14,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 try {
     require_once '../config.php';
     $method = $_SERVER['REQUEST_METHOD'];
+    $authClaims = require_auth();
 
     switch ($method) {
         case 'GET':
-            $storeId = $_GET['storeId'] ?? null;
+            $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
             
             // Récupérer tous les shifts sans limite
             $sql = 'SELECT * FROM shifts';
@@ -35,6 +36,7 @@ try {
             break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         
         // 🔒 SÉCURITÉ: Vérifier qu'il n'existe pas déjà un shift ouvert pour cet utilisateur dans ce magasin
         $checkSql = 'SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open"';
@@ -75,6 +77,24 @@ try {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
+
+        if (($data['status'] ?? '') === 'open') {
+            $checkSql = 'SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open" AND id <> ? LIMIT 1';
+            $checkStmt = $pdo->prepare($checkSql);
+            $checkStmt->execute([$data['userId'], $data['storeId'], $data['id']]);
+            $existingShift = $checkStmt->fetch();
+
+            if ($existingShift) {
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'Un autre shift est déjà ouvert pour cet utilisateur dans ce magasin',
+                    'existingShiftId' => $existingShift['id'],
+                    'openedAt' => $existingShift['openedAt']
+                ]);
+                exit;
+            }
+        }
         
         $sql = 'UPDATE shifts SET userId=?, storeId=?, openingAmount=?, closingAmount=?, expectedAmount=?, difference=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, openedAt=?, closedAt=?, status=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
@@ -93,11 +113,42 @@ try {
             $data['status'],
             $data['id']
         ]);
+        if ($stmt->rowCount() === 0) {
+            $checkStmt = $pdo->prepare('SELECT id FROM shifts WHERE id = ? LIMIT 1');
+            $checkStmt->execute([$data['id']]);
+            $existingId = $checkStmt->fetchColumn();
+
+            if ($existingId === false) {
+                $insertSql = 'INSERT INTO shifts (id, userId, storeId, openingAmount, closingAmount, expectedAmount, difference, cashAmount, mobileMoneyAmount, otherAmount, openedAt, closedAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+                $insertStmt = $pdo->prepare($insertSql);
+                $insertStmt->execute([
+                    $data['id'],
+                    $data['userId'],
+                    $data['storeId'],
+                    $data['openingAmount'],
+                    $data['closingAmount'] ?? null,
+                    $data['expectedAmount'] ?? null,
+                    $data['difference'] ?? null,
+                    isset($data['cashAmount']) ? $data['cashAmount'] : 0,
+                    isset($data['mobileMoneyAmount']) ? $data['mobileMoneyAmount'] : 0,
+                    isset($data['otherAmount']) ? $data['otherAmount'] : 0,
+                    $data['openedAt'],
+                    $data['closedAt'] ?? null,
+                    $data['status']
+                ]);
+            }
+        }
         echo json_encode(['success' => true]);
         break;
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            if (!is_super_admin_claims($authClaims)) {
+                $checkStmt = $pdo->prepare('SELECT storeId FROM shifts WHERE id = ? LIMIT 1');
+                $checkStmt->execute([$id]);
+                $targetStoreId = $checkStmt->fetchColumn();
+                ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+            }
             $stmt = $pdo->prepare('DELETE FROM shifts WHERE id=?');
             $stmt->execute([$id]);
             echo json_encode(['success' => true]);

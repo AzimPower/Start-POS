@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
+define(['./workbox-3bd5b695'], (function (workbox) { 'use strict';
 
   self.skipWaiting();
   workbox.clientsClaim();
@@ -78,13 +78,181 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
-    "url": "assets/index-Dq888Y9_.css",
+    "url": "assets/arrow-left-DuT2ZDZ3.js",
     "revision": null
   }, {
-    "url": "assets/index-Dww0XZ1M.js",
+    "url": "assets/badge-uGpjUmo1.js",
     "revision": null
   }, {
-    "url": "assets/virtual_pwa-register-BFlhlscJ.js",
+    "url": "assets/BarChart-Bh28yQDr.js",
+    "revision": null
+  }, {
+    "url": "assets/bell-ring-CjHGWFWP.js",
+    "revision": null
+  }, {
+    "url": "assets/Categories-CiaNcTb7.js",
+    "revision": null
+  }, {
+    "url": "assets/chevron-left-DLs7ZJ08.js",
+    "revision": null
+  }, {
+    "url": "assets/CustomerReceipts-CE7fqNC-.js",
+    "revision": null
+  }, {
+    "url": "assets/Customers-0zS8xDBw.js",
+    "revision": null
+  }, {
+    "url": "assets/DashboardOnlyAdmin-DV5IzYWa.js",
+    "revision": null
+  }, {
+    "url": "assets/Expenses-B_lNgNLt.css",
+    "revision": null
+  }, {
+    "url": "assets/Expenses-BMqelPaN.js",
+    "revision": null
+  }, {
+    "url": "assets/eye-Bet91wOm.js",
+    "revision": null
+  }, {
+    "url": "assets/fr-D_h12_bv.js",
+    "revision": null
+  }, {
+    "url": "assets/generateCategoricalChart-DJ0eMB9t.js",
+    "revision": null
+  }, {
+    "url": "assets/history-OkUfX2UL.js",
+    "revision": null
+  }, {
+    "url": "assets/index-0FT2CW2s.js",
+    "revision": null
+  }, {
+    "url": "assets/index-9fHseikD.js",
+    "revision": null
+  }, {
+    "url": "assets/index-BxgI3U8W.css",
+    "revision": null
+  }, {
+    "url": "assets/input-CmtJQkq5.js",
+    "revision": null
+  }, {
+    "url": "assets/label-C8Hx2lKm.js",
+    "revision": null
+  }, {
+    "url": "assets/loader-circle-D6F7xSq2.js",
+    "revision": null
+  }, {
+    "url": "assets/Login-GdClyv17.js",
+    "revision": null
+  }, {
+    "url": "assets/NotFound-BB0iLrBR.js",
+    "revision": null
+  }, {
+    "url": "assets/Notifications-u4xgSt2h.js",
+    "revision": null
+  }, {
+    "url": "assets/PieChart-Y19sqEvc.js",
+    "revision": null
+  }, {
+    "url": "assets/Pin-CpYMtOZD.js",
+    "revision": null
+  }, {
+    "url": "assets/plus-DrRcDmmI.js",
+    "revision": null
+  }, {
+    "url": "assets/POS-DHTyBtSj.js",
+    "revision": null
+  }, {
+    "url": "assets/print-CAmqBwu8.js",
+    "revision": null
+  }, {
+    "url": "assets/printer-DM-YpNOY.js",
+    "revision": null
+  }, {
+    "url": "assets/Products-BtohgOby.js",
+    "revision": null
+  }, {
+    "url": "assets/Receipt-BSUyV_JG.js",
+    "revision": null
+  }, {
+    "url": "assets/receipt-text-BsNS1vph.js",
+    "revision": null
+  }, {
+    "url": "assets/receiptNumber-C84GaaRI.js",
+    "revision": null
+  }, {
+    "url": "assets/Receipts-GJ9e4oiR.js",
+    "revision": null
+  }, {
+    "url": "assets/refresh-ccw-BG-AYJyc.js",
+    "revision": null
+  }, {
+    "url": "assets/ResponsiveContainer-CSkeB28G.js",
+    "revision": null
+  }, {
+    "url": "assets/RoleRedirect-DoAi_B7I.js",
+    "revision": null
+  }, {
+    "url": "assets/salesSync-SqYYWk0s.js",
+    "revision": null
+  }, {
+    "url": "assets/search-Bka98EG5.js",
+    "revision": null
+  }, {
+    "url": "assets/select-DUUrVuq_.js",
+    "revision": null
+  }, {
+    "url": "assets/Settings-eoyyrCoM.js",
+    "revision": null
+  }, {
+    "url": "assets/settings-v4sdkNRM.js",
+    "revision": null
+  }, {
+    "url": "assets/shield-B2dy5s7r.js",
+    "revision": null
+  }, {
+    "url": "assets/Shifts-BFgEkWpJ.js",
+    "revision": null
+  }, {
+    "url": "assets/square-pen-BS-o7Bet.js",
+    "revision": null
+  }, {
+    "url": "assets/StockAdjustmentHistory-DmKiBEFf.js",
+    "revision": null
+  }, {
+    "url": "assets/StockSignals-DfqCwc-m.js",
+    "revision": null
+  }, {
+    "url": "assets/Stores-BDYn4d4W.js",
+    "revision": null
+  }, {
+    "url": "assets/SubscriptionPayments-BytMAw5n.js",
+    "revision": null
+  }, {
+    "url": "assets/switch-955I_Z9z.js",
+    "revision": null
+  }, {
+    "url": "assets/table-DWwRll4A.js",
+    "revision": null
+  }, {
+    "url": "assets/tabs-CQ0sCjvL.js",
+    "revision": null
+  }, {
+    "url": "assets/textarea-CwXTpQ4C.js",
+    "revision": null
+  }, {
+    "url": "assets/trash-2-TlxzjljQ.js",
+    "revision": null
+  }, {
+    "url": "assets/trending-down-i4rJNqGn.js",
+    "revision": null
+  }, {
+    "url": "assets/trending-up-C0firfK-.js",
+    "revision": null
+  }, {
+    "url": "assets/Users-Bk3CiKg-.js",
+    "revision": null
+  }, {
+    "url": "assets/virtual_pwa-register-DvFW1n7r.js",
     "revision": null
   }, {
     "url": "assets/workbox-window.prod.es5-B9K5rw8f.js",
@@ -139,7 +307,7 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
     "revision": "9c01f677cc3001fa84dd9e6faac2c5c4"
   }, {
     "url": "index.html",
-    "revision": "7df4d693ee9e1e9ee8ac7008f6dc040f"
+    "revision": "bbaede16784adafa5e1906905ff6c880"
   }, {
     "url": "offline.html",
     "revision": "893dde22b9df46cfbc4f8746c7bffa32"
@@ -164,7 +332,16 @@ define(['./workbox-be98c6eb'], (function (workbox) { 'use strict';
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html")));
-  workbox.registerRoute(/\/api\//, new workbox.NetworkFirst({
+  workbox.registerRoute(({
+    url
+  }) => {
+    return url.pathname.includes("/backend/api/health.php");
+  }, new workbox.NetworkOnly(), 'GET');
+  workbox.registerRoute(({
+    url
+  }) => {
+    return /\/api\//.test(url.pathname) && !url.pathname.includes("/backend/api/");
+  }, new workbox.NetworkFirst({
     "cacheName": "api-cache-v1",
     "networkTimeoutSeconds": 10,
     plugins: [new workbox.CacheableResponsePlugin({

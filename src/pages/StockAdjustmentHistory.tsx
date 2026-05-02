@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { History, RefreshCw, Package, TrendingUp, TrendingDown, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
+import { BACKEND_BASE } from '@/lib/backend';
 
 type PeriodFilter = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
 type DeltaFilter = 'all' | 'plus' | 'moins';
@@ -76,7 +77,7 @@ export default function StockAdjustmentHistory() {
         }
         setLoading(true);
         try {
-            const url = `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_adjust.php?storeId=${user?.storeId}&limit=500`;
+            const url = `${BACKEND_BASE}/api/stock_adjust.php?storeId=${user?.storeId}&limit=500`;
             const res = await fetch(url);
             if (!res.ok)
                 throw new Error('Erreur serveur');

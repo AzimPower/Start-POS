@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
+import { BACKEND_BASE } from '@/lib/backend';
 import { getDB } from '@/lib/db';
 import { resolveUserOpenShift } from '@/lib/sync';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +20,7 @@ import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { cn } from '@/lib/utils';
 import { DollarSign, ShoppingCart, TrendingUp, Wallet } from 'lucide-react';
 export default function Dashboard() {
+    const [calendarMonthCount, setCalendarMonthCount] = useState<number>(() => typeof window !== 'undefined' && window.innerWidth >= 1280 ? 2 : 1);
     // Sélection de période
     const [startDate, setStartDate] = useState<Date>(new Date());
     const [endDate, setEndDate] = useState<Date>(new Date());
@@ -49,6 +51,14 @@ export default function Dashboard() {
         filterDataByPeriod();
         // eslint-disable-next-line
     }, [startDate, endDate, startTime, endTime, groupBy]);
+    useEffect(() => {
+        const handleResize = () => {
+            setCalendarMonthCount(window.innerWidth >= 1280 ? 2 : 1);
+        };
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
     // Raccourcis de période
     const setPeriodShortcut = (shortcut: string) => {
         const now = new Date();
@@ -161,7 +171,7 @@ export default function Dashboard() {
                 params.set('userId', String(user.id));
             else if (user?.storeId)
                 params.set('storeId', String(user.storeId));
-            const resp = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales_stats.php?${params.toString()}`);
+            const resp = await fetch(`${BACKEND_BASE}/api/sales_stats.php?${params.toString()}`);
             if (!resp.ok)
                 throw new Error('API error');
             const json = await resp.json();
@@ -408,8 +418,7 @@ export default function Dashboard() {
         // Normalize logo URL if it's a backend-relative path
         try {
             if (storeLogo && !storeLogo.startsWith('http') && storeLogo.includes('/img_products/')) {
-                const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                storeLogo = storeLogo.startsWith('/') ? `${API_BASE}${storeLogo}` : `${API_BASE}/${storeLogo}`;
+                storeLogo = storeLogo.startsWith('/') ? `${BACKEND_BASE}${storeLogo}` : `${BACKEND_BASE}/${storeLogo}`;
             }
         }
         catch (e) { }
@@ -904,7 +913,7 @@ export default function Dashboard() {
                     setStartDate(range.from);
                 if (range?.to)
                     setEndDate(range.to);
-            }} locale={fr} numberOfMonths={window.innerWidth >= 1280 ? 2 : 1} // 2 mois sur desktop, 1 sur mobile
+            }} locale={fr} numberOfMonths={calendarMonthCount} // 2 mois sur desktop, 1 sur mobile
          disabled={(date) => date > new Date() || date < new Date('1900-01-01')} defaultMonth={endDate} toDate={new Date()} className="xl:border-0"/>
                       </div>
                     </PopoverContent>

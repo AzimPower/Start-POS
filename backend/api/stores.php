@@ -5,18 +5,18 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 // ✅ Désactiver le cache pour garantir des données fraîches
 header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -24,6 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 function normalize_optional_timestamp($value) {
     if ($value === null || $value === '') {
@@ -63,13 +64,25 @@ try {
             // Retourne la liste des magasins en incluant le solde calculé
             // Par défaut on ne renvoie que les magasins actifs (active = 1)
             // Pour le super-admin ou debug vous pouvez ajouter `?include_inactive=1`
-            $includeInactive = isset($_GET['include_inactive']) && $_GET['include_inactive'] === '1';
-            if ($includeInactive) {
-                $stmt = $pdo->query('SELECT * FROM stores');
-                $stores = $stmt->fetchAll();
+            $includeInactive = isset($_GET['include_inactive']) && $_GET['include_inactive'] === '1' && is_super_admin_claims($authClaims);
+            if (is_super_admin_claims($authClaims)) {
+                if ($includeInactive) {
+                    $stmt = $pdo->query('SELECT * FROM stores');
+                    $stores = $stmt->fetchAll();
+                } else {
+                    $stmt = $pdo->prepare('SELECT * FROM stores WHERE active = 1');
+                    $stmt->execute();
+                    $stores = $stmt->fetchAll();
+                }
             } else {
-                $stmt = $pdo->prepare('SELECT * FROM stores WHERE active = 1');
-                $stmt->execute();
+                $allowedStoreIds = get_claim_store_ids($authClaims);
+                if (empty($allowedStoreIds)) {
+                    echo json_encode([]);
+                    break;
+                }
+                $placeholders = implode(',', array_fill(0, count($allowedStoreIds), '?'));
+                $stmt = $pdo->prepare("SELECT * FROM stores WHERE active = 1 AND id IN ($placeholders)");
+                $stmt->execute($allowedStoreIds);
                 $stores = $stmt->fetchAll();
             }
 
@@ -431,6 +444,11 @@ try {
             echo json_encode($stores);
             break;
         case 'POST':
+            if (!is_super_admin_claims($authClaims)) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Only super admin can create stores']);
+                exit;
+            }
             $data = json_decode(file_get_contents('php://input'), true);
             // Si l'action est de définir un solde manuel
             if ($data && isset($data['action'])) {
@@ -442,7 +460,7 @@ try {
                         exit;
                     }
                     $id = $data['id'] ?? uniqid();
-                    $storeId = $data['storeId'];
+                    $storeId = ensure_store_access($authClaims, $data['storeId']);
                     $value = number_format((float)$data['value'], 2, '.', '');
                     $appliedAt = isset($data['appliedAt']) ? (int)$data['appliedAt'] : (int)(microtime(true)*1000);
                     $userId = $data['userId'] ?? null;
@@ -465,7 +483,7 @@ try {
                         exit;
                     }
                     $id = $data['id'] ?? uniqid();
-                    $storeId = $data['storeId'];
+                    $storeId = ensure_store_access($authClaims, $data['storeId']);
                     $indicator = $data['action'] === 'set_fond_roulement' ? 'fond_roulement' : 'benefice';
                     $value = number_format((float)$data['value'], 2, '.', '');
                     $appliedAt = isset($data['appliedAt']) ? (int)$data['appliedAt'] : (int)(microtime(true)*1000);
@@ -488,7 +506,7 @@ try {
                         echo json_encode(['success' => false, 'error' => 'storeId requis']);
                         exit;
                     }
-                    $storeId = $data['storeId'];
+                    $storeId = ensure_store_access($authClaims, $data['storeId']);
                     $fondCats = isset($data['fondCategories']) && is_array($data['fondCategories']) ? json_encode($data['fondCategories']) : null;
                     $benCats = isset($data['beneficeCategories']) && is_array($data['beneficeCategories']) ? json_encode($data['beneficeCategories']) : null;
                     $trackIndirectExpenses = isset($data['trackIndirectExpenses']) ? ((int)!!$data['trackIndirectExpenses']) : null;
@@ -526,7 +544,7 @@ try {
                         echo json_encode(['success' => false, 'error' => 'storeId et trackIndirectExpenses requis']);
                         exit;
                     }
-                    $storeId = $data['storeId'];
+                    $storeId = ensure_store_access($authClaims, $data['storeId']);
                     $trackIndirectExpenses = ((int)!!$data['trackIndirectExpenses']);
                     $requestedEnabledAt = normalize_optional_timestamp($data['trackIndirectExpensesEnabledAt'] ?? null);
                     try {
@@ -585,11 +603,14 @@ try {
                             $admin = $data['admin'];
                             $uid = $admin['id'] ?? uniqid();
                             $insertUser = $pdo->prepare('INSERT INTO users (id, username, phone, password, pin, role, storeId, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                            $adminPassword = isset($admin['password']) && trim((string)$admin['password']) !== ''
+                                ? password_hash((string)$admin['password'], PASSWORD_DEFAULT)
+                                : null;
                             $insertUser->execute([
                                 $uid,
                                 $admin['username'] ?? $admin['phone'] ?? 'admin',
                                 $admin['phone'] ?? null,
-                                $admin['password'] ?? null,
+                                $adminPassword,
                                 $admin['pin'] ?? null,
                                 $admin['role'] ?? 'admin',
                                 $id,
@@ -610,6 +631,9 @@ try {
             break;
         case 'PUT':
             $data = json_decode(file_get_contents('php://input'), true);
+            if ($data && isset($data['id'])) {
+                $data['id'] = ensure_store_access($authClaims, $data['id']);
+            }
             if (!$data || !isset($data['id'])) {
                 echo json_encode(['success' => false, 'error' => 'ID manquant ou données invalides']);
                 exit;
@@ -650,6 +674,11 @@ try {
             echo json_encode(['success' => true]);
             break;
         case 'DELETE':
+            if (!is_super_admin_claims($authClaims)) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Only super admin can delete stores']);
+                exit;
+            }
             // Essayer d'obtenir l'id depuis le body JSON ou la query string
             $data = json_decode(file_get_contents('php://input'), true);
             $id = $data['id'] ?? ($_GET['id'] ?? null);

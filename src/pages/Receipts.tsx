@@ -19,6 +19,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { resolveUserOpenShift } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { BACKEND_BASE } from '@/lib/backend';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, } from '@/components/ui/alert-dialog';
 interface Sale {
     id: string;
@@ -137,7 +138,7 @@ export default function Receipts() {
                         params.append('storeId', user.storeId);
                     params.append('offset', String(offset));
                     params.append('limit', String(limit));
-                    const response = await fetch(buildBypassUrl('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php', params), { cache: 'no-store' });
+                    const response = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales.php`, params), { cache: 'no-store' });
                     if (response.ok) {
                         const backendResult = await response.json();
                         // backendResult: { data: Sale[], total, offset, limit }
@@ -483,7 +484,7 @@ export default function Receipts() {
             // Always attempt to sync via performSyncOp which will queue if offline or on error
             try {
                 const res = await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/sales.php',
+                    url: `${BACKEND_BASE}/api/sales.php`,
                     method: 'PUT',
                     data: refundedSale,
                 });

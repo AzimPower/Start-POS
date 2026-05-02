@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Edit, Trash2, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { BACKEND_BASE } from '@/lib/backend';
 interface Category {
     id: string;
     name: string;
@@ -84,7 +85,7 @@ export default function Categories() {
                 };
                 await db.put('categories', updated);
                 if (connectionState.isOnline) {
-                    await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', {
+                    await fetch(`${BACKEND_BASE}/api/categories.php`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(updated),
@@ -92,7 +93,7 @@ export default function Categories() {
                 }
                 else {
                     await queueSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php',
+                        url: `${BACKEND_BASE}/api/categories.php`,
                         method: 'PUT',
                         data: updated,
                     });
@@ -124,7 +125,7 @@ export default function Categories() {
                 };
                 await db.add('categories', newCategory);
                 if (connectionState.isOnline) {
-                    await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php', {
+                    await fetch(`${BACKEND_BASE}/api/categories.php`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(newCategory),
@@ -132,7 +133,7 @@ export default function Categories() {
                 }
                 else {
                     await queueSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php',
+                        url: `${BACKEND_BASE}/api/categories.php`,
                         method: 'POST',
                         data: newCategory,
                     });
@@ -186,13 +187,13 @@ export default function Categories() {
         if (confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ?')) {
             await db.delete('categories', id);
             if (connectionState.isOnline) {
-                await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php?id=${id}`, {
+                await fetch(`${BACKEND_BASE}/api/categories.php?id=${id}`, {
                     method: 'DELETE',
                 });
             }
             else {
                 await queueSyncOp({
-                    url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php?id=${id}`,
+                    url: `${BACKEND_BASE}/api/categories.php?id=${id}`,
                     method: 'DELETE',
                     data: {},
                 });

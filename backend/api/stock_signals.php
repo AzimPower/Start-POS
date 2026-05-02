@@ -1,12 +1,12 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -14,10 +14,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 switch ($method) {
     case 'GET':
-        $storeId = $_GET['storeId'] ?? null;
+        $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
         $productId = $_GET['productId'] ?? null;
         $sql = 'SELECT * FROM stock_signals';
         $params = [];
@@ -41,6 +42,7 @@ switch ($method) {
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         // Log incoming payload for debugging
         file_put_contents(__DIR__ . '/stock_signals.log', date('c') . " POST\n" . json_encode($data) . "\n", FILE_APPEND);
         $sql = 'INSERT INTO stock_signals (id, expenseId, productId, userId, storeId, startDate, endDate, purchaseAmount, quantityBought, quantitySold, revenue, margin, realMargin, marginPercentage, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -78,6 +80,7 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         file_put_contents(__DIR__ . '/stock_signals.log', date('c') . " PUT\n" . json_encode($data) . "\n", FILE_APPEND);
         $sql = 'UPDATE stock_signals SET expenseId=?, productId=?, userId=?, storeId=?, startDate=?, endDate=?, purchaseAmount=?, quantityBought=?, quantitySold=?, revenue=?, margin=?, realMargin=?, marginPercentage=?, createdAt=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
@@ -114,6 +117,12 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            if (!is_super_admin_claims($authClaims)) {
+                $checkStmt = $pdo->prepare('SELECT storeId FROM stock_signals WHERE id = ? LIMIT 1');
+                $checkStmt->execute([$id]);
+                $targetStoreId = $checkStmt->fetchColumn();
+                ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+            }
             $stmt = $pdo->prepare('DELETE FROM stock_signals WHERE id=?');
             $stmt->execute([$id]);
             echo json_encode(['success' => true]);

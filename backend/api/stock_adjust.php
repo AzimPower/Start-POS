@@ -1,16 +1,10 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json; charset=utf-8');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
 require_once '../config.php';
+require_once __DIR__ . '/_bootstrap.php';
+
+init_api_headers(['GET', 'POST', 'OPTIONS']);
+$claims = require_auth();
+$currentUserId = trim((string)($claims['sub'] ?? ''));
 
 // Créer la table stock_adjustments si elle n'existe pas
 try {
@@ -39,11 +33,7 @@ try {
 
 // ===== GET : Récupérer l'historique des ajustements =====
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $storeId = $_GET['storeId'] ?? null;
-    if (!$storeId) {
-        echo json_encode(['ok' => false, 'error' => 'storeId requis']);
-        exit;
-    }
+    $storeId = ensure_store_access($claims, $_GET['storeId'] ?? null);
     try {
         $limit = min((int)($_GET['limit'] ?? 200), 500);
 
@@ -125,8 +115,13 @@ if (!$data) {
     exit;
 }
 
-$storeId = $data['storeId'] ?? null;
-$userId = $data['userId'] ?? null;
+$storeId = ensure_store_access($claims, $data['storeId'] ?? null);
+$requestedUserId = isset($data['userId']) ? trim((string)$data['userId']) : '';
+if ($requestedUserId !== '' && $requestedUserId !== $currentUserId && !is_super_admin_claims($claims)) {
+    echo json_encode(['ok' => false, 'error' => 'userId invalide']);
+    exit;
+}
+$userId = $requestedUserId !== '' ? $requestedUserId : $currentUserId;
 $globalReason = $data['reason'] ?? '';
 
 // Compatibilité: ancien mode unitaire + nouveau mode batch
@@ -143,7 +138,7 @@ if (!is_array($adjustments)) {
     }
 }
 
-if (!$storeId || !$userId || !is_array($adjustments) || count($adjustments) === 0) {
+if (!$userId || !is_array($adjustments) || count($adjustments) === 0) {
     echo json_encode(['ok' => false, 'error' => 'storeId, userId et adjustments[] requis']);
     exit;
 }
@@ -313,7 +308,10 @@ try {
 
     // Fallback si aucun admin trouvé
     if (empty($emails)) {
-        $emails[] = 'powerstartbf@gmail.com';
+        $fallbackEmail = get_env_string('APP_DEFAULT_ADMIN_EMAIL', get_env_string('SMTP_FROM_EMAIL', get_env_string('SMTP_USERNAME', '')));
+        if ($fallbackEmail !== '') {
+            $emails[] = $fallbackEmail;
+        }
     }
 
     // Envoyer email à chaque admin
@@ -321,23 +319,7 @@ try {
     foreach ($emails as $to) {
         try {
             $mail = new PHPMailer(true);
-            $mail->isSMTP();
-            $mail->Host       = 'smtp.gmail.com';
-            $mail->SMTPAuth   = true;
-            $mail->Username   = 'powerstartbf@gmail.com';
-            $mail->Password   = 'ffpafdcbtqeihljp';
-            $mail->SMTPSecure = 'tls';
-            $mail->Port       = 587;
-            $mail->Timeout    = 30;
-            $mail->SMTPOptions = array(
-                'ssl' => array(
-                    'verify_peer' => false,
-                    'verify_peer_name' => false,
-                    'allow_self_signed' => true
-                )
-            );
-
-            $mail->setFrom('powerstartbf@gmail.com', 'START POS - Notification');
+            configure_smtp_mailer($mail);
             $mail->addAddress($to);
             $mail->isHTML(true);
             $mail->CharSet = 'UTF-8';

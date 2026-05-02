@@ -63,7 +63,15 @@ export default defineConfig(({ mode }) => ({
         // Configuration du cache runtime
         runtimeCaching: [
           {
-            urlPattern: /\/api\//,
+            urlPattern: ({ url }) => {
+              return url.pathname.includes('/backend/api/health.php');
+            },
+            handler: 'NetworkOnly'
+          },
+          {
+            urlPattern: ({ url }) => {
+              return /\/api\//.test(url.pathname) && !url.pathname.includes('/backend/api/');
+            },
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache-v1',

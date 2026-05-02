@@ -1,12 +1,12 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -14,10 +14,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 switch ($method) {
     case 'GET':
-        $storeId = $_GET['storeId'] ?? null;
+        $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
         $sql = 'SELECT * FROM customers';
         if ($storeId) {
             $sql .= ' WHERE storeId = ?';
@@ -31,6 +32,7 @@ switch ($method) {
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         $sql = 'INSERT INTO customers (id, name, phone, email, address, notes, balance, createdAt, storeId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
@@ -49,6 +51,7 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         $sql = 'UPDATE customers SET name=?, phone=?, email=?, address=?, notes=?, balance=?, createdAt=?, storeId=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
@@ -67,6 +70,12 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            if (!is_super_admin_claims($authClaims)) {
+                $checkStmt = $pdo->prepare('SELECT storeId FROM customers WHERE id = ? LIMIT 1');
+                $checkStmt->execute([$id]);
+                $targetStoreId = $checkStmt->fetchColumn();
+                ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+            }
             $stmt = $pdo->prepare('DELETE FROM customers WHERE id=?');
             $stmt->execute([$id]);
             echo json_encode(['success' => true]);

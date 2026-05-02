@@ -48,6 +48,17 @@ const testEmailAndroid = async () => {
   });
 };
 
+const detectBackendReachability = async () => {
+  try {
+    const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/health.php?_mobile_test=' + Date.now(), {
+      cache: 'no-store'
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+};
+
 // Simuler un test d'envoi d'email
 const testEmailMobile = async () => {
   try {
@@ -56,10 +67,12 @@ const testEmailMobile = async () => {
     // Import dynamique du service
     const { emailService } = await import('./src/lib/emailService.js');
     
+    const backendReachable = await detectBackendReachability();
+
     const testPayload = {
       name: 'Test Mobile Console',
       email: 'powerstartbf@gmail.com',
-      message: `🧪 Test d'envoi depuis console mobile\n\nDate: ${new Date().toLocaleString()}\nUserAgent: ${navigator.userAgent}\nOnline: ${navigator.onLine}\nConnection: ${navigator.connection?.effectiveType || 'unknown'}`,
+      message: `🧪 Test d'envoi depuis console mobile\n\nDate: ${new Date().toLocaleString()}\nUserAgent: ${navigator.userAgent}\nOnlineHint: ${navigator.onLine}\nBackendReachable: ${backendReachable}\nConnection: ${navigator.connection?.effectiveType || 'unknown'}`,
       storeName: 'Test Console'
     };
     

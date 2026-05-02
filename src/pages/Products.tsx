@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+﻿import { useEffect, useState, useRef } from 'react';
+import { useDeferredValue, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
-import { backendAvailable, normalizeImageUrl } from '@/lib/backend';
+import { BACKEND_BASE, backendAvailable, normalizeImageUrl } from '@/lib/backend';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -119,6 +120,7 @@ export default function Products() {
     const { user } = useAuth();
     // Permettre aux managers, admins et super_admins de gérer les ajustements de stock
     const canManageStockAdjustments = user.role === 'manager' || user.role === 'admin' || user.role === 'super_admin';
+    const canViewExactStock = user.role === 'admin' || user.role === 'super_admin';
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
     const isMobile = useIsMobile();
@@ -175,6 +177,7 @@ export default function Products() {
     const [showAddCategory, setShowAddCategory] = useState(false);
     const [newCategoryDesc, setNewCategoryDesc] = useState('');
     const [productsSearch, setProductsSearch] = useState('');
+    const deferredProductsSearch = useDeferredValue(productsSearch);
     // Stock adjust batch (for managers)
     const [adjustments, setAdjustments] = useState<StockAdjustmentLine[]>([]);
     const [adjustGlobalReason, setAdjustGlobalReason] = useState('');
@@ -184,6 +187,110 @@ export default function Products() {
     const [draftPhysicalQty, setDraftPhysicalQty] = useState('');
     const [draftReason, setDraftReason] = useState('');
     const loadedOnceRef = useRef(false);
+    const backgroundRefreshInFlightRef = useRef(false);
+    const lastBackgroundRefreshAtRef = useRef(0);
+    const refreshFromBackend = async (db: any, force = false) => {
+        if (!user?.storeId || !isBackendReachable)
+            return;
+        const now = Date.now();
+        if (!force) {
+            if (backgroundRefreshInFlightRef.current)
+                return;
+            if (now - lastBackgroundRefreshAtRef.current < 30000)
+                return;
+        }
+        backgroundRefreshInFlightRef.current = true;
+        lastBackgroundRefreshAtRef.current = now;
+        try {
+            const [productsResponse, categoriesResponse] = await Promise.all([
+                fetch(`${BACKEND_BASE}/api/products.php?storeId=${user.storeId}&_t=${Date.now()}`, {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                }),
+                fetch(`${BACKEND_BASE}/api/categories.php?storeId=${user.storeId}&_t=${Date.now()}`, {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                })
+            ]);
+            if (productsResponse.ok) {
+                const backendProducts = await productsResponse.json();
+                const normalizedBackendProducts = (backendProducts || []).map((p: any) => ({
+                    ...p,
+                    stock: p.stock || {},
+                    imageUrl: normalizeImageUrl(p.imageUrl)
+                }));
+                const pendingStockOperations = await hasPendingStockOperations(user.storeId);
+                if (!pendingStockOperations) {
+                    setProducts(normalizedBackendProducts);
+                    try {
+                        const backendProductIds = new Set(normalizedBackendProducts.map((p: any) => String(p.id)));
+                        const localProducts = await db.getAll('products');
+                        const tx = db.transaction('products', 'readwrite');
+                        const scopedLocalProducts = (localProducts || []).filter((p: any) => p.storeId === user.storeId ||
+                            (p.stock && Object.prototype.hasOwnProperty.call(p.stock, user.storeId)));
+                        await Promise.all([
+                            ...scopedLocalProducts
+                                .filter((p: any) => !backendProductIds.has(String(p.id)))
+                                .map((p: any) => tx.store.delete(p.id)),
+                            ...normalizedBackendProducts.map((p: any) => tx.store.put(p)),
+                            tx.done
+                        ]);
+                    }
+                    catch (e) {
+                    }
+                }
+            }
+            if (categoriesResponse.ok) {
+                const backendCategories = await categoriesResponse.json();
+                const normalizedBackendCategories = (backendCategories || []).map((c: any) => ({ ...c, storeId: c.storeId || user.storeId }));
+                setCategories(normalizedBackendCategories);
+                try {
+                    const backendCategoryIds = new Set(normalizedBackendCategories.map((c: any) => String(c.id)));
+                    const localCategories = await db.getAll('categories');
+                    const txc = db.transaction('categories', 'readwrite');
+                    const scopedLocalCategories = (localCategories || []).filter((c: any) => c.storeId === user.storeId || !c.storeId);
+                    await Promise.all([
+                        ...scopedLocalCategories
+                            .filter((c: any) => !backendCategoryIds.has(String(c.id)))
+                            .map((c: any) => txc.store.delete(c.id)),
+                        ...normalizedBackendCategories.map((c: any) => txc.store.put(c)),
+                        txc.done
+                    ]);
+                }
+                catch (e) {
+                }
+            }
+        }
+        catch (error) {
+        }
+        finally {
+            backgroundRefreshInFlightRef.current = false;
+        }
+    };
+    if (!user) {
+        return <div className="p-4">Veuillez vous connecter pour voir les produits.</div>;
+    }
+    const loadData = async (refresh = true) => {
+        if (!user?.storeId) {
+            return;
+        }
+        try {
+            const db = await getDB();
+            await loadFromLocal(db);
+            if (refresh) {
+                void refreshFromBackend(db);
+            }
+        }
+        catch (error) {
+            toast.error('Erreur de chargement des données');
+        }
+    };
     // Chargement initial des données
     useEffect(() => {
         if (!user?.storeId)
@@ -194,7 +301,7 @@ export default function Products() {
         const initialLoad = async () => {
             setIsLoading(true);
             try {
-                await loadData();
+                await loadData(true);
             }
             catch (error) {
                 toast.error('Erreur de chargement des données');
@@ -210,108 +317,20 @@ export default function Products() {
     useEffect(() => {
         if (!user?.storeId || !isBackendReachable || !loadedOnceRef.current)
             return;
-        const syncData = async () => {
-            try {
-                await loadData();
-            }
-            catch (error) {
-            }
-        };
-        syncData();
+        getDB().then((db) => refreshFromBackend(db, true)).catch(() => { });
     }, [isBackendReachable, user?.storeId]);
     // Rechargement quand la page devient visible
     useEffect(() => {
         if (!user?.storeId)
             return;
-        const handleVisibilityChange = async () => {
+        const handleVisibilityChange = () => {
             if (document.visibilityState === 'visible' && loadedOnceRef.current) {
-                try {
-                    await loadData();
-                }
-                catch (error) {
-                }
+                getDB().then((db) => refreshFromBackend(db, false)).catch(() => { });
             }
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [user?.storeId]);
-    if (!user) {
-        return <div className="p-4">Veuillez vous connecter pour voir les produits.</div>;
-    }
-    const loadData = async () => {
-        if (!user?.storeId) {
-            return;
-        }
-        try {
-            const db = await getDB();
-            // 1. Charger et afficher les données locales immédiatement
-            await loadFromLocal(db);
-            // 2. Synchroniser en arrière-plan si backend accessible (sans bloquer l'UI)
-            if (isBackendReachable) {
-                // Synchronisation en arrière-plan
-                try {
-                    const [productsResponse, categoriesResponse] = await Promise.all([
-                        fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?storeId=${user.storeId}&_t=${Date.now()}`, {
-                            cache: 'no-store',
-                            headers: {
-                                'Cache-Control': 'no-cache',
-                                'Pragma': 'no-cache'
-                            }
-                        }),
-                        fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php?storeId=${user.storeId}&_t=${Date.now()}`, {
-                            cache: 'no-store',
-                            headers: {
-                                'Cache-Control': 'no-cache',
-                                'Pragma': 'no-cache'
-                            }
-                        })
-                    ]);
-                    if (productsResponse.ok) {
-                        const backendProducts = await productsResponse.json();
-                        const normalizedBackendProducts = (backendProducts || []).map((p: any) => ({
-                            ...p,
-                            stock: p.stock || {},
-                            imageUrl: normalizeImageUrl(p.imageUrl)
-                        }));
-                      const pendingStockOperations = await hasPendingStockOperations(user.storeId);
-                      if (!pendingStockOperations) {
-                        setProducts(normalizedBackendProducts);
-                        try {
-                          const tx = db.transaction('products', 'readwrite');
-                          await tx.store.clear();
-                          for (const p of normalizedBackendProducts) {
-                            await tx.store.put(p);
-                          }
-                          await tx.done;
-                        }
-                        catch (e) {
-                        }
-                        }
-                    }
-                    if (categoriesResponse.ok) {
-                        const backendCategories = await categoriesResponse.json();
-                        setCategories(backendCategories || []);
-                        try {
-                            const txc = db.transaction('categories', 'readwrite');
-                            await txc.store.clear();
-                            for (const c of (backendCategories || [])) {
-                                await txc.store.put({ ...c, storeId: c.storeId || user.storeId });
-                            }
-                            await txc.done;
-                        }
-                        catch (e) {
-                        }
-                    }
-                }
-                catch (error: any) {
-                    // Les données locales sont déjà affichées, pas besoin de bloquer l'UI
-                }
-            }
-        }
-        catch (error) {
-            toast.error('Erreur de chargement des données');
-        }
-    };
+    }, [user?.storeId, isBackendReachable]);
     const loadFromLocal = async (db: any) => {
         try {
             const localProducts = await db.getAll('products');
@@ -360,7 +379,7 @@ export default function Products() {
                     catch (e) {
                     }
                     await performSyncOp({
-                        url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/categories.php',
+                        url: `${BACKEND_BASE}/api/categories.php`,
                         method: 'POST',
                         data: newCategory,
                     });
@@ -388,7 +407,7 @@ export default function Products() {
                             let deleted = false;
                             for (const candidate of candidates) {
                                 try {
-                                    const delRes = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+                                    const delRes = await fetch(`${BACKEND_BASE}/api/upload_image.php`, {
                                         method: 'DELETE',
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ url: candidate })
@@ -413,14 +432,14 @@ export default function Products() {
                                 toast.error('Impossible de supprimer l\'ancienne image sur le serveur (vérifiez les logs). Le fichier peut rester présent.');
                             }
                         }
-                        const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+                        const res = await fetch(`${BACKEND_BASE}/api/upload_image.php`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ image: formData.pendingImage })
                         });
                         const result = await res.json();
                         if (result && result.success) {
-                            const fullUrl = `https://mediumslateblue-cod-399211.hostingersite.com/backend/${result.url}`;
+                            const fullUrl = `${BACKEND_BASE}/${result.url}`;
                             uploadedImageUrl = fullUrl;
                             setFormData(f => ({ ...f, imageUrl: fullUrl, pendingImage: '' }));
                         }
@@ -430,7 +449,7 @@ export default function Products() {
                     }
                 }
                 catch (err) {
-                    toast.error('Erreur réseau lors de l\'upload de l\'image — upload différé');
+                    toast.error('Erreur réseau lors de l\'upload de l\'image â€” upload différé');
                 }
             }
             // IMPORTANT : Toute modification de stock doit passer par performSyncOp pour garantir la cohérence et la synchronisation hors-ligne/online.
@@ -440,7 +459,7 @@ export default function Products() {
                 let currentStock = editingProduct?.stock || {};
                 try {
                     if (isBackendReachable) {
-                        const stockResponse = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${editingProduct.id}`);
+                        const stockResponse = await fetch(`${BACKEND_BASE}/api/products.php?id=${editingProduct.id}`);
                         if (stockResponse.ok) {
                             const freshProduct = await stockResponse.json();
                             if (freshProduct && freshProduct.stock) {
@@ -486,7 +505,7 @@ export default function Products() {
                 setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
                 // 3. Synchroniser vers le backend (en arrière-plan)
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                    url: `${BACKEND_BASE}/api/products.php`,
                     method: 'PUT',
                     data: { ...updated, storeId: user.storeId, stock: formData.trackStock ? parseFloat(formData.stock) || 0 : 0 }
                 });
@@ -523,7 +542,7 @@ export default function Products() {
                 setProducts(prev => [...prev, newProduct]);
                 // 3. Synchroniser vers le backend (en arrière-plan)
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php',
+                    url: `${BACKEND_BASE}/api/products.php`,
                     method: 'POST',
                     data: { ...newProduct, stock: formData.trackStock ? parseFloat(formData.stock) || 0 : 0 }
                 });
@@ -551,7 +570,7 @@ export default function Products() {
             // Si le backend est disponible, recharger depuis le backend pour avoir les données les plus récentes
             if (isBackendReachable) {
                 try {
-                    const response = await fetch(`https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${product.id}&_t=${Date.now()}`, {
+                    const response = await fetch(`${BACKEND_BASE}/api/products.php?id=${product.id}&_t=${Date.now()}`, {
                         cache: 'no-store',
                         headers: {
                             'Cache-Control': 'no-cache',
@@ -627,7 +646,7 @@ export default function Products() {
                 // 3. Supprimer l'image du backend si elle existe (en arrière-plan)
                 if (product?.imageUrl) {
                     try {
-                        await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+                        await fetch(`${BACKEND_BASE}/api/upload_image.php`, {
                             method: 'DELETE',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ url: product.imageUrl })
@@ -638,7 +657,7 @@ export default function Products() {
                 }
                 // 4. Synchroniser la suppression vers le backend (en arrière-plan)
                 await performSyncOp({
-                    url: `https://mediumslateblue-cod-399211.hostingersite.com/backend/api/products.php?id=${id}`,
+                    url: `${BACKEND_BASE}/api/products.php?id=${id}`,
                     method: 'DELETE',
                     data: {}
                 });
@@ -649,7 +668,7 @@ export default function Products() {
             }
         }
     };
-    const trackedProducts = products.filter((p) => p.trackStock || (p.stock && Object.keys(p.stock).length > 0));
+    const trackedProducts = useMemo(() => products.filter((p) => p.trackStock || (p.stock && Object.keys(p.stock).length > 0)), [products]);
     const removeAdjustmentLine = (index: number) => {
         setAdjustments((prev) => prev.filter((_, i) => i !== index));
     };
@@ -752,7 +771,7 @@ export default function Products() {
                 })),
             };
             const syncResult = await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stock_adjust.php',
+                url: `${BACKEND_BASE}/api/stock_adjust.php`,
                 method: 'POST',
                 table: 'stockAdjustments',
                 storeId: user.storeId,
@@ -856,19 +875,28 @@ export default function Products() {
         setShowAddCategory(false);
         setNewCategoryDesc('');
     };
-    const getCategoryName = (categoryId: string) => {
-        return categories.find(c => c.id === categoryId)?.name || '';
-    };
+    const categoryNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        categories.forEach((category) => map.set(category.id, category.name));
+        return map;
+    }, [categories]);
+    const productById = useMemo(() => {
+        const map = new Map<string, Product>();
+        products.forEach((product) => map.set(product.id, product));
+        return map;
+    }, [products]);
+    const getCategoryName = (categoryId: string) => categoryNameById.get(categoryId) || '';
     const getProductLabel = (productId: string) => {
-        const p = products.find((prod) => prod.id === productId);
-        if (!p)
+        const product = productById.get(productId);
+        if (!product)
             return productId;
-        return `${p.name}${p.sku ? ` (${p.sku})` : ''}`;
+        return `${product.name}${product.sku ? ` (${product.sku})` : ''}`;
     };
+    const selectedAdjustmentProductIds = useMemo(() => new Set(adjustments.map((adjustment) => adjustment.productId)), [adjustments]);
     // Exclude already-selected products from the adjustments product picker
-    const availableTrackedProducts = trackedProducts.filter(p => !adjustments.some(a => a.productId === p.id));
-    const getFilteredProducts = () => {
-        const q = productsSearch.trim().toLowerCase();
+    const availableTrackedProducts = useMemo(() => trackedProducts.filter((product) => !selectedAdjustmentProductIds.has(product.id)), [trackedProducts, selectedAdjustmentProductIds]);
+    const filteredProducts = useMemo(() => {
+        const q = deferredProductsSearch.trim().toLowerCase();
         if (!q)
             return products;
         return products.filter(p => {
@@ -876,7 +904,7 @@ export default function Products() {
                 return true;
             if (p.sku && p.sku.toLowerCase().includes(q))
                 return true;
-            const catName = getCategoryName(p.categoryId || '').toLowerCase();
+            const catName = (categoryNameById.get(p.categoryId || '') || '').toLowerCase();
             if (catName.includes(q))
                 return true;
             try {
@@ -891,12 +919,12 @@ export default function Products() {
             catch (e) { }
             return false;
         });
-    };
+    }, [products, deferredProductsSearch, categoryNameById]);
     return (<div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Produits</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Gérez votre inventaire</p>
+          <p className="text-muted-foreground mt-1 text-sm">{'G\u00e9rez votre inventaire'}</p>
         </div>
         <div className="flex flex-row flex-wrap gap-2 w-full sm:w-auto">
           {canManageStockAdjustments && (<Button variant="outline" size="sm" className="flex-1 sm:flex-none h-9 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:border-blue-300 hover:text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300" onClick={() => setAdjustDialogOpen(true)}>
@@ -1025,7 +1053,7 @@ export default function Products() {
                     // Sinon supprimer l'image du backend si elle existe
                     if (formData.imageUrl) {
                         try {
-                            await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/upload_image.php', {
+                            await fetch(`${BACKEND_BASE}/api/upload_image.php`, {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ url: formData.imageUrl })
@@ -1227,7 +1255,7 @@ export default function Products() {
               <div className="flex-1 w-full space-y-1.5">
                 <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rechercher les produits</Label>
                 <div className="relative">
-                  <Input placeholder="Nom, SKU, catégorie, prix..." value={productsSearch} onChange={e => setProductsSearch(e.target.value)} className="w-full pl-3 h-10"/>
+                  <Input placeholder={'Nom, SKU, cat\u00e9gorie, prix...'} value={productsSearch} onChange={e => setProductsSearch(e.target.value)} className="w-full pl-3 h-10"/>
                 </div>
               </div>
             </div>
@@ -1303,7 +1331,7 @@ export default function Products() {
                                 <TableCell>
                                   {getProductLabel(line.productId)}
                                   <div className="text-xs text-muted-foreground mt-1">
-                                    phys: {line.physical ?? '-'} • app: {line.oldStock ?? '-'}
+                                    {'phys: '}{line.physical ?? '-'}{' • app: '}{canViewExactStock ? (line.oldStock ?? '-') : 'masqué'}
                                   </div>
                                 </TableCell>
                                 <TableCell>
@@ -1340,7 +1368,7 @@ export default function Products() {
             </DialogContent>
           </Dialog>)}
 
-        {/* ── MOBILE : liste de cartes ── */}
+        {/* MOBILE : liste de cartes */}
         <div className="sm:hidden space-y-2">
           {isLoading ? (Array.from({ length: 4 }).map((_, i) => (<div key={i} className="animate-pulse flex items-center gap-3 bg-card border rounded-xl p-3">
                 <div className="w-12 h-12 bg-muted rounded-lg flex-shrink-0"/>
@@ -1349,10 +1377,10 @@ export default function Products() {
                   <div className="h-3 bg-muted rounded w-20"/>
                   <div className="h-3 bg-muted rounded w-16"/>
                 </div>
-              </div>))) : getFilteredProducts().length === 0 ? (<div className="text-center py-12 text-muted-foreground">
+              </div>))) : filteredProducts.length === 0 ? (<div className="text-center py-12 text-muted-foreground">
               <Package className="w-12 h-12 mx-auto mb-2 opacity-40"/>
-              {productsSearch ? (<p className="text-sm">Aucun résultat pour « {productsSearch} »</p>) : (<p className="text-sm">Aucun produit</p>)}
-            </div>) : (getFilteredProducts().map((product) => {
+              {productsSearch ? (<p className="text-sm">{'Aucun r\u00e9sultat pour \u00ab '}{productsSearch}{' \u00bb'}</p>) : (<p className="text-sm">Aucun produit</p>)}
+            </div>) : (filteredProducts.map((product) => {
             const stockQty = product.stock?.[user.storeId] ?? 0;
             const hasStock = product.stock && Object.keys(product.stock).length > 0;
             const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
@@ -1385,21 +1413,19 @@ export default function Products() {
                     <div className="mt-1">
                       {hasStock ? (<div className="flex items-center gap-1.5">
                           <span className={`text-xs font-semibold ${stockQty <= 0 ? 'text-red-500' : 'text-foreground'}`}>
-                            {stockQty} {product.unit}
+                            {canViewExactStock ? `${stockQty} ${product.unit}` : (stockQty > 0 ? 'Disponible' : 'Rupture')}
                           </span>
                           {isLow && (<span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                              ⚠ stock bas
+                              {'\u26a0 stock bas'}
                             </span>)}
-                        </div>) : (<span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                          Non suivi
-                        </span>)}
+                        </div>) : (<span className="text-muted-foreground text-xs">Via ajustement</span>)}
                     </div>
                   </div>
                 </div>);
         }))}
         </div>
 
-        {/* ── DESKTOP : tableau ── */}
+        {/* DESKTOP : tableau */}
         <Card className="hidden sm:block">
           <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -1408,7 +1434,7 @@ export default function Products() {
                 <TableRow className="bg-muted/40">
                   <TableHead className="font-semibold text-foreground">Produit</TableHead>
                   <TableHead className="font-semibold text-foreground">SKU</TableHead>
-                  <TableHead className="hidden md:table-cell font-semibold text-foreground">Catégorie</TableHead>
+                  <TableHead className="hidden md:table-cell font-semibold text-foreground">{'Cat\u00e9gorie'}</TableHead>
                   <TableHead className="hidden lg:table-cell font-semibold text-foreground">Prix</TableHead>
                   <TableHead className="font-semibold text-foreground">Stock</TableHead>
                   <TableHead className="w-[100px] font-semibold text-foreground">Actions</TableHead>
@@ -1424,12 +1450,12 @@ export default function Products() {
                           <div className="h-5 bg-gray-200 rounded w-20"/>
                         </div>
                       </TableCell>
-                    </TableRow>))) : getFilteredProducts().length === 0 ? (<TableRow>
+                    </TableRow>))) : filteredProducts.length === 0 ? (<TableRow>
                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                       <Package className="w-12 h-12 mx-auto mb-2 opacity-50"/>
-                      {productsSearch ? (<p>Aucun résultat pour la recherche « {productsSearch} »</p>) : (<p>Aucun produit</p>)}
+                      {productsSearch ? (<p>{'Aucun r\u00e9sultat pour la recherche \u00ab '}{productsSearch}{' \u00bb'}</p>) : (<p>Aucun produit</p>)}
                     </TableCell>
-                  </TableRow>) : (getFilteredProducts().map((product) => {
+                  </TableRow>) : (filteredProducts.map((product) => {
             const stockQty = product.stock?.[user.storeId] ?? 0;
             const hasStock = product.stock && Object.keys(product.stock).length > 0;
             const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
@@ -1454,11 +1480,11 @@ export default function Products() {
                         <TableCell>
                           {hasStock ? (<div className="flex items-center gap-1.5">
                               <span className={`font-semibold text-sm ${stockQty <= 0 ? 'text-red-500' : ''}`}>
-                                {stockQty}
+                                {canViewExactStock ? stockQty : (stockQty > 0 ? 'Disponible' : 'Rupture')}
                               </span>
-                              <span className="text-muted-foreground text-xs">{product.unit}</span>
+                              {canViewExactStock ? (<span className="text-muted-foreground text-xs">{product.unit}</span>) : null}
                               {isLow && (<span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                                  ⚠ bas
+                                  {'\u26a0 stock bas'}
                                 </span>)}
                             </div>) : (<span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                               Non suivi

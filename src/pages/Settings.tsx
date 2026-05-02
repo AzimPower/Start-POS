@@ -5,6 +5,7 @@ import * as NativePrinter from '@/lib/nativePrinter';
 import * as secureStorage from '@/lib/secureStorage';
 import { useAuth } from '@/contexts/AuthContext';
 import { isActiveFlag } from '@/lib/status';
+import { BACKEND_BASE } from '@/lib/backend';
 // Helpers: dynamic Capacitor Storage/App usage with localStorage fallback.
 async function storageGet(key: string): Promise<string | null> {
     try {
@@ -141,7 +142,7 @@ export default function Settings() {
             await db.put('emailSettings', settingsData);
             // Sync with backend if online
             const syncResult = await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php',
+                url: `${BACKEND_BASE}/api/email_settings.php`,
                 method: 'PUT',
                 data: settingsData
             });
@@ -169,7 +170,7 @@ export default function Settings() {
         setLoadingStore(true);
         setStoreError(null);
         try {
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php');
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`);
             if (!res.ok)
                 throw new Error('Erreur fetch stores');
             const data = await res.json();
@@ -228,7 +229,7 @@ export default function Settings() {
                 userId: user?.id,
                 note: note,
             };
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', {
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -269,7 +270,7 @@ export default function Settings() {
                 userId: user?.id,
                 note: fondNote,
             };
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', {
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -310,7 +311,7 @@ export default function Settings() {
                 userId: user?.id,
                 note: benefNote,
             };
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', {
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -346,8 +347,7 @@ export default function Settings() {
             return;
         (async () => {
             try {
-                const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                const url = API_BASE + '/api/expense_categories.php?storeId=' + encodeURIComponent(store.id);
+                const url = BACKEND_BASE + '/api/expense_categories.php?storeId=' + encodeURIComponent(store.id);
                 const res = await fetch(url);
                 if (!res.ok)
                     return;
@@ -394,7 +394,7 @@ export default function Settings() {
                 fondCategories: selectedFondCats,
                 beneficeCategories: selectedBenefCats,
             };
-            const res = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php', {
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -460,8 +460,7 @@ export default function Settings() {
             // instead of fetching the raw image (which can be blocked by CORS).
             if (storeId) {
                 try {
-                    const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                    const resStore = await fetch(`${API_BASE}/api/stores.php?id=${encodeURIComponent(storeId)}`);
+                    const resStore = await fetch(`${BACKEND_BASE}/api/stores.php?id=${encodeURIComponent(storeId)}`);
                     if (!resStore.ok) {
                         if (resStore.status === 404) {
                             // store not found -> remove local copies
@@ -701,8 +700,7 @@ export default function Settings() {
                 const storeId = (user as any)?.storeId;
                 if (!storeId)
                     return;
-                const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                const url = `${API_BASE}/api/stores.php?id=${encodeURIComponent(storeId)}`;
+                const url = `${BACKEND_BASE}/api/stores.php?id=${encodeURIComponent(storeId)}`;
                 const res = await fetch(url, { method: 'GET' });
                 if (!res.ok) {
                     if (res.status === 404) {
@@ -730,7 +728,7 @@ export default function Settings() {
                 // API might return an array or an object
                 const store = Array.isArray(body) ? body[0] : body;
                 if (store && store.logo) {
-                    const logoUrl = store.logo.startsWith('http') ? store.logo : `${API_BASE}/${String(store.logo).replace(/^\/+/, '')}`;
+                    const logoUrl = store.logo.startsWith('http') ? store.logo : `${BACKEND_BASE}/${String(store.logo).replace(/^\/+/, '')}`;
                     try {
                         const localTs = Number(localStorage.getItem('storeLogo_ts') || '0');
                         const localLogo = localStorage.getItem('storeLogo');
@@ -850,10 +848,8 @@ export default function Settings() {
         const stored = localStorage.getItem('storeLogo');
         if (stored && stored.includes('img_products/')) {
             try {
-                const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                // On envoie juste le chemin relatif au backend
-                const urlRel = stored.startsWith(API_BASE) ? stored.replace(API_BASE + '/', '') : stored;
-                fetch(API_BASE + '/api/upload_image.php', {
+                const urlRel = stored.startsWith(BACKEND_BASE) ? stored.replace(BACKEND_BASE + '/', '') : stored;
+                fetch(BACKEND_BASE + '/api/upload_image.php', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url: urlRel }),
@@ -1029,8 +1025,7 @@ export default function Settings() {
                         }
                         // Propagate deletion to backend using performSyncOp (will queue if offline)
                         try {
-                            const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                            await performSyncOp({ url: API_BASE + '/api/stores.php', method: 'PUT', data: { id: storeId, logo: null } });
+                            await performSyncOp({ url: BACKEND_BASE + '/api/stores.php', method: 'PUT', data: { id: storeId, logo: null } });
                         }
                         catch (e) {
                         }
@@ -1115,7 +1110,7 @@ export default function Settings() {
                     // Sync with backend
                     try {
                         await performSyncOp({
-                            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+                            url: `${BACKEND_BASE}/api/users.php`,
                             method: 'PUT',
                             data: updated
                         });
@@ -1166,7 +1161,7 @@ export default function Settings() {
             // Sync with backend
             try {
                 await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+                    url: `${BACKEND_BASE}/api/users.php`,
                     method: 'PUT',
                     data: updated
                 });
@@ -1268,9 +1263,8 @@ export default function Settings() {
             const oldLogo = localStorage.getItem('storeLogo');
             if (oldLogo && oldLogo.includes('img_products/')) {
                 try {
-                    const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
-                    const urlRel = oldLogo.startsWith(API_BASE) ? oldLogo.replace(API_BASE + '/', '') : oldLogo;
-                    fetch(API_BASE + '/api/upload_image.php', {
+                    const urlRel = oldLogo.startsWith(BACKEND_BASE) ? oldLogo.replace(BACKEND_BASE + '/', '') : oldLogo;
+                    fetch(BACKEND_BASE + '/api/upload_image.php', {
                         method: 'DELETE',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ url: urlRel }),
@@ -1286,9 +1280,8 @@ export default function Settings() {
                 setLogo(dataUrl);
                 // Try to upload to backend like product images
                 (async () => {
-                    const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
                     try {
-                        const res = await fetch(API_BASE + '/api/upload_image.php', {
+                        const res = await fetch(BACKEND_BASE + '/api/upload_image.php', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ image: dataUrl }),
@@ -1296,7 +1289,7 @@ export default function Settings() {
                         if (res.ok) {
                             const body = await res.json();
                             if (body && body.url) {
-                                const full = API_BASE + '/' + body.url.replace(/^\/+/, '');
+                                const full = BACKEND_BASE + '/' + body.url.replace(/^\/+/, '');
                                 setLogoPreview(full);
                                 setLogo(full);
                                 localStorage.setItem('storeLogo', full);
@@ -1322,7 +1315,7 @@ export default function Settings() {
                                 try {
                                     const storeId = (user as any)?.storeId;
                                     if (storeId) {
-                                        const putRes = await fetch(API_BASE + '/api/stores.php', {
+                                        const putRes = await fetch(BACKEND_BASE + '/api/stores.php', {
                                             method: 'PUT',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({ id: storeId, name: undefined, address: undefined, logo: full, active: true, createdAt: Date.now() }),

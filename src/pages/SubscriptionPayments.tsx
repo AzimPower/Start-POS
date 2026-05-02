@@ -14,7 +14,8 @@ import { format, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'd
 import { fr } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
-const BACKEND = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
+import { BACKEND_BASE } from '@/lib/backend';
+
 const PAGE_SIZE = 20;
 interface PaymentRecord {
     id: string;
@@ -86,8 +87,8 @@ export default function SubscriptionPayments() {
         setIsLoading(true);
         try {
             const [paymentsRes, storesRes] = await Promise.all([
-                fetch(`${BACKEND}/api/subscription_payments.php?limit=2000`),
-                fetch(`${BACKEND}/api/stores.php?include_inactive=1`),
+                fetch(`${BACKEND_BASE}/api/subscription_payments.php?limit=2000`),
+                fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1`),
             ]);
             if (paymentsRes.ok) {
                 const json = await paymentsRes.json();
@@ -218,7 +219,7 @@ export default function SubscriptionPayments() {
             return;
         setIsDeleting(true);
         try {
-            const res = await fetch(`${BACKEND}/api/subscription_payments.php?id=${deleteId}`, {
+            const res = await fetch(`${BACKEND_BASE}/api/subscription_payments.php?id=${deleteId}`, {
                 method: 'DELETE',
             });
             if (res.ok) {

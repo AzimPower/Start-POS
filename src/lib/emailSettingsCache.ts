@@ -5,7 +5,8 @@
  * trop d'appels réseau au sein d'une même session.
  */
 import { getDB } from '@/lib/db';
-const BACKEND_URL = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/email_settings.php';
+import { BACKEND_BASE, backendAvailable } from '@/lib/backend';
+const BACKEND_URL = `${BACKEND_BASE}/api/email_settings.php`;
 const CACHE_TTL_MS = 60000; // 60 secondes
 export interface StoreAlertSettings {
     shifts: boolean;
@@ -133,7 +134,7 @@ export async function getEmailSettings(storeId: string): Promise<StoreAlertSetti
     }
 
     // 2. Essayer le backend (source de vérité partagée entre appareils)
-    if (navigator.onLine) {
+    if (await backendAvailable().catch(() => false)) {
         try {
             const res = await fetch(`${BACKEND_URL}?storeId=${encodeURIComponent(storeId)}`, {
                 cache: 'no-store',

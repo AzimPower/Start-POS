@@ -1,12 +1,9 @@
 <?php
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+require_once '../config.php';
+require_once __DIR__ . '/_bootstrap.php';
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
+init_api_headers(['POST', 'DELETE', 'OPTIONS']);
+require_auth();
 
 
 if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {

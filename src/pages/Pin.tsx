@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { getDB } from '@/lib/db';
 import * as secureStorage from '@/lib/secureStorage';
+import { BACKEND_BASE } from '@/lib/backend';
 export default function Pin({ overlay = false }: {
     overlay?: boolean;
 }) {
@@ -57,9 +58,8 @@ export default function Pin({ overlay = false }: {
         const stored = localStorage.getItem('storeLogo');
         if (stored) {
             if (stored.startsWith('img_products/') || stored.includes('/img_products/')) {
-                const API_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
                 // normalize to absolute
-                const url = stored.startsWith('http') ? stored : `${API_BASE}/${stored.replace(/^\/+/, '')}`;
+                const url = stored.startsWith('http') ? stored : `${BACKEND_BASE}/${stored.replace(/^\/+/, '')}`;
                 setLogoSrc(url);
             }
             else {

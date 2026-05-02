@@ -4,38 +4,45 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import CustomerReceipts from './pages/CustomerReceipts';
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { NotificationProvider } from './contexts/NotificationContext';
 import Layout from "./components/Layout";
-import Login from "./pages/Login";
-import Pin from "./pages/Pin";
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { getDB } from "@/lib/db";
 import SubscriptionExpired from "./components/SubscriptionExpired";
-import Dashboard from "./pages/Dashboard";
-import DashboardOnlyAdmin from "./DashboardOnlyAdmin";
-import RoleRedirect from "./RoleRedirect";
-import Products from "./pages/Products";
-import POS from "./pages/POS";
-import Shifts from "./pages/Shifts";
-import Customers from "./pages/Customers";
-import Stores from "./pages/Stores";
-import Users from "./pages/Users";
-import Receipts from "./pages/Receipts";
-import NotFound from "./pages/NotFound";
-import Settings from "./pages/Settings";
-import Categories from "./pages/Categories";
-import Expenses from "./pages/Expenses";
-import StockSignals from "./pages/StockSignals";
-import StockAdjustmentHistory from './pages/StockAdjustmentHistory';
 import useAndroidBackButton from './hooks/useAndroidBackButton';
-import SubscriptionPayments from './pages/SubscriptionPayments';
-import Notifications from './pages/Notifications';
 import { getStoreAccessState } from './lib/status';
 import { toast } from 'sonner';
+import { BACKEND_BASE, backendAvailable } from './lib/backend';
+
+const Login = lazy(() => import("./pages/Login"));
+const Pin = lazy(() => import("./pages/Pin"));
+const RoleRedirect = lazy(() => import("./RoleRedirect"));
+const CustomerReceipts = lazy(() => import("./pages/CustomerReceipts"));
+const DashboardOnlyAdmin = lazy(() => import("./DashboardOnlyAdmin"));
+const POS = lazy(() => import("./pages/POS"));
+const Shifts = lazy(() => import("./pages/Shifts"));
+const Customers = lazy(() => import("./pages/Customers"));
+const Products = lazy(() => import("./pages/Products"));
+const Categories = lazy(() => import("./pages/Categories"));
+const Stores = lazy(() => import("./pages/Stores"));
+const Users = lazy(() => import("./pages/Users"));
+const Receipts = lazy(() => import("./pages/Receipts"));
+const Expenses = lazy(() => import("./pages/Expenses"));
+const StockSignals = lazy(() => import("./pages/StockSignals"));
+const StockAdjustmentHistory = lazy(() => import("./pages/StockAdjustmentHistory"));
+const SubscriptionPayments = lazy(() => import("./pages/SubscriptionPayments"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const Settings = lazy(() => import("./pages/Settings"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 const queryClient = new QueryClient();
-const STORES_STATUS_URL = 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1';
+const STORES_STATUS_URL = `${BACKEND_BASE}/api/stores.php?include_inactive=1`;
+
+function RouteFallback() {
+    return (<div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+    </div>);
+}
 
 function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
     const ids = Array.isArray(storeIds) ? storeIds : [];
@@ -199,7 +206,8 @@ function StoreStatusChecker({ children }: {
                     }
                 };
 
-                if (!navigator.onLine) {
+                const backendUp = await backendAvailable().catch(() => false);
+                if (!backendUp) {
                     const localCurrentAccess = getStoreAccessState(localStore);
                     if (!localCurrentAccess.active) {
                         const localStores = (await db.getAll('stores'))
@@ -285,7 +293,7 @@ function StoreStatusChecker({ children }: {
         checkStoreStatus();
 
         if (user && user.role !== 'super_admin' && !isLoading) {
-            intervalId = window.setInterval(checkStoreStatus, 30000);
+            intervalId = window.setInterval(checkStoreStatus, 120000);
 
             const handleVisibility = () => {
                 if (document.visibilityState === 'visible') {
@@ -350,78 +358,78 @@ function InnerApp() {
       <BackButtonInitializer />
       <AuthProvider>
         <NotificationProvider>
-        <PinOverlay />
-        <StoreStatusChecker>
-          <Routes>
-            <Route path="/login" element={<Login />}/>
-            <Route path="/pin" element={<PinRoute />}/>
-            <Route path="/" element={<RoleRedirect />}/>
-            <Route path="/customer-receipts/:id" element={<ProtectedRoute>
-                  <CustomerReceipts />
-                </ProtectedRoute>}/>
-            <Route path="/dashboard" element={<ProtectedRoute>
-                  <DashboardOnlyAdmin />
-                </ProtectedRoute>}/>
-            <Route path="/pos" element={<ProtectedRoute>
-                  <POS {...({} as any)}/>
-                </ProtectedRoute>}/>
-            <Route path="/shifts" element={<ProtectedRoute>
-                  <Shifts />
-                </ProtectedRoute>}/>
-            <Route path="/customers" element={<ProtectedRoute>
-                  <Customers />
-                </ProtectedRoute>}/>
-            <Route path="/products" element={<ProtectedRoute>
-                  <AdminRoute>
-                    <Products />
-                  </AdminRoute>
-                </ProtectedRoute>}/>
-            <Route path="/categories" element={<ProtectedRoute>
-                  <AdminRoute>
-                    <Categories />
-                  </AdminRoute>
-                </ProtectedRoute>}/>
-            <Route path="/stores" element={<ProtectedRoute>
-                  <AdminRoute>
-                    <Stores />
-                  </AdminRoute>
-                </ProtectedRoute>}/>
-            
-            <Route path="/users" element={<ProtectedRoute>
-                  <AdminRoute>
-                    <Users />
-                  </AdminRoute>
-                </ProtectedRoute>}/>
-            <Route path="/receipts" element={<ProtectedRoute>
-                  <Receipts />
-                </ProtectedRoute>}/>
-            <Route path="/expenses" element={<ProtectedRoute>
-                    <Expenses />
-                </ProtectedRoute>}/>
-            <Route path="/stock-signals" element={<ProtectedRoute>
-                  <StockSignals />
-                </ProtectedRoute>}/>
-            <Route path="/stock-adjustments" element={<ProtectedRoute>
-                  <AdminRoute>
-                    <StockAdjustmentHistory />
-                  </AdminRoute>
-                </ProtectedRoute>}/>
-            <Route path="/subscription-payments" element={<ProtectedRoute>
-                  <SuperAdminRoute>
-                    <SubscriptionPayments />
-                  </SuperAdminRoute>
-                </ProtectedRoute>}/>
-            <Route path="/notifications" element={<ProtectedRoute>
-                  <Notifications />
-                </ProtectedRoute>}/>
-            <Route path="*" element={<NotFound />}/>
-      
-            <Route path="/settings" element={<ProtectedRoute>
-                  <Settings />
-                </ProtectedRoute>}/>
-            {/* Printer debug page removed for production builds */}
-          </Routes>
-        </StoreStatusChecker>
+        <Suspense fallback={<RouteFallback />}>
+          <PinOverlay />
+          <StoreStatusChecker>
+            <Routes>
+              <Route path="/login" element={<Login />}/>
+              <Route path="/pin" element={<PinRoute />}/>
+              <Route path="/" element={<RoleRedirect />}/>
+              <Route path="/customer-receipts/:id" element={<ProtectedRoute>
+                    <CustomerReceipts />
+                  </ProtectedRoute>}/>
+              <Route path="/dashboard" element={<ProtectedRoute>
+                    <DashboardOnlyAdmin />
+                  </ProtectedRoute>}/>
+              <Route path="/pos" element={<ProtectedRoute>
+                    <POS {...({} as any)}/>
+                  </ProtectedRoute>}/>
+              <Route path="/shifts" element={<ProtectedRoute>
+                    <Shifts />
+                  </ProtectedRoute>}/>
+              <Route path="/customers" element={<ProtectedRoute>
+                    <Customers />
+                  </ProtectedRoute>}/>
+              <Route path="/products" element={<ProtectedRoute>
+                    <AdminRoute>
+                      <Products />
+                    </AdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/categories" element={<ProtectedRoute>
+                    <AdminRoute>
+                      <Categories />
+                    </AdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/stores" element={<ProtectedRoute>
+                    <AdminRoute>
+                      <Stores />
+                    </AdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/users" element={<ProtectedRoute>
+                    <AdminRoute>
+                      <Users />
+                    </AdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/receipts" element={<ProtectedRoute>
+                    <Receipts />
+                  </ProtectedRoute>}/>
+              <Route path="/expenses" element={<ProtectedRoute>
+                      <Expenses />
+                  </ProtectedRoute>}/>
+              <Route path="/stock-signals" element={<ProtectedRoute>
+                    <StockSignals />
+                  </ProtectedRoute>}/>
+              <Route path="/stock-adjustments" element={<ProtectedRoute>
+                    <AdminRoute>
+                      <StockAdjustmentHistory />
+                    </AdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/subscription-payments" element={<ProtectedRoute>
+                    <SuperAdminRoute>
+                      <SubscriptionPayments />
+                    </SuperAdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/notifications" element={<ProtectedRoute>
+                    <Notifications />
+                  </ProtectedRoute>}/>
+              <Route path="/settings" element={<ProtectedRoute>
+                    <Settings />
+                  </ProtectedRoute>}/>
+              <Route path="*" element={<NotFound />}/>
+              {/* Printer debug page removed for production builds */}
+            </Routes>
+          </StoreStatusChecker>
+        </Suspense>
         </NotificationProvider>
         </AuthProvider>
       </BrowserRouter>);

@@ -14,6 +14,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { isActiveFlag } from '@/lib/status';
+import { hashPasswordForCache } from '@/lib/auth';
+import { BACKEND_BASE } from '@/lib/backend';
 interface StoreData {
     id: string;
     name: string;
@@ -270,7 +272,7 @@ export default function Stores() {
         // If online, try to fetch latest stores from backend and persist locally
         if (isOnline) {
             try {
-                const resp = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1');
+                const resp = await fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1`);
                 if (resp.ok) {
                     let backendStores: any = await resp.json();
                     // Accept common wrapper shapes
@@ -427,7 +429,7 @@ export default function Stores() {
           };
 
           await performSyncOp({
-            url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/users.php',
+            url: `${BACKEND_BASE}/api/users.php`,
             method: 'PUT',
             data: updatedUser,
           });
@@ -539,7 +541,7 @@ export default function Stores() {
                 if (selectedAdminId)
                     putData.adminId = selectedAdminId;
                 const apiRes = await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                    url: `${BACKEND_BASE}/api/stores.php`,
                     method: 'PUT',
                     data: putData,
                 });
@@ -617,7 +619,7 @@ export default function Stores() {
                     }
                 }
                 const apiRes = await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                    url: `${BACKEND_BASE}/api/stores.php`,
                     method: 'POST',
                     data: storePayload,
                 });
@@ -710,7 +712,7 @@ export default function Stores() {
         const db = await getDB();
         try {
             const apiRes = await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                url: `${BACKEND_BASE}/api/stores.php`,
                 method: 'DELETE',
                 data: { id },
             });
@@ -807,6 +809,8 @@ export default function Stores() {
         await db.add('users', {
             id: generateId(),
             ...userData,
+            passwordHash: userData.password ? await hashPasswordForCache(userData.password) : undefined,
+            password: undefined,
             active: true,
             createdAt: Date.now(),
         });
@@ -827,7 +831,7 @@ export default function Stores() {
                 };
                 // Synchroniser avec le backend d'abord
                 const apiRes = await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                    url: `${BACKEND_BASE}/api/stores.php`,
                     method: 'PUT',
                     data: updatedStore,
                 });
@@ -836,7 +840,7 @@ export default function Stores() {
                 const total = months * PRICE_PER_MONTH;
                 // Enregistrer l'encaissement
                 try {
-                    await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/subscription_payments.php', {
+                    await fetch(`${BACKEND_BASE}/api/subscription_payments.php`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -878,7 +882,7 @@ export default function Stores() {
             };
 
             await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                url: `${BACKEND_BASE}/api/stores.php`,
                 method: 'PUT',
                 data: updatedStore,
             });
@@ -911,7 +915,7 @@ export default function Stores() {
             };
 
             await performSyncOp({
-                url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                url: `${BACKEND_BASE}/api/stores.php`,
                 method: 'PUT',
                 data: updatedStore,
             });
@@ -934,7 +938,7 @@ export default function Stores() {
                 const updatedStore = { ...store, active: !currentStatus };
                 // Synchroniser avec le backend d'abord
                 const apiRes = await performSyncOp({
-                    url: 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php',
+                    url: `${BACKEND_BASE}/api/stores.php`,
                     method: 'PUT',
                     data: updatedStore,
                 });

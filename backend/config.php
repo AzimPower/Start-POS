@@ -9,12 +9,96 @@
  * Recommendation: move credentials into environment variables on production
  */
 
-// Read configuration from environment when available, otherwise fall back to hard-coded values
-$host = getenv('DB_HOST') ?: '82.197.82.140';
-$db   = getenv('DB_NAME') ?: 'u538245909_pos';
-$user = getenv('DB_USER') ?: 'u538245909_pos';
-$pass = getenv('DB_PASS') ?: '@Le08novembre';
+function load_env_file(string $path): void {
+    if (!is_file($path) || !is_readable($path)) {
+        return;
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($lines === false) {
+        return;
+    }
+
+    foreach ($lines as $line) {
+        $trimmed = trim($line);
+        if ($trimmed === '' || str_starts_with($trimmed, '#') || strpos($trimmed, '=') === false) {
+            continue;
+        }
+
+        [$key, $value] = explode('=', $trimmed, 2);
+        $key = trim($key);
+        $value = trim($value);
+
+        if ($key === '' || getenv($key) !== false) {
+            continue;
+        }
+
+        putenv($key . '=' . trim($value, "\"'"));
+        $_ENV[$key] = trim($value, "\"'");
+    }
+}
+
+load_env_file(dirname(__DIR__) . '/.env');
+load_env_file(__DIR__ . '/.env');
+
+function get_env_string(string $key, string $default = ''): string {
+    $value = getenv($key);
+    if ($value === false || $value === null) {
+        return $default;
+    }
+
+    return trim((string)$value);
+}
+
+function get_required_env(string $key): string {
+    $value = get_env_string($key);
+    if ($value === '') {
+        throw new RuntimeException("Missing required environment variable: {$key}");
+    }
+
+    return $value;
+}
+
+function configure_smtp_mailer($mail): void {
+    $host = get_required_env('SMTP_HOST');
+    $username = get_required_env('SMTP_USERNAME');
+    $password = get_required_env('SMTP_PASSWORD');
+    $fromEmail = get_env_string('SMTP_FROM_EMAIL', $username);
+    $fromName = get_env_string('SMTP_FROM_NAME', 'START POS - Notification');
+    $port = (int)(get_env_string('SMTP_PORT', '587'));
+    $secure = strtolower(get_env_string('SMTP_SECURE', 'tls'));
+
+    $mail->isSMTP();
+    $mail->Host = $host;
+    $mail->SMTPAuth = true;
+    $mail->Username = $username;
+    $mail->Password = $password;
+    $mail->SMTPSecure = $secure;
+    $mail->Port = $port > 0 ? $port : 587;
+    $mail->Timeout = 30;
+    $mail->SMTPOptions = [
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true,
+        ],
+    ];
+
+    $mail->setFrom($fromEmail, $fromName);
+}
+
+// Read configuration from environment only. Do not keep production secrets in source control.
+$host = getenv('DB_HOST') ?: '';
+$db   = getenv('DB_NAME') ?: '';
+$user = getenv('DB_USER') ?: '';
+$pass = getenv('DB_PASS') ?: '';
 $charset = getenv('DB_CHARSET') ?: 'utf8mb4';
+
+if ($host === '' || $db === '' || $user === '' || $pass === '') {
+    http_response_code(500);
+    echo json_encode(['error' => 'Database environment variables are not configured']);
+    exit;
+}
 
 // IMPORTANT: Connexions persistantes DÉSACTIVÉES pour hébergement mutualisé
 // Sur shared hosting (Hostinger), les connexions persistantes causent des fuites:
@@ -53,14 +137,18 @@ $options = [
     PDO::MYSQL_ATTR_COMPRESS     => true,
 ];
 
-// Simple retry mechanism (1 retry) to handle transient network glitches
-function create_pdo_with_retry(string $dsn, string $user, string $pass, array $options, int $attempts = 2) {
+// Keep retries conservative on shared hosting: each failed attempt counts against
+// max_connections_per_hour quotas.
+function create_pdo_with_retry(string $dsn, string $user, string $pass, array $options, int $attempts = 1) {
     $lastException = null;
     for ($i = 0; $i < $attempts; $i++) {
         try {
             return new PDO($dsn, $user, $pass, $options);
         } catch (PDOException $e) {
             $lastException = $e;
+            if (strpos($e->getMessage(), 'max_connections_per_hour') !== false) {
+                break;
+            }
             // Small backoff (microseconds) to avoid long blocking in web requests
             if ($i < $attempts - 1) {
                 usleep(200000); // 200ms
@@ -78,7 +166,7 @@ function get_pdo(): PDO {
 
     global $dsn, $user, $pass, $options;
     try {
-        $instance = create_pdo_with_retry($dsn, $user, $pass, $options, 2);
+        $instance = create_pdo_with_retry($dsn, $user, $pass, $options, 1);
         return $instance;
     } catch (PDOException $e) {
         // Log the error for post-mortem analysis

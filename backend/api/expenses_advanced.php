@@ -3,14 +3,14 @@
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -18,10 +18,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 switch ($method) {
     case 'GET':
-        $storeId = $_GET['storeId'] ?? null;
+        $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
         $expenseId = $_GET['id'] ?? null;
         $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
         $limit = isset($_GET['limit']) ? intval($_GET['limit']) : 25;
@@ -86,6 +87,7 @@ switch ($method) {
         break;
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         // Log pour debug
         file_put_contents(__DIR__.'/expenses_advanced.log', date('c')."\n".json_encode($data)."\n", FILE_APPEND);
         $directProduct = $data['directProduct'] ?? [];
@@ -113,6 +115,7 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         $directProduct = $data['directProduct'] ?? [];
         $sql = 'UPDATE expenses_advanced SET type=?, name=?, amount=?, description=?, date=?, userId=?, storeId=?, status=?, directProduct_productId=?, directProduct_quantity=?, directProduct_startDate=?, directProduct_endDate=?, categoryId=?, createdAt=?, updatedAt=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
@@ -139,6 +142,12 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            if (!is_super_admin_claims($authClaims)) {
+                $checkStmt = $pdo->prepare('SELECT storeId FROM expenses_advanced WHERE id = ? LIMIT 1');
+                $checkStmt->execute([$id]);
+                $targetStoreId = $checkStmt->fetchColumn();
+                ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+            }
             $stmt = $pdo->prepare('DELETE FROM expenses_advanced WHERE id=?');
             $stmt->execute([$id]);
             echo json_encode(['success' => true]);

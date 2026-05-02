@@ -1,12 +1,12 @@
 <?php
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Content-Type: application/json');
+require_once './_bootstrap.php';
+init_api_headers();
+//
+//
+//
 
 // Gestion des requêtes OPTIONS (preflight)
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -24,12 +24,13 @@ try {
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
+$authClaims = require_auth();
 
 try {
 switch ($method) {
     case 'GET':
         // Si un storeId est fourni, filtrer par magasin
-        $storeId = $_GET['storeId'] ?? null;
+        $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
         $sql = 'SELECT * FROM products';
         if ($storeId) {
             $sql .= ' WHERE storeId = ?';
@@ -80,6 +81,7 @@ switch ($method) {
             break;
         }
         
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         error_log('POST data parsed: ' . print_r($data, true));
         
         $sql = 'INSERT INTO products (id, name, sku, categoryId, salePrice, costPrice, targetMargin, variablePrices, unit, taxRate, minStock, imageUrl, createdAt, updatedAt, storeId, trackStock) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
@@ -142,6 +144,7 @@ switch ($method) {
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
+        $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         $sql = 'UPDATE products SET name=?, sku=?, categoryId=?, salePrice=?, costPrice=?, targetMargin=?, variablePrices=?, unit=?, taxRate=?, minStock=?, imageUrl=?, createdAt=?, updatedAt=?, storeId=?, trackStock=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
             $success = $stmt->execute([
@@ -201,6 +204,12 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
             if ($id) {
+                if (!is_super_admin_claims($authClaims)) {
+                    $checkStoreStmt = $pdo->prepare('SELECT storeId FROM products WHERE id = ? LIMIT 1');
+                    $checkStoreStmt->execute([$id]);
+                    $targetStoreId = $checkStoreStmt->fetchColumn();
+                    ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
+                }
                 // Récupérer l'URL de l'image avant suppression
                 $stmtImg = $pdo->prepare('SELECT imageUrl FROM products WHERE id = ?');
                 $stmtImg->execute([$id]);
