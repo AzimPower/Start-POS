@@ -444,11 +444,6 @@ try {
             echo json_encode($stores);
             break;
         case 'POST':
-            if (!is_super_admin_claims($authClaims)) {
-                http_response_code(403);
-                echo json_encode(['error' => 'Only super admin can create stores']);
-                exit;
-            }
             $data = json_decode(file_get_contents('php://input'), true);
             // Si l'action est de définir un solde manuel
             if ($data && isset($data['action'])) {
@@ -572,6 +567,11 @@ try {
             }
 
             // Sinon: création classique de magasin
+            if (!is_super_admin_claims($authClaims)) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Only super admin can create stores']);
+                exit;
+            }
                 $sql = 'INSERT INTO stores (id, name, address, logo, active, createdAt, subscriptionStart, subscriptionEnd, lastPayment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
                 $stmt = $pdo->prepare($sql);
                 $id = $data['id'] ?? uniqid();
@@ -638,17 +638,25 @@ try {
                 echo json_encode(['success' => false, 'error' => 'ID manquant ou données invalides']);
                 exit;
             }
+            $existingStmt = $pdo->prepare('SELECT * FROM stores WHERE id = ? LIMIT 1');
+            $existingStmt->execute([$data['id']]);
+            $existingStore = $existingStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$existingStore) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Magasin introuvable']);
+                exit;
+            }
             $sql = 'UPDATE stores SET name=?, address=?, logo=?, active=?, createdAt=?, subscriptionStart=?, subscriptionEnd=?, lastPayment=? WHERE id=?';
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
-                $data['name'],
-                $data['address'],
-                $data['logo'] ?? null,
-                $data['active'],
-                $data['createdAt'],
-                $data['subscriptionStart'],
-                $data['subscriptionEnd'],
-                $data['lastPayment'],
+                array_key_exists('name', $data) ? $data['name'] : $existingStore['name'],
+                array_key_exists('address', $data) ? $data['address'] : $existingStore['address'],
+                array_key_exists('logo', $data) ? $data['logo'] : ($existingStore['logo'] ?? null),
+                array_key_exists('active', $data) ? $data['active'] : $existingStore['active'],
+                array_key_exists('createdAt', $data) ? $data['createdAt'] : $existingStore['createdAt'],
+                array_key_exists('subscriptionStart', $data) ? $data['subscriptionStart'] : $existingStore['subscriptionStart'],
+                array_key_exists('subscriptionEnd', $data) ? $data['subscriptionEnd'] : $existingStore['subscriptionEnd'],
+                array_key_exists('lastPayment', $data) ? $data['lastPayment'] : $existingStore['lastPayment'],
                 $data['id']
             ]);
 

@@ -165,16 +165,41 @@ export default function Settings() {
     const toggleStoreAlertSetting = (key: keyof StoreAlertSettings, checked: boolean) => {
         void saveEmailSettings({ ...emailSettings, [key]: checked });
     };
+    const mergeStoreSnapshot = (incoming: any, fallback?: any) => {
+        if (!incoming)
+            return incoming;
+        const merged = { ...(fallback || {}), ...incoming };
+        const preserveIfBlank = ['name', 'address', 'logo', 'createdAt', 'subscriptionStart', 'subscriptionEnd', 'lastPayment'];
+        for (const key of preserveIfBlank) {
+            if ((incoming[key] === undefined || incoming[key] === null || incoming[key] === '') && fallback?.[key] !== undefined && fallback?.[key] !== null && fallback?.[key] !== '') {
+                merged[key] = fallback[key];
+            }
+        }
+        if ((merged.logo === undefined || merged.logo === null || merged.logo === '') && logoPreview) {
+            merged.logo = logoPreview;
+        }
+        return merged;
+    };
     // Fetch store info for admin
     const fetchStore = async () => {
         setLoadingStore(true);
         setStoreError(null);
         try {
-            const res = await fetch(`${BACKEND_BASE}/api/stores.php`);
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php?_ts=${Date.now()}`, { cache: 'no-store' });
             if (!res.ok)
                 throw new Error('Erreur fetch stores');
             const data = await res.json();
-            const myStore = data && Array.isArray(data) ? data.find((s: any) => s.id === user?.storeId) : null;
+            const myStoreRaw = data && Array.isArray(data) ? data.find((s: any) => s.id === user?.storeId) : null;
+            let cachedStore: any = null;
+            try {
+                if (user?.storeId) {
+                    const db = await getDB();
+                    cachedStore = await db.get('stores', user.storeId);
+                }
+            }
+            catch (e) {
+            }
+            const myStore = mergeStoreSnapshot(myStoreRaw, store || cachedStore);
             if (!myStore) {
                 setStoreError('Aucun magasin correspondant à votre compte trouvé dans la base de données.');
             }
@@ -234,18 +259,27 @@ export default function Settings() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            const resp = await res.json();
-            if (resp && resp.success) {
+            const resp = await res.json().catch(() => null);
+            if (res.ok && resp && resp.success) {
+                const appliedAt = body.appliedAt;
+                setStore((previous: any) => previous ? {
+                    ...previous,
+                    solde: value,
+                    solde_manual: value,
+                    solde_manual_appliedAt: appliedAt,
+                    solde_manual_userId: user?.id,
+                    solde_manual_note: note,
+                } : previous);
                 toast.success('Solde manuel mis à jour');
                 setConfirmOpen(false);
                 await fetchStore();
             }
             else {
-                toast.error('Erreur lors de la mise à jour');
+                toast.error(resp?.error || `Erreur lors de la mise à jour (${res.status})`);
             }
         }
         catch (e) {
-            toast.error('Erreur réseau');
+            toast.error(`Erreur réseau: ${String((e as Error)?.message || e)}`);
         }
         finally {
             setLoadingStore(false);
@@ -433,6 +467,7 @@ export default function Settings() {
     const [darkMode, setDarkMode] = useState(false);
     const [logo, setLogo] = useState<string | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
+    const [logoUploading, setLogoUploading] = useState(false);
     const [autoPrint, setAutoPrint] = useState<boolean>(() => {
         const s = localStorage.getItem('auto_print');
         return s === null ? true : s === 'true';
@@ -1259,6 +1294,7 @@ export default function Settings() {
         }
         catch (err) { }
         if (file) {
+            setLogoUploading(true);
             // Avant d'uploader, supprimer l'ancien logo du backend si présent
             const oldLogo = localStorage.getItem('storeLogo');
             if (oldLogo && oldLogo.includes('img_products/')) {
@@ -1278,6 +1314,7 @@ export default function Settings() {
             reader.onload = () => {
                 const dataUrl = reader.result as string;
                 setLogo(dataUrl);
+                setLogoPreview(dataUrl);
                 // Try to upload to backend like product images
                 (async () => {
                     try {
@@ -1318,7 +1355,7 @@ export default function Settings() {
                                         const putRes = await fetch(BACKEND_BASE + '/api/stores.php', {
                                             method: 'PUT',
                                             headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ id: storeId, name: undefined, address: undefined, logo: full, active: true, createdAt: Date.now() }),
+                                            body: JSON.stringify({ id: storeId, logo: full }),
                                         });
                                         if (!putRes.ok) {
                                             toast.error('Erreur lors de la sauvegarde du logo côté serveur');
@@ -1373,7 +1410,15 @@ export default function Settings() {
                     catch (err) {
                     }
                     toast.success('Logo enregistré localement');
-                })();
+                })().finally(() => {
+                    setLogoUploading(false);
+                    e.target.value = '';
+                });
+            };
+            reader.onerror = () => {
+                setLogoUploading(false);
+                e.target.value = '';
+                toast.error('Erreur lors de la lecture du logo');
             };
             reader.readAsDataURL(file);
         }
@@ -1431,7 +1476,7 @@ export default function Settings() {
                                                 <div className="rounded-[1.5rem] border border-border/60 bg-muted/25 p-4 sm:p-5">
                                                     <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
                           <div className="flex items-center gap-4">
-                            {store.logo ? (<img src={store.logo} alt="logo" className="w-16 h-16 sm:w-20 sm:h-20 rounded-md object-cover border"/>) : (<div className="w-16 h-16 sm:w-20 sm:h-20 rounded-md bg-gray-100 flex items-center justify-center text-gray-400 border">🏬</div>)}
+                            {(logoPreview || store.logo) ? (<img src={logoPreview || store.logo} alt="logo" className="w-16 h-16 sm:w-20 sm:h-20 rounded-md object-cover border"/>) : (<div className="w-16 h-16 sm:w-20 sm:h-20 rounded-md bg-gray-100 flex items-center justify-center text-gray-400 border">🏬</div>)}
                             <div>
                               <p className="text-sm text-muted-foreground">Magasin</p>
                               <p className="text-lg font-semibold truncate max-w-[180px] sm:max-w-none">{store.name || 'Inconnu'}</p>
@@ -1535,10 +1580,9 @@ export default function Settings() {
                                                 <span className="text-sm">{c.name || c.title || c.label || String(c.id)}</span>
                                               </label>)))}
                                         </div>
-                                        <p className="text-xs text-muted-foreground mt-1">Seules les catégories de type <strong>indirect</strong> sont affichées. Les dépenses directes sont automatiquement soustraites du Fond.</p>
+                                        <p className="text-xs text-muted-foreground mt-1">Seules les catégories de type <strong>indirect</strong> sont affichées. Les dépenses directes sont automatiquement soustraites du Fond. Le montant manuel se sauvegarde avec le bouton <strong>Confirmer</strong>.</p>
                                         <div className="mt-2 flex items-center gap-2">
                                           <Button onClick={handleSaveCategoryMappings} disabled={loadingStore}>{loadingStore ? 'Enregistrement...' : 'Enregistrer les catégories'}</Button>
-                                          <Button variant="ghost" onClick={fetchStore} disabled={loadingStore}>Annuler</Button>
                                         </div>
                                       </div>
                                       <p className="text-xs text-muted-foreground">La valeur manuelle sera prise en compte comme base pour les prochains calculs.</p>
@@ -1588,7 +1632,7 @@ export default function Settings() {
                                                 <span className="text-sm">{c.name || c.title || c.label || String(c.id)}</span>
                                               </label>)))}
                                         </div>
-                                        <p className="text-xs text-muted-foreground mt-1">Seules les catégories de type <strong>indirect</strong> sont affichées. Les dépenses opérationnelles sont automatiquement soustraites du Bénéfice.</p>
+                                        <p className="text-xs text-muted-foreground mt-1">Seules les catégories de type <strong>indirect</strong> sont affichées. Les dépenses opérationnelles sont automatiquement soustraites du Bénéfice. Le montant manuel se sauvegarde avec le bouton <strong>Confirmer</strong>.</p>
                                         <div className="mt-2 flex items-center gap-2">
                                           <Button onClick={handleSaveCategoryMappings} disabled={loadingStore}>{loadingStore ? 'Enregistrement...' : 'Enregistrer les catégories'}</Button>
                                           <Button variant="ghost" onClick={fetchStore} disabled={loadingStore}>Annuler</Button>
@@ -2035,11 +2079,15 @@ export default function Settings() {
                                 </div>
 
                                 <div className="flex items-start gap-4 rounded-2xl border border-border/60 bg-muted/25 p-4">
-                                    <div className="flex h-24 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-border/60 bg-gradient-to-br from-slate-100 via-white to-slate-50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
+                                    <div className="relative flex h-24 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-border/60 bg-gradient-to-br from-slate-100 via-white to-slate-50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
                                         {(logoPreview || store?.logo) ? (<img src={logoPreview || store?.logo} alt="Logo magasin" className="object-contain w-full h-full p-3"/>) : (<div className="flex flex-col items-center text-xs text-muted-foreground">
                         <ImageIcon size={20}/>
                         <span>Aucun logo</span>
                       </div>)}
+                                        {logoUploading ? (<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/80 text-xs font-medium text-foreground backdrop-blur-sm">
+                                            <RefreshCw className="h-5 w-5 animate-spin"/>
+                                            <span>Envoi...</span>
+                                        </div>) : null}
                   </div>
 
                   <div className="flex-1">
@@ -2048,15 +2096,15 @@ export default function Settings() {
 
                                                                                 <div className="mt-3 flex flex-wrap gap-2 xl:flex-nowrap">
                       {/* Hidden file input and styled button */}
-                      <input id="logo-input" type="file" accept="image/*" onChange={handleLogoChange} className="hidden"/>
-                                            <label htmlFor="logo-input" className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 cursor-pointer">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <input id="logo-input" type="file" accept="image/*" onChange={handleLogoChange} disabled={logoUploading} className="hidden"/>
+                                            <label htmlFor={logoUploading ? undefined : 'logo-input'} className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm text-white ${logoUploading ? 'cursor-not-allowed bg-blue-400' : 'cursor-pointer bg-blue-600 hover:bg-blue-500'}`}>
+                        {logoUploading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v4a1 1 0 001 1h3m10 0h3a1 1 0 001-1V7M8 21h8M12 3v12"/>
-                        </svg>
+                        </svg>}
                         <span className="text-sm">Téléverser un logo</span>
                       </label>
 
-                                                                                        {(logoPreview || store?.logo) && (<button type="button" onClick={handleRemoveLogo} className="inline-flex items-center justify-center rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 hover:bg-red-100" title="Supprimer le logo">
+                                                                                        {(logoPreview || store?.logo) && (<button type="button" onClick={handleRemoveLogo} disabled={logoUploading} className="inline-flex items-center justify-center rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60" title="Supprimer le logo">
                           <Trash size={18}/>
                                                     <span>Supprimer</span>
                         </button>)}
