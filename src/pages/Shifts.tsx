@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Clock, DollarSign, TrendingUp, AlertCircle, Eye, Wifi, WifiOff } from 'lucide-react';
+import { Clock, DollarSign, TrendingUp, AlertCircle, Eye, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -259,11 +259,11 @@ export default function Shifts() {
         const n = Number(s);
         return Number.isFinite(n) ? n : 0;
     }, []);
-    const refreshSalesFromBackend = useCallback(async () => {
+    const refreshSalesFromBackend = useCallback(async (force = false) => {
         if (!isOnline || !isBackendReachable || salesRefreshInFlight.current)
             return;
         const now = Date.now();
-        if (salesCacheTimestamp.current && (now - salesCacheTimestamp.current) < 2 * 60 * 1000)
+        if (!force && salesCacheTimestamp.current && (now - salesCacheTimestamp.current) < 2 * 60 * 1000)
             return;
         salesRefreshInFlight.current = true;
         try {
@@ -469,7 +469,7 @@ export default function Shifts() {
                 if (isOnline) {
                     loadCashiers({ syncFromBackend: true }).catch(() => { });
                     loadShifts().catch(() => { });
-                    refreshSalesFromBackend().catch(() => { });
+                    refreshSalesFromBackend(Array.isArray(initialShifts) && initialShifts.some((shift: Shift) => shift.status === 'open')).catch(() => { });
                 }
                 // 4. Nettoyage en arriÃ¨re-plan diffÃ©rÃ© (correction dÃ©sactivÃ©e : shift.difference est immuable)
                 requestIdleCallback(() => {
@@ -675,10 +675,12 @@ export default function Shifts() {
                 setSyncing(true);
                 try {
                     // Appeler SEULEMENT shifts.php - les ventes et users sont dÃ©jÃ  en local
-                    let url = `${BACKEND_BASE}/api/shifts.php`;
+                    const url = new URL(`${BACKEND_BASE}/api/shifts.php`);
                     if (user?.storeId)
-                        url += `?storeId=${user.storeId}`;
-                    const response = await fetch(url);
+                        url.searchParams.set('storeId', String(user.storeId));
+                    url.searchParams.set('_bypass_sw', '1');
+                    url.searchParams.set('_ts', String(Date.now()));
+                    const response = await fetch(url.toString(), { cache: 'no-store' });
                     if (response.ok) {
                         const backendShifts = await response.json();
                         if (Array.isArray(backendShifts) && backendShifts.length > 0) {
@@ -790,7 +792,7 @@ export default function Shifts() {
             }
             if (isOnline && isBackendReachable) {
                 loadShifts().catch(() => { });
-                refreshSalesFromBackend().catch(() => { });
+                refreshSalesFromBackend(true).catch(() => { });
             }
         } catch (e) {
         }
@@ -835,7 +837,7 @@ export default function Shifts() {
         const interval = window.setInterval(() => {
             getDB().then((db) => refreshLocalSalesCache(db)).catch(() => { });
             if (isOnline && isBackendReachable) {
-                refreshSalesFromBackend().catch(() => { });
+                refreshSalesFromBackend(true).catch(() => { });
             }
         }, 15000);
         return () => window.clearInterval(interval);
@@ -1670,6 +1672,10 @@ export default function Shifts() {
             {dataLoaded && !loading && filteredShifts.length > 0 && (<span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
                 {filteredShifts.length}
               </span>)}
+            {dataLoaded && (<Button variant="outline" size="sm" onClick={refreshShiftsView} disabled={syncing || loading} className="ml-auto">
+                {syncing || loading ? <Loader2 className="w-4 h-4 animate-spin mr-1"/> : <RefreshCw className="w-4 h-4 mr-1"/>}
+                Actualiser
+              </Button>)}
             {loading && (<div className="flex items-center text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin mr-1"/>
                 Chargement...

@@ -379,36 +379,40 @@ export default function POS() {
         const hasCachedPosView = shiftsChecked && (products.length > 0 || Boolean(activeShiftIdRef.current));
         if (!hasCachedPosView) {
             setShiftsChecked(false);
+            setLoading(true);
         }
-        setLoading(true);
         try {
             const db = await getDB();
-            // If local DB seems empty (user deleted it), and we're online, fetch all
-            // main tables from backend to repopulate the local DB before using it.
-            if (isBackendReachable) {
-                try {
-                    const productsCount = await db.count('products');
-                    const customersCount = await db.count('customers');
-                    const salesCount = await db.count('sales');
-                    const shiftsCount = await db.count('shifts');
-                    if (productsCount === 0 || customersCount === 0 || salesCount === 0 || shiftsCount === 0) {
-                        const { refreshAllFromBackend } = await import('@/lib/sync');
-                        await refreshAllFromBackend(user?.storeId);
-                    }
-                }
-                catch (e) {
-                }
-            }
             // 1. Charger et afficher les donnÃ©es locales immÃ©diatement
             await loadFromLocal(db);
-            await loadLocalData(db);
+            await loadLocalData(db, false);
             await updatePendingSyncCount();
             // DÃ©bloquer l'interface dÃ¨s que les donnÃ©es essentielles sont chargÃ©es
-            setLoading(false);
+            if (!hasCachedPosView) {
+                setLoading(false);
+            }
             // 2. Synchroniser en arriÃ¨re-plan si backend reachable (sans bloquer l'UI)
             if (isBackendReachable) {
                 // Synchronisation en arriÃ¨re-plan
-                try {
+                void (async () => {
+                    try {
+                    // If local DB seems empty (user deleted it), repopulate from backend
+                    // after the POS has already displayed the fastest local state.
+                    try {
+                        const productsCount = await db.count('products');
+                        const customersCount = await db.count('customers');
+                        const salesCount = await db.count('sales');
+                        const shiftsCount = await db.count('shifts');
+                        if (productsCount === 0 || customersCount === 0 || salesCount === 0 || shiftsCount === 0) {
+                            const { refreshAllFromBackend } = await import('@/lib/sync');
+                            await refreshAllFromBackend(user?.storeId);
+                            await loadFromLocal(db);
+                            await loadLocalData(db, false);
+                            await updatePendingSyncCount();
+                        }
+                    }
+                    catch (e) {
+                    }
                     // ðŸ”„ SHIFTS - Synchroniser AVANT tout pour que tous les appareils aient le mÃªme shift actif
                     let shiftsUrl = `${BACKEND_BASE}/api/shifts.php`;
                     if (user?.storeId)
@@ -488,11 +492,15 @@ export default function POS() {
                 catch (error) {
                 }
                 // La synchronisation se fait en arriÃ¨re-plan, pas besoin de setLoading(false)
+                })();
             }
         }
         catch (error) {
             toast.error('Erreur lors du chargement des donnÃ©es');
-            setLoading(false);
+            if (!hasCachedPosView) {
+                setLoading(false);
+            }
+            setShiftsChecked(true);
         }
     };
     const loadFromLocal = async (db: any) => {
@@ -523,9 +531,9 @@ export default function POS() {
         }
         setCustomers(filteredCustomers);
     };
-    const loadLocalData = async (db: any) => {
+    const loadLocalData = async (db: any, syncShiftWithBackend = false) => {
         // Check for active shift - filter by both userId and storeId
-        const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: isBackendReachable });
+        const userShift = await resolveUserOpenShift(user?.id, user?.storeId, { syncWithBackend: syncShiftWithBackend && isBackendReachable });
         setActiveShift(userShift);
         // Indicate that we've finished checking for shifts (used to avoid flashing the
         // "no active shift" message before the DB/backend check completes)
