@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { hashPasswordForCache } from '@/lib/auth';
 import { BACKEND_BASE } from '@/lib/backend';
+import { buildBypassUrl } from '@/lib/salesSync';
 
 function UserSummaryCard({ title, value, subtitle, icon: Icon, color }: {
     title: string;
@@ -153,6 +154,12 @@ interface StoreData {
     id: string;
     name: string;
 }
+type UsersViewSnapshot = {
+    users: UserData[];
+    stores: StoreData[];
+    lastRefresh: Date;
+};
+let lastUsersViewSnapshot: UsersViewSnapshot | null = null;
 
   function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
     const ids = Array.isArray(storeIds) ? storeIds : [];
@@ -166,10 +173,10 @@ interface StoreData {
 export default function Users() {
     const { user } = useAuth();
   const userFormTotalSteps = 2;
-    const [users, setUsers] = useState<UserData[]>([]);
-    const [stores, setStores] = useState<StoreData[]>([]);
-    const [isLoading, setIsLoading] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState(new Date());
+    const [users, setUsers] = useState<UserData[]>(() => lastUsersViewSnapshot?.users || []);
+    const [stores, setStores] = useState<StoreData[]>(() => lastUsersViewSnapshot?.stores || []);
+    const [isLoading, setIsLoading] = useState(() => !lastUsersViewSnapshot);
+  const [lastRefresh, setLastRefresh] = useState(() => lastUsersViewSnapshot?.lastRefresh || new Date());
     const [showDialog, setShowDialog] = useState(false);
     const [editingUser, setEditingUser] = useState<UserData | null>(null);
     const [showPassword, setShowPassword] = useState(false);
@@ -191,10 +198,12 @@ export default function Users() {
     useEffect(() => {
         // We intentionally call loadData once when `user` changes. loadData is stable here.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        loadData();
+        loadData(!lastUsersViewSnapshot);
     }, [user]);
-    const loadData = async () => {
-        setIsLoading(true);
+    const loadData = async (showLoading = true) => {
+        if (showLoading) {
+            setIsLoading(true);
+        }
         const db = await getDB();
         // Load stores
         const storesData = await db.getAll('stores');
@@ -203,7 +212,9 @@ export default function Users() {
             await loadUsers();
         }
         finally {
-            setIsLoading(false);
+            if (showLoading) {
+                setIsLoading(false);
+            }
           setLastRefresh(new Date());
         }
     };
@@ -215,7 +226,7 @@ export default function Users() {
                 if (user?.role === 'admin' && user?.storeId) {
                     url += `?storeId=${user.storeId}`;
                 }
-                const res = await fetch(url);
+                const res = await fetch(buildBypassUrl(url), { cache: 'no-store' });
                 if (res.ok) {
                   const remoteUsers = await res.json();
                   const normalizedRemoteUsers = Array.isArray(remoteUsers)
@@ -295,6 +306,13 @@ export default function Users() {
         }
         setUsers(filteredUsers.sort((a: any, b: any) => b.createdAt - a.createdAt));
     };
+    useEffect(() => {
+        lastUsersViewSnapshot = {
+            users,
+            stores,
+            lastRefresh,
+        };
+    }, [users, stores, lastRefresh]);
     const handleSubmit = async () => {
       if (!editingUser && user?.role !== 'super_admin') {
         toast.error('Seul le super admin peut créer des utilisateurs');

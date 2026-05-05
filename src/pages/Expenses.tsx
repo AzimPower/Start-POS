@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Plus, Receipt, Package, Settings, Trash2, Eye, Edit, Wifi, WifiOff } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import './expenses.css';
@@ -74,27 +75,43 @@ const createInitialExpenseFormData = () => ({
     directProductQuantity: '',
     categoryId: '',
 });
+type ExpensesViewSnapshot = {
+    products: Product[];
+    expenseCategories: ExpenseCategory[];
+    expenses: ExpenseAdvanced[];
+    filteredExpenses: ExpenseAdvanced[];
+    filterOption: 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom';
+    customStart: string;
+    customEnd: string;
+    rangeTotal: number;
+    loadedCount: number;
+    hasMore: boolean;
+    pendingSyncCount: number;
+};
+let lastExpensesViewSnapshot: ExpensesViewSnapshot | null = null;
 export default function Expenses() {
     const { user } = useAuth();
     const { isBackendReachable, isOnline, manualSync, lastCheck } = useNetwork();
     const [activeTab, setActiveTab] = useState('list');
     const [expenseType, setExpenseType] = useState<'direct' | 'indirect' | 'operational'>('direct');
-    const [products, setProducts] = useState<Product[]>([]);
-    const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
-    const [expenses, setExpenses] = useState<ExpenseAdvanced[]>([]);
-    const [filteredExpenses, setFilteredExpenses] = useState<ExpenseAdvanced[]>([]);
-    // Toujours filtrer par défaut sur "aujourd'hui"
-    const [filterOption, setFilterOption] = useState<'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom'>('today');
-    const [customStart, setCustomStart] = useState<string>('');
-    const [customEnd, setCustomEnd] = useState<string>('');
-    const [rangeTotal, setRangeTotal] = useState<number>(0);
+    const [products, setProducts] = useState<Product[]>(() => lastExpensesViewSnapshot?.products || []);
+    const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>(() => lastExpensesViewSnapshot?.expenseCategories || []);
+    const [expenses, setExpenses] = useState<ExpenseAdvanced[]>(() => lastExpensesViewSnapshot?.expenses || []);
+    const [filteredExpenses, setFilteredExpenses] = useState<ExpenseAdvanced[]>(() => lastExpensesViewSnapshot?.filteredExpenses || []);
+    // Par défaut on utilise "aujourd'hui", mais si on revient sur la page
+    // on restaure la dernière période réellement sélectionnée.
+    const [filterOption, setFilterOption] = useState<'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom'>(() => lastExpensesViewSnapshot?.filterOption || 'today');
+    const [customStart, setCustomStart] = useState<string>(() => lastExpensesViewSnapshot?.customStart || '');
+    const [customEnd, setCustomEnd] = useState<string>(() => lastExpensesViewSnapshot?.customEnd || '');
+    const [rangeTotal, setRangeTotal] = useState<number>(() => lastExpensesViewSnapshot?.rangeTotal || 0);
     const [showAddDialog, setShowAddDialog] = useState(false);
-    const [loadedCount, setLoadedCount] = useState(0);
+    const [loadedCount, setLoadedCount] = useState(() => lastExpensesViewSnapshot?.loadedCount || 0);
     const [pageSize] = useState(10);
-    const [hasMore, setHasMore] = useState(true);
+    const [hasMore, setHasMore] = useState(() => lastExpensesViewSnapshot?.hasMore ?? true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [pendingSyncCount, setPendingSyncCount] = useState(0);
+    const [loading, setLoading] = useState(() => !lastExpensesViewSnapshot);
+    const [isRangeLoading, setIsRangeLoading] = useState(false);
+    const [pendingSyncCount, setPendingSyncCount] = useState(() => lastExpensesViewSnapshot?.pendingSyncCount || 0);
     const [editingExpense, setEditingExpense] = useState<ExpenseAdvanced | null>(null);
     const [adminUser, setAdminUser] = useState<any>(null);
     // Search and filter states
@@ -103,6 +120,22 @@ export default function Expenses() {
     const [typeFilter, setTypeFilter] = useState<'all' | 'direct' | 'indirect' | 'operational'>('all');
     const [chartMode, setChartMode] = useState<'type' | 'category'>('type');
     const [chartType, setChartType] = useState<'pie' | 'bar'>('pie');
+    const rangeSelectionRef = useRef<{
+        filterOption: 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom';
+        customStart: string;
+        customEnd: string;
+    }>({
+        filterOption: lastExpensesViewSnapshot?.filterOption || 'today',
+        customStart: lastExpensesViewSnapshot?.customStart || '',
+        customEnd: lastExpensesViewSnapshot?.customEnd || '',
+    });
+    useEffect(() => {
+        rangeSelectionRef.current = {
+            filterOption,
+            customStart,
+            customEnd,
+        };
+    }, [filterOption, customStart, customEnd]);
     // Debounce pour la recherche (optimisation)
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -189,10 +222,8 @@ export default function Expenses() {
     const goPrev = () => setCurrentStep(prev => Math.max(prev - 1, 0));
     // Calcul du total sélectionné dès le chargement de la page
     useEffect(() => {
-        // Toujours filtrer sur aujourd'hui au chargement
-        setFilterOption('today');
         (async () => {
-            await loadData();
+            await loadData(!lastExpensesViewSnapshot);
         })();
     }, []);
     // Attacher l'event listener pour le scroll
@@ -209,7 +240,7 @@ export default function Expenses() {
     useEffect(() => {
         if (isBackendReachable) {
             const reloadData = async () => {
-                await loadData();
+                await loadData(false);
                 // ✅ Après sync backend, recharger l'affichage des dépenses
                 // (loadData fait un merge intelligent, donc les modifs locales sont préservées)
             };
@@ -221,10 +252,14 @@ export default function Expenses() {
     const handleFilterOptionChange = useCallback(async (option: 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom') => {
         setFilterOption(option);
         try {
+            setIsRangeLoading(true);
             const db = await getDB();
             await loadExpensesForRange(db, option);
         }
         catch (e) {
+        }
+        finally {
+            setIsRangeLoading(false);
         }
     }, []);
     // Auto-apply custom date range when admin edits start/end (debounced)
@@ -233,21 +268,30 @@ export default function Expenses() {
             return;
         const timer = setTimeout(async () => {
             try {
+                setIsRangeLoading(true);
                 const db = await getDB();
                 await loadExpensesForRange(db, 'custom', customStart, customEnd);
             }
             catch (e) {
             }
+            finally {
+                setIsRangeLoading(false);
+            }
         }, 400);
         return () => clearTimeout(timer);
     }, [customStart, customEnd, filterOption, user?.role]);
-    const loadData = async () => {
-        setLoading(true);
+    const loadData = async (showLoading = true) => {
+        if (showLoading) {
+            setLoading(true);
+        }
         try {
             const db = await getDB();
+            const initialRangeSelection = rangeSelectionRef.current;
             await loadReferenceDataFromLocal(db);
-            await loadExpensesForRange(db, filterOption, customStart, customEnd);
-            setLoading(false);
+            await loadExpensesForRange(db, initialRangeSelection.filterOption, initialRangeSelection.customStart, initialRangeSelection.customEnd);
+            if (showLoading) {
+                setLoading(false);
+            }
             if (isBackendReachable) {
                 try {
                     const referenceParams = user?.storeId ? { storeId: user.storeId } : undefined;
@@ -326,7 +370,8 @@ export default function Expenses() {
                         await tx.done;
                         // Ne pas mettre à jour les states ici, c'est géré par loadExpensesForRange
                     }
-                    await loadExpensesForRange(db, filterOption, customStart, customEnd);
+                    const latestRangeSelection = rangeSelectionRef.current;
+                    await loadExpensesForRange(db, latestRangeSelection.filterOption, latestRangeSelection.customStart, latestRangeSelection.customEnd);
                 }
                 catch (error) {
                     toast.error('Erreur de connexion au serveur, chargement des données locales');
@@ -343,6 +388,11 @@ export default function Expenses() {
         }
         catch (error) {
             toast.error('Erreur lors du chargement des données');
+        }
+        finally {
+            if (showLoading) {
+                setLoading(false);
+            }
         }
     };
     // Load expenses for a specific date range with proper pagination
@@ -997,6 +1047,21 @@ export default function Expenses() {
         setLoadedCount(newLoaded);
         setHasMore(getFilteredExpenses.length > pageSize);
     }, [getFilteredExpenses, pageSize]);
+    useEffect(() => {
+        lastExpensesViewSnapshot = {
+            products,
+            expenseCategories,
+            expenses,
+            filteredExpenses,
+            filterOption,
+            customStart,
+            customEnd,
+            rangeTotal,
+            loadedCount,
+            hasMore,
+            pendingSyncCount,
+        };
+    }, [products, expenseCategories, expenses, filteredExpenses, filterOption, customStart, customEnd, rangeTotal, loadedCount, hasMore, pendingSyncCount]);
     // Fonction pour calculer les données du graphique (mémorisée)
     const getChartData = useMemo(() => {
         const filtered = getFilteredExpenses;
@@ -1411,7 +1476,9 @@ export default function Expenses() {
             <div className="w-full sm:w-auto flex items-center justify-between sm:justify-end gap-3">
               <div className="text-center sm:text-right">
                 <div className="text-sm text-muted-foreground">Total sélection</div>
-                <div className="text-2xl sm:text-3xl font-extrabold text-orange-600">{Number(rangeTotal).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</div>
+                {isRangeLoading ? (<div className="mt-1 flex justify-center sm:justify-end">
+                    <Skeleton className="h-9 w-40 rounded-md"/>
+                  </div>) : (<div className="text-2xl sm:text-3xl font-extrabold text-orange-600">{Number(rangeTotal).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</div>)}
               </div>
             </div>
           </div>
@@ -1486,7 +1553,16 @@ export default function Expenses() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {isRangeLoading ? (<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className="flex items-center justify-center">
+                    <Skeleton className="h-[260px] w-[260px] rounded-full"/>
+                  </div>
+                  <div className="space-y-4">
+                    <Skeleton className="h-20 w-full rounded-lg"/>
+                    <Skeleton className="h-20 w-full rounded-lg"/>
+                    <Skeleton className="h-20 w-full rounded-lg"/>
+                  </div>
+                </div>) : (<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Graphique */}
                 <div className="flex items-center justify-center">
                   {memoizedChartComponent}
@@ -1577,7 +1653,7 @@ export default function Expenses() {
                       </div>));
             })()}
                 </div>)}
-              </div>
+              </div>)}
             </CardContent>
           </Card>
 

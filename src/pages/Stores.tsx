@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { isActiveFlag } from '@/lib/status';
 import { hashPasswordForCache } from '@/lib/auth';
 import { BACKEND_BASE } from '@/lib/backend';
+import { buildBypassUrl } from '@/lib/salesSync';
 interface StoreData {
     id: string;
     name: string;
@@ -26,6 +27,11 @@ interface StoreData {
     subscriptionEnd?: number; // Date de fin d'abonnement
     lastPayment?: number; // Date du dernier paiement
 }
+type StoresViewSnapshot = {
+    stores: StoreData[];
+    lastRefresh: Date;
+};
+let lastStoresViewSnapshot: StoresViewSnapshot | null = null;
 
   function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
     const ids = Array.isArray(storeIds) ? storeIds : [];
@@ -227,9 +233,9 @@ export default function Stores() {
     } | null>(null);
     const [isSwitching, setIsSwitching] = useState(false);
     const { isOnline } = useNetwork();
-    const [stores, setStores] = useState<StoreData[]>([]);
-    const [isLoading, setIsLoading] = useState(false);
-    const [lastRefresh, setLastRefresh] = useState(new Date());
+    const [stores, setStores] = useState<StoreData[]>(() => lastStoresViewSnapshot?.stores || []);
+    const [isLoading, setIsLoading] = useState(() => !lastStoresViewSnapshot);
+    const [lastRefresh, setLastRefresh] = useState(() => lastStoresViewSnapshot?.lastRefresh || new Date());
     const [showDialog, setShowDialog] = useState(false);
     const [editingStore, setEditingStore] = useState<StoreData | null>(null);
     const [formData, setFormData] = useState({ name: '', address: '' });
@@ -255,15 +261,19 @@ export default function Stores() {
         open: false, store: null, months: 1
     });
     useEffect(() => {
-      loadData();
+      loadData(!lastStoresViewSnapshot);
     }, []);
-    const loadData = async () => {
-      setIsLoading(true);
+    const loadData = async (showLoading = true) => {
+      if (showLoading) {
+        setIsLoading(true);
+      }
       try {
         await loadStores();
       }
       finally {
-        setIsLoading(false);
+        if (showLoading) {
+          setIsLoading(false);
+        }
         setLastRefresh(new Date());
       }
     };
@@ -272,7 +282,7 @@ export default function Stores() {
         // If online, try to fetch latest stores from backend and persist locally
         if (isOnline) {
             try {
-                const resp = await fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1`);
+                const resp = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/stores.php`, { include_inactive: 1 }), { cache: 'no-store' });
                 if (resp.ok) {
                     let backendStores: any = await resp.json();
                     // Accept common wrapper shapes
@@ -379,6 +389,12 @@ export default function Stores() {
         }
         setStores(storesData);
     };
+    useEffect(() => {
+        lastStoresViewSnapshot = {
+            stores,
+            lastRefresh,
+        };
+    }, [stores, lastRefresh]);
     const loadAdmins = async () => {
         try {
             const db = await getDB();

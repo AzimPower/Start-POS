@@ -49,25 +49,35 @@ interface Sale {
     receiptSequence?: number;
     receiptNumber?: string;
 }
+type ReceiptsViewSnapshot = {
+    sales: Sale[];
+    filteredSales: Sale[];
+    shifts: any[];
+    stores: any[];
+    users: any[];
+    loadedCount: number;
+    hasMore: boolean;
+};
+let lastReceiptsViewSnapshot: ReceiptsViewSnapshot | null = null;
 export default function Receipts() {
-    const [shifts, setShifts] = useState<any[]>([]);
+    const [shifts, setShifts] = useState<any[]>(() => lastReceiptsViewSnapshot?.shifts || []);
     const [activeShift, setActiveShift] = useState<any>(null);
     const [shiftsChecked, setShiftsChecked] = useState(false);
     const { user } = useAuth();
     const navigate = useNavigate();
     const { isOnline, isBackendReachable } = useNetwork();
     const isMobile = useIsMobile();
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => !lastReceiptsViewSnapshot);
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
-    const [sales, setSales] = useState<Sale[]>([]);
-    const [loadedCount, setLoadedCount] = useState(0);
+    const [sales, setSales] = useState<Sale[]>(() => lastReceiptsViewSnapshot?.sales || []);
+    const [loadedCount, setLoadedCount] = useState(() => lastReceiptsViewSnapshot?.loadedCount || 0);
     const [pageSize] = useState(25);
-    const [hasMore, setHasMore] = useState(true);
+    const [hasMore, setHasMore] = useState(() => lastReceiptsViewSnapshot?.hasMore ?? true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
+    const [filteredSales, setFilteredSales] = useState<Sale[]>(() => lastReceiptsViewSnapshot?.filteredSales || []);
     const [search, setSearch] = useState('');
-    const [stores, setStores] = useState<any[]>([]);
-    const [users, setUsers] = useState<any[]>([]);
+    const [stores, setStores] = useState<any[]>(() => lastReceiptsViewSnapshot?.stores || []);
+    const [users, setUsers] = useState<any[]>(() => lastReceiptsViewSnapshot?.users || []);
     const [showReceipt, setShowReceipt] = useState(false);
     const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
     const [showRefundDialog, setShowRefundDialog] = useState(false);
@@ -79,6 +89,20 @@ export default function Receipts() {
     useEffect(() => {
       salesRef.current = sales;
     }, [sales]);
+    useEffect(() => {
+        if (sales.length === 0 && filteredSales.length === 0) {
+            return;
+        }
+        lastReceiptsViewSnapshot = {
+            sales,
+            filteredSales,
+            shifts,
+            stores,
+            users,
+            loadedCount,
+            hasMore,
+        };
+    }, [sales, filteredSales, shifts, stores, users, loadedCount, hasMore]);
     useEffect(() => {
         // Check if the user has an active (open) shift, but load data regardless
         let cancelled = false;
@@ -101,7 +125,7 @@ export default function Receipts() {
             // Load data regardless of shift status to show existing receipts
             try {
                 if (!cancelled) {
-                    await loadData(0, pageSize, true);
+                    await loadData(0, pageSize, true, !lastReceiptsViewSnapshot);
                 }
             }
             catch (e) {
@@ -121,8 +145,8 @@ export default function Receipts() {
             setPendingSyncCount(0);
         }
     };
-    const loadData = async (offset = 0, limit = pageSize, reset = true) => {
-      if (reset) {
+    const loadData = async (offset = 0, limit = pageSize, reset = true, showLoading = true) => {
+      if (reset && showLoading) {
         setLoading(true);
         loadMoreArmedRef.current = true;
       }
@@ -143,8 +167,18 @@ export default function Receipts() {
                         const backendResult = await response.json();
                         // backendResult: { data: Sale[], total, offset, limit }
                         const backendSales = Array.isArray(backendResult) ? backendResult : (backendResult.data || []);
+                        const backendTotal = !Array.isArray(backendResult) && Number.isFinite(Number(backendResult?.total))
+                            ? Number(backendResult.total)
+                            : null;
                       await mergeBackendSalesIntoLocalDb(db, backendSales, { restrictToBackendIds: true });
                       await loadFromLocal(db, offset, limit, reset);
+                        if (backendTotal !== null) {
+                            setHasMore((offset + backendSales.length) < backendTotal);
+                        }
+                        else {
+                            // Fallback si l'API ne renvoie pas total
+                            setHasMore(backendSales.length >= limit);
+                        }
                         await updatePendingSyncCount();
                         return;
                     }
@@ -170,7 +204,7 @@ export default function Receipts() {
             toast.error('Erreur lors du chargement des données');
         }
         finally {
-          if (reset) {
+          if (reset && showLoading) {
             setLoading(false);
           }
         }

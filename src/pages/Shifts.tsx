@@ -40,6 +40,14 @@ interface Shift {
     closedAt: number | null;
     status: 'open' | 'closed';
 }
+type ShiftsViewSnapshot = {
+    shifts: Shift[];
+    cashiers: any[];
+    activeShift: Shift | null;
+    loadedCount: number;
+    hasMore: boolean;
+};
+let lastShiftsViewSnapshot: ShiftsViewSnapshot | null = null;
 function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
     const ids = Array.isArray(storeIds) ? storeIds : [];
     const candidates = ids.length > 0 ? ids : [fallbackStoreId];
@@ -66,14 +74,27 @@ function normalizeShiftRecord(shift: any): Shift {
     };
 }
 function canViewShift(shift: any, user: any) {
-    if (user?.role === 'admin' && user?.storeId) {
+    if (user?.role === 'super_admin') {
+        return true;
+    }
+    if ((user?.role === 'admin' || user?.role === 'manager') && user?.storeId) {
+        // Compat legacy: certains anciens shifts n'avaient pas de storeId.
+        // On les garde visibles pour les rôles de supervision du magasin.
+        if (!shift?.storeId) {
+            return true;
+        }
         return sameId(shift?.storeId, user.storeId);
     }
     return sameId(shift?.userId, user?.id);
 }
 async function getVisibleShiftsFromLocal(db: any, user: any) {
-    if (user?.role === 'admin' && user?.storeId) {
-        return db.getAllFromIndex('shifts', 'by-store', user.storeId);
+    if (user?.role === 'super_admin') {
+        return db.getAll('shifts');
+    }
+    if ((user?.role === 'admin' || user?.role === 'manager') && user?.storeId) {
+        // Compat legacy: on lit tout puis on filtre via canViewShift pour inclure
+        // les enregistrements historiques sans storeId.
+        return db.getAll('shifts');
     }
     if (user?.id) {
         return db.getAllFromIndex('shifts', 'by-user', user.id);
@@ -195,19 +216,19 @@ export default function Shifts() {
     const [selectedShift, setSelectedShift] = useState<Shift | null>(null);
     const { user } = useAuth();
     const { isOnline, isBackendReachable, manualSync } = useNetwork();
-    const [shifts, setShifts] = useState<Shift[]>([]);
-    const [loadedCount, setLoadedCount] = useState(0);
+    const [shifts, setShifts] = useState<Shift[]>(() => lastShiftsViewSnapshot?.shifts || []);
+    const [loadedCount, setLoadedCount] = useState(() => lastShiftsViewSnapshot?.loadedCount || 0);
     const [pageSize] = useState(25);
-    const [hasMore, setHasMore] = useState(true);
+    const [hasMore, setHasMore] = useState(() => lastShiftsViewSnapshot?.hasMore ?? true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [search, setSearch] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
-    const [cashiers, setCashiers] = useState<any[]>([]);
+    const [cashiers, setCashiers] = useState<any[]>(() => lastShiftsViewSnapshot?.cashiers || []);
     const [selectedCashier, setSelectedCashier] = useState('all');
     const [selectedStatus, setSelectedStatus] = useState('all');
     const [dateFilter, setDateFilter] = useState('all');
     const [customDate, setCustomDate] = useState('');
-    const [activeShift, setActiveShift] = useState<Shift | null>(null);
+    const [activeShift, setActiveShift] = useState<Shift | null>(() => lastShiftsViewSnapshot?.activeShift || null);
     const [showOpenDialog, setShowOpenDialog] = useState(false);
     const [showCloseDialog, setShowCloseDialog] = useState(false);
     const [openingAmount, setOpeningAmount] = useState('0');
@@ -215,7 +236,7 @@ export default function Shifts() {
     const [mobileMoneyAmount, setMobileMoneyAmount] = useState('');
     const [otherAmount, setOtherAmount] = useState('');
     const [loading, setLoading] = useState(false);
-    const [dataLoaded, setDataLoaded] = useState(false);
+    const [dataLoaded, setDataLoaded] = useState(() => Boolean(lastShiftsViewSnapshot));
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
     const isMobile = useIsMobile();
     const [filtersOpen, setFiltersOpen] = useState(false);
@@ -238,6 +259,17 @@ export default function Shifts() {
     const salesCacheTimestamp = useRef<number>(0);
     const [salesVersion, setSalesVersion] = useState(0);
     const salesRefreshInFlight = useRef(false);
+    useEffect(() => {
+        if (!dataLoaded)
+            return;
+        lastShiftsViewSnapshot = {
+            shifts,
+            cashiers,
+            activeShift,
+            loadedCount,
+            hasMore,
+        };
+    }, [dataLoaded, shifts, cashiers, activeShift, loadedCount, hasMore]);
     // Debounce pour la recherche (optimisation)
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -267,7 +299,7 @@ export default function Shifts() {
             return;
         salesRefreshInFlight.current = true;
         try {
-            const params = user?.storeId ? { storeId: String(user.storeId) } : undefined;
+            const params = user?.storeId && user?.role !== 'super_admin' ? { storeId: String(user.storeId) } : undefined;
             await fetchAndMerge(`${BACKEND_BASE}/api/sales.php`, 'sales', 'sales', undefined, params);
             await reconcileSalesToLastClosedShift(user?.storeId);
             const db = await getDB();
@@ -325,7 +357,7 @@ export default function Shifts() {
     }) => {
         if (options?.syncFromBackend && isOnline && isBackendReachable) {
             try {
-                const params = user?.storeId ? { storeId: String(user.storeId) } : undefined;
+                const params = user?.storeId && user?.role !== 'super_admin' ? { storeId: String(user.storeId) } : undefined;
                 await fetchAndMerge(`${BACKEND_BASE}/api/users.php`, 'users', 'users', (remoteUser: any) => ({
                     ...remoteUser,
                     storeId: remoteUser?.storeId || '',
@@ -342,7 +374,7 @@ export default function Shifts() {
             ...dbUser,
             storeIds: normalizeStoreIds(dbUser?.storeIds, dbUser?.storeId),
         }));
-        if (user?.storeId) {
+        if (user?.storeId && user?.role !== 'super_admin') {
             filtered = filtered.filter((dbUser: any) => normalizeStoreIds(dbUser?.storeIds, dbUser?.storeId).some((storeId) => sameId(storeId, user.storeId)));
         }
         if (user?.id && !filtered.some((dbUser: any) => sameId(dbUser?.id, user.id))) {
@@ -676,7 +708,7 @@ export default function Shifts() {
                 try {
                     // Appeler SEULEMENT shifts.php - les ventes et users sont dÃ©jÃ  en local
                     const url = new URL(`${BACKEND_BASE}/api/shifts.php`);
-                    if (user?.storeId)
+                    if (user?.storeId && user?.role !== 'super_admin')
                         url.searchParams.set('storeId', String(user.storeId));
                     url.searchParams.set('_bypass_sw', '1');
                     url.searchParams.set('_ts', String(Date.now()));
@@ -1674,12 +1706,8 @@ export default function Shifts() {
               </span>)}
             {dataLoaded && (<Button variant="outline" size="sm" onClick={refreshShiftsView} disabled={syncing || loading} className="ml-auto">
                 {syncing || loading ? <Loader2 className="w-4 h-4 animate-spin mr-1"/> : <RefreshCw className="w-4 h-4 mr-1"/>}
-                Actualiser
+                {syncing || loading ? 'Chargement...' : 'Actualiser'}
               </Button>)}
-            {loading && (<div className="flex items-center text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin mr-1"/>
-                Chargement...
-              </div>)}
           </div>
           {isMobile ? (<div className="mt-4 space-y-2">
               <Drawer open={filtersOpen} onOpenChange={setFiltersOpen}>

@@ -2,6 +2,7 @@
 import { openDB } from 'idb';
 import { BACKEND_BASE, backendAvailable } from './backend';
 import { addNativeNetworkListener, getNativeNetworkStatus } from './nativeNetwork';
+import { buildAuthenticatedHeaders, hasAuthToken, requiresBackendAuth } from './apiAuth';
 export const SYNC_DB_NAME = 'pos_sync_db';
 export const SYNC_STORE = 'pending_ops';
 const API_BASE = `${BACKEND_BASE}/api`;
@@ -187,7 +188,7 @@ export async function getPendingSyncSnapshot() {
     const pending = pendingOps.map((op: any) => ({
         source: 'pending_ops' as const,
         id: op.id,
-        table: op.table,
+        table: op.table || inferSyncTable(op.url),
         method: op.method || 'POST',
         operation: op.operation,
         url: op.url,
@@ -201,7 +202,7 @@ export async function getPendingSyncSnapshot() {
     const queued = syncQueue.map((op: any) => ({
         source: 'syncQueue' as const,
         id: op.id,
-        table: op.table,
+        table: op.table || inferSyncTable(op.url),
         method: op.method || op.operation || 'POST',
         operation: op.operation,
         url: op.url,
@@ -445,6 +446,47 @@ async function upsertSyncQueueOp(match: (op: any) => boolean, nextOp: any) {
     });
 }
 
+async function collapseSyncQueueDuplicates() {
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const queueOps = await db.getAll('syncQueue');
+    if (!Array.isArray(queueOps) || queueOps.length < 2) {
+        return;
+    }
+    const grouped = new Map<string, any[]>();
+    for (const op of queueOps) {
+        const table = String(op?.table || '');
+        const dataId = String(op?.data?.id || '');
+        const opMethod = String(op?.method || op?.operation || '').toUpperCase();
+        const url = String(op?.url || '');
+        // Dédoublonnage ciblé: updates identiques par entité
+        if (!dataId || !['UPDATE', 'PUT'].includes(opMethod)) {
+            continue;
+        }
+        const key = `${table}::${dataId}::${url}`;
+        const arr = grouped.get(key);
+        if (arr) {
+            arr.push(op);
+        }
+        else {
+            grouped.set(key, [op]);
+        }
+    }
+    for (const ops of grouped.values()) {
+        if (ops.length < 2) {
+            continue;
+        }
+        ops.sort((a: any, b: any) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+        const [keep, ...duplicates] = ops;
+        const attempts = Math.max(...ops.map((op: any) => Number(op?.attempts || 0)));
+        const merged = { ...keep, attempts };
+        await db.put('syncQueue', merged);
+        for (const duplicate of duplicates) {
+            await db.delete('syncQueue', duplicate.id);
+        }
+    }
+}
+
 async function queueBackendDuplicateShiftCleanup(duplicateIds: Set<string>, canonicalId: string, salesToUpdate: any[], backendShiftIds?: Set<string>) {
     const backendDuplicateIds = Array.from(duplicateIds).filter((id) => backendShiftIds?.has(id));
     if (backendDuplicateIds.length === 0 && salesToUpdate.length === 0) {
@@ -549,6 +591,53 @@ export async function mergeOverlappingShiftsForUserStore(userId?: string, storeI
     }
 
     return mergedCanonicalIds;
+}
+
+function inferSyncTable(url?: string) {
+    const rawUrl = String(url || '');
+    if (!rawUrl) {
+        return '';
+    }
+    try {
+        const parsed = new URL(rawUrl, window.location.origin);
+        const fileName = parsed.pathname.split('/').pop() || '';
+        return fileName.replace(/\.php$/i, '');
+    }
+    catch {
+        const matched = rawUrl.match(/\/([^/?#]+)\.php(?:[?#]|$)/i);
+        return matched?.[1] || '';
+    }
+}
+
+async function mergeOverlappingShiftsForStoreScope(storeId?: string, options?: {
+    backendShiftIds?: Set<string>;
+    rebuildShiftSyncOps?: boolean;
+}) {
+    const { getDB } = await import('./db');
+    const db = await getDB();
+    const allShifts = await db.getAll('shifts');
+    const userStoreKeys = new Set<string>();
+
+    for (const shift of allShifts) {
+        const shiftUserId = String(shift?.userId || '');
+        const shiftStoreId = String(shift?.storeId || '');
+        if (!shiftUserId || !shiftStoreId) {
+            continue;
+        }
+        if (storeId && shiftStoreId !== String(storeId)) {
+            continue;
+        }
+        userStoreKeys.add(`${shiftUserId}__${shiftStoreId}`);
+    }
+
+    const mergedIds: string[] = [];
+    for (const userStoreKey of userStoreKeys) {
+        const [userId, scopedStoreId] = userStoreKey.split('__');
+        const ids = await mergeOverlappingShiftsForUserStore(userId, scopedStoreId, options);
+        mergedIds.push(...ids);
+    }
+
+    return mergedIds;
 }
 
 async function handleShiftCreateConflict(op: any) {
@@ -660,15 +749,29 @@ export async function syncWithServer() {
     let successCount = 0;
     let networkErrorOccurred = false;
     try {
+        const { getDB } = await import('./db');
+        const mainDb = await getDB();
+        await collapseSyncQueueDuplicates();
+        const pendingOps = await getPendingSyncOps();
+        const syncQueueOps = await mainDb.getAll('syncQueue');
+        const hasProtectedPendingWrites = [...pendingOps, ...syncQueueOps]
+            .some((op: any) => requiresBackendAuth(String(op?.url || '')));
+        if (hasProtectedPendingWrites && !await hasAuthToken()) {
+            await writeSyncLog({
+                level: 'warn',
+                message: 'Synchronisation reportee: authentification requise',
+                details: { reason: 'missing_auth_token' },
+            });
+            return { success: false, reason: 'missing_auth_token' };
+        }
         // 1. Traiter les opérations de pending_ops (pos_sync_db)
-        const ops = await getPendingSyncOps();
-        for (const op of ops) {
+        for (const op of pendingOps) {
             if (networkErrorOccurred)
                 break;
             try {
                 const res = await fetch(op.url, {
                     method: op.method || 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: await buildAuthenticatedHeaders({ 'Content-Type': 'application/json' }, op.url),
                     body: JSON.stringify(op.data),
                 });
                 if (res.ok) {
@@ -701,9 +804,7 @@ export async function syncWithServer() {
         // 2. Traiter les opérations de syncQueue (pos_db) — seulement si pas d'erreur réseau
         if (!networkErrorOccurred) {
             try {
-                const { getDB } = await import('./db');
-                const mainDb = await getDB();
-                const queueOps = (await mainDb.getAll('syncQueue'))
+                const queueOps = syncQueueOps
                     .sort((a: any, b: any) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
                 for (const op of queueOps) {
                     if (networkErrorOccurred)
@@ -716,7 +817,7 @@ export async function syncWithServer() {
                                     rawMethod;
                         const res = await fetch(op.url, {
                             method: mappedMethod,
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: await buildAuthenticatedHeaders({ 'Content-Type': 'application/json' }, op.url),
                             body: JSON.stringify(op.data),
                         });
                         if (res.ok) {
@@ -1117,15 +1218,52 @@ export async function fetchAndMerge(endpoint: string, storeName: string, tableNa
         writeSyncLog({ level: 'error', message: `Erreur merge ${storeName}`, entity: storeName, details: { error: String(e) } });
     }
 }
-// Réconcilier les ventes "orphelines" vers le dernier shift fermé par utilisateur + magasin.
-// Règle: si une vente n'a pas de shiftId, ou son shiftId n'existe pas localement,
-// ou si la vente a un timestamp > closedAt du shift (shift fermé),
-// alors on la rattache au dernier shift fermé du même user/store.
-// Le closedAt du shift devient le max entre son closedAt actuel et la vente la plus récente rattachée.
+function shiftContainsTimestamp(shift: any, timestamp: number) {
+    if (!Number.isFinite(timestamp)) {
+        return false;
+    }
+    const openedAt = shiftOpenedAt(shift);
+    const intervalEnd = shiftIntervalEnd(shift);
+    return openedAt <= timestamp && timestamp <= intervalEnd;
+}
+
+function pickBestShiftForSale(shifts: any[], sale: any) {
+    const saleTime = Number(sale?.createdAt || 0);
+    if (!Number.isFinite(saleTime) || saleTime <= 0) {
+        return null;
+    }
+
+    const candidates = shifts
+        .filter((shift: any) =>
+            String(shift?.userId || '') === String(sale?.userId || '') &&
+            String(shift?.storeId || '') === String(sale?.storeId || '') &&
+            shiftContainsTimestamp(shift, saleTime))
+        .sort((left: any, right: any) => {
+            const leftOpen = String(left?.status || '') === 'open' ? 1 : 0;
+            const rightOpen = String(right?.status || '') === 'open' ? 1 : 0;
+            if (leftOpen !== rightOpen) {
+                return rightOpen - leftOpen;
+            }
+            const leftSpan = shiftIntervalEnd(left) - shiftOpenedAt(left);
+            const rightSpan = shiftIntervalEnd(right) - shiftOpenedAt(right);
+            if (leftSpan !== rightSpan) {
+                return leftSpan - rightSpan;
+            }
+            return shiftOpenedAt(right) - shiftOpenedAt(left);
+        });
+
+    return candidates[0] || null;
+}
+
+// Réconcilier uniquement les ventes dont le shiftId est manquant/invalide
+// ou dont l'horodatage ne rentre pas dans le shift associé.
+// Règle métier: on ne rattache une vente qu'à un shift du même user/store
+// dont la plage horaire contient réellement l'heure de la vente.
 export async function reconcileSalesToLastClosedShift(storeId?: string) {
     try {
         const { getDB } = await import('./db');
         const db = await getDB();
+        await mergeOverlappingShiftsForStoreScope(storeId);
         let shifts = await db.getAll('shifts');
         let sales = await db.getAll('sales');
         if (storeId) {
@@ -1135,97 +1273,66 @@ export async function reconcileSalesToLastClosedShift(storeId?: string) {
         if (!shifts.length || !sales.length)
             return;
         const shiftById = new Map<string, any>(shifts.map((s: any) => [String(s.id), s]));
-        // Index last closed shift per user+store
-        const lastClosedByUserStore = new Map<string, any>();
-        for (const s of shifts) {
-            if (s.status !== 'closed' || !s.closedAt)
-                continue;
-            const key = `${s.userId}__${s.storeId}`;
-            const prev = lastClosedByUserStore.get(key);
-            if (!prev || (s.closedAt > prev.closedAt)) {
-                lastClosedByUserStore.set(key, s);
-            }
-        }
         const salesToUpdate: any[] = [];
-        const shiftsToUpdate = new Map<string, any>();
         for (const sale of sales) {
-            const saleTime = sale.createdAt || 0;
             const saleShiftId = sale.shiftId ? String(sale.shiftId) : '';
             const shift = saleShiftId ? shiftById.get(saleShiftId) : null;
-            const isShiftMissing = !shift;
-            const isShiftClosedPastSale = Boolean(shift && shift.status === 'closed' && shift.closedAt && saleTime > shift.closedAt);
-            const needsReattach = !saleShiftId || isShiftMissing || isShiftClosedPastSale;
+            const saleTime = Number(sale.createdAt || 0);
+            const hasValidAssignedShift = Boolean(shift && shiftContainsTimestamp(shift, saleTime));
+            const needsReattach = !saleShiftId || !shift || !hasValidAssignedShift;
             if (!needsReattach)
                 continue;
-            const key = `${sale.userId}__${sale.storeId}`;
-            const lastClosed = lastClosedByUserStore.get(key);
-            if (!lastClosed)
+
+            const targetShift = pickBestShiftForSale(shifts, sale);
+            if (!targetShift)
                 continue;
-            // Re-rattacher la vente
-            if (String(lastClosed.id) !== String(sale.shiftId)) {
-                salesToUpdate.push({ ...sale, shiftId: lastClosed.id });
+
+            if (String(targetShift.id) !== String(sale.shiftId)) {
+                salesToUpdate.push({ ...sale, shiftId: targetShift.id });
             }
-            // Étendre openedAt / closedAt si besoin
-            const updatedShift = shiftsToUpdate.get(String(lastClosed.id)) || { ...lastClosed };
-            if (!updatedShift.openedAt || saleTime < updatedShift.openedAt) {
-                updatedShift.openedAt = saleTime;
-            }
-            if (!updatedShift.closedAt || saleTime > updatedShift.closedAt) {
-                updatedShift.closedAt = saleTime;
-            }
-            shiftsToUpdate.set(String(lastClosed.id), updatedShift);
         }
-        if (salesToUpdate.length === 0 && shiftsToUpdate.size === 0)
+        if (salesToUpdate.length === 0)
             return;
-        const tx = db.transaction(['sales', 'shifts'], 'readwrite');
+        const tx = db.transaction(['sales'], 'readwrite');
         for (const s of salesToUpdate) {
             await tx.objectStore('sales').put(s);
         }
-        for (const sh of shiftsToUpdate.values()) {
-            await tx.objectStore('shifts').put(sh);
-        }
         await tx.done;
-        // Propager les corrections vers le backend — tente direct, met en queue si échec
+        // Propager les corrections vers le backend — queue uniquement les opérations qui échouent.
+        // Important: éviter les doublons massifs dans syncQueue.
         if (await hasUsableNetworkConnection()) {
-            try {
-                const salesFetches = salesToUpdate.map((s: any) => fetch(`${API_BASE}/sales.php`, {
+            const failedSales: any[] = [];
+            const salesArray = salesToUpdate;
+            const settled = await Promise.allSettled([
+                ...salesArray.map((s: any) => fetch(`${API_BASE}/sales.php`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(s),
-                }));
-                const shiftFetches = Array.from(shiftsToUpdate.values()).map((sh: any) => fetch(`${API_BASE}/shifts.php`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(sh),
-                }));
-                await Promise.all([...salesFetches, ...shiftFetches]);
-            }
-            catch (e) {
-                // Si échec réseau: mettre en syncQueue pour être retenté lors de la prochaine sync
-                try {
-                    const { getDB } = await import('./db');
-                    const mainDb = await getDB();
-                    const now = Date.now();
-                    for (const s of salesToUpdate) {
-                        try {
-                            await mainDb.add('syncQueue', {
-                                id: crypto.randomUUID(), table: 'sales', operation: 'update' as const,
-                                data: s, url: `${API_BASE}/sales.php`, createdAt: now, attempts: 0,
-                            });
-                        }
-                        catch (_) { }
-                    }
-                    for (const sh of shiftsToUpdate.values()) {
-                        try {
-                            await mainDb.add('syncQueue', {
-                                id: crypto.randomUUID(), table: 'shifts', operation: 'update' as const,
-                                data: sh, url: `${API_BASE}/shifts.php`, createdAt: now, attempts: 0,
-                            });
-                        }
-                        catch (_) { }
-                    }
+                })),
+            ]);
+            for (let i = 0; i < settled.length; i++) {
+                const result = settled[i];
+                if (result.status === 'rejected') {
+                    failedSales.push(salesArray[i]);
+                    continue;
                 }
-                catch (queueErr) {
+                if (!result.value.ok) {
+                    failedSales.push(salesArray[i]);
+                }
+            }
+            if (failedSales.length > 0) {
+                for (const sale of failedSales) {
+                    await upsertSyncQueueOp(
+                        (op: any) => String(op?.table || '') === 'sales' && String(op?.data?.id || '') === String(sale?.id || ''),
+                        {
+                            table: 'sales',
+                            operation: 'update',
+                            method: 'PUT',
+                            data: sale,
+                            url: `${API_BASE}/sales.php`,
+                            storeId: sale?.storeId,
+                        }
+                    );
                 }
             }
         }
@@ -1261,6 +1368,7 @@ export async function refreshAllFromBackend(storeId?: string) {
         fetchAndMerge(`${API_BASE}/shifts.php`, 'shifts', 'shifts', undefined, params),
         fetchAndMerge(`${API_BASE}/sales.php`, 'sales', 'sales', undefined, params),
     ]);
+    await mergeOverlappingShiftsForStoreScope(storeId);
     await reconcileSalesToLastClosedShift(storeId);
     // Batch 3 : autres données (en parallèle)
     await Promise.all([

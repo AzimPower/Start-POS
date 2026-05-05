@@ -61,6 +61,15 @@ interface StoreInfo {
     name: string;
     address?: string;
 }
+type CustomerReceiptsSnapshot = {
+    customerId: string;
+    sales: Sale[];
+    filteredSales: Sale[];
+    stores: StoreInfo[];
+    customer: Customer | null;
+    pendingSyncCount: number;
+};
+let lastCustomerReceiptsSnapshot: CustomerReceiptsSnapshot | null = null;
 
 const formatCurrency = (value: number) => `${Math.round(Number(value) || 0).toLocaleString('fr-FR')} FCFA`;
 
@@ -85,21 +94,35 @@ export default function CustomerReceipts() {
     const navigate = useNavigate();
     const isMobile = useIsMobile();
 
-    const [loading, setLoading] = useState(true);
+    const hasSnapshotForCurrentCustomer = Boolean(lastCustomerReceiptsSnapshot && String(lastCustomerReceiptsSnapshot.customerId) === String(customerId || ''));
+    const [loading, setLoading] = useState(!hasSnapshotForCurrentCustomer);
     const [refreshing, setRefreshing] = useState(false);
     const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
-    const [pendingSyncCount, setPendingSyncCount] = useState(0);
-    const [sales, setSales] = useState<Sale[]>([]);
-    const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
+    const [pendingSyncCount, setPendingSyncCount] = useState(hasSnapshotForCurrentCustomer ? (lastCustomerReceiptsSnapshot?.pendingSyncCount || 0) : 0);
+    const [sales, setSales] = useState<Sale[]>(hasSnapshotForCurrentCustomer ? (lastCustomerReceiptsSnapshot?.sales || []) : []);
+    const [filteredSales, setFilteredSales] = useState<Sale[]>(hasSnapshotForCurrentCustomer ? (lastCustomerReceiptsSnapshot?.filteredSales || []) : []);
     const [search, setSearch] = useState('');
-    const [stores, setStores] = useState<StoreInfo[]>([]);
+    const [stores, setStores] = useState<StoreInfo[]>(hasSnapshotForCurrentCustomer ? (lastCustomerReceiptsSnapshot?.stores || []) : []);
     const [showReceipt, setShowReceipt] = useState(false);
     const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-    const [customer, setCustomer] = useState<Customer | null>(null);
+    const [customer, setCustomer] = useState<Customer | null>(hasSnapshotForCurrentCustomer ? (lastCustomerReceiptsSnapshot?.customer || null) : null);
 
     useEffect(() => {
-        void loadData();
+        void loadData(!hasSnapshotForCurrentCustomer);
     }, [user, customerId, isOnline]);
+    useEffect(() => {
+        if (!customerId || !customer) {
+            return;
+        }
+        lastCustomerReceiptsSnapshot = {
+            customerId: String(customerId),
+            sales,
+            filteredSales,
+            stores,
+            customer,
+            pendingSyncCount,
+        };
+    }, [customerId, customer, sales, filteredSales, stores, pendingSyncCount]);
 
     const updatePendingSyncCount = async (db: any) => {
         try {
@@ -112,8 +135,10 @@ export default function CustomerReceipts() {
         }
     };
 
-    const loadData = async () => {
-        setLoading(true);
+    const loadData = async (showLoading = true) => {
+        if (showLoading) {
+            setLoading(true);
+        }
 
         try {
             const db = await getDB();
@@ -148,7 +173,9 @@ export default function CustomerReceipts() {
             toast.error('Erreur lors du chargement des données');
         }
         finally {
-            setLoading(false);
+            if (showLoading) {
+                setLoading(false);
+            }
         }
     };
 
@@ -307,7 +334,7 @@ export default function CustomerReceipts() {
         setRefreshing(true);
 
         try {
-            await loadData();
+            await loadData(false);
         }
         finally {
             setRefreshing(false);

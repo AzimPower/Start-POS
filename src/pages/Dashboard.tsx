@@ -17,8 +17,37 @@ import { CalendarIcon, BarChart3, TrendingUp as TrendingUpIcon, Download, FileSp
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
+import { buildBypassUrl } from '@/lib/salesSync';
 import { cn } from '@/lib/utils';
 import { DollarSign, ShoppingCart, TrendingUp, Wallet } from 'lucide-react';
+
+type DashboardViewSnapshot = {
+    chartData: any[];
+    salesByProduct: any[];
+    recapStats: any;
+    stats: {
+        todaySales: number;
+        todayTransactions: number;
+        balance: number;
+        activeShift: any;
+    };
+    cashierStats: {
+        backendSales: number;
+        pendingLocalSales: number;
+        combinedSales: number;
+        pendingOpsCount: number;
+    };
+    cashierLocalStats: {
+        totalSales: number;
+        transactions: number;
+        refunds: number;
+        pendingLocalSales: number;
+        pendingOpsCount: number;
+        activeShift: any;
+    };
+};
+
+let lastDashboardViewSnapshot: DashboardViewSnapshot | null = null;
 export default function Dashboard() {
     const [calendarMonthCount, setCalendarMonthCount] = useState<number>(() => typeof window !== 'undefined' && window.innerWidth >= 1280 ? 2 : 1);
     // Sélection de période
@@ -31,9 +60,9 @@ export default function Dashboard() {
     const [productChartType, setProductChartType] = useState<'bar' | 'pie'>('bar');
     const [groupBy, setGroupBy] = useState<'minutes' | 'hours' | 'days' | 'weeks' | 'months'>('hours');
     // Données dynamiques filtrées par période
-    const [chartData, setChartData] = useState<any[]>([]);
-    const [salesByProduct, setSalesByProduct] = useState<any[]>([]);
-    const [recapStats, setRecapStats] = useState<any>({
+    const [chartData, setChartData] = useState<any[]>(() => lastDashboardViewSnapshot?.chartData || []);
+    const [salesByProduct, setSalesByProduct] = useState<any[]>(() => lastDashboardViewSnapshot?.salesByProduct || []);
+    const [recapStats, setRecapStats] = useState<any>(() => lastDashboardViewSnapshot?.recapStats || {
         ventesBrutes: 0,
         remboursements: 0,
         surplus: 0,
@@ -171,7 +200,7 @@ export default function Dashboard() {
                 params.set('userId', String(user.id));
             else if (user?.storeId)
                 params.set('storeId', String(user.storeId));
-            const resp = await fetch(`${BACKEND_BASE}/api/sales_stats.php?${params.toString()}`);
+            const resp = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales_stats.php`, params), { cache: 'no-store' });
             if (!resp.ok)
                 throw new Error('API error');
             const json = await resp.json();
@@ -295,20 +324,20 @@ export default function Dashboard() {
         return { surplus, manque };
     }
     const { user } = useAuth();
-    const [stats, setStats] = useState({
+    const [stats, setStats] = useState(() => lastDashboardViewSnapshot?.stats || {
         todaySales: 0,
         todayTransactions: 0,
         balance: 0,
         activeShift: null as any,
     });
     const { isBackendReachable } = useNetwork();
-    const [cashierStats, setCashierStats] = useState({
+    const [cashierStats, setCashierStats] = useState(() => lastDashboardViewSnapshot?.cashierStats || {
         backendSales: 0,
         pendingLocalSales: 0,
         combinedSales: 0,
         pendingOpsCount: 0,
     });
-    const [cashierLocalStats, setCashierLocalStats] = useState({
+    const [cashierLocalStats, setCashierLocalStats] = useState(() => lastDashboardViewSnapshot?.cashierLocalStats || {
         totalSales: 0,
         transactions: 0,
         refunds: 0,
@@ -508,6 +537,7 @@ export default function Dashboard() {
     };
     useEffect(() => {
         loadStats();
+        filterDataByPeriod();
         // load cashier stats initially and when connection goes offline
         loadCashierStats();
     }, []);
@@ -518,6 +548,16 @@ export default function Dashboard() {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isBackendReachable]);
+    useEffect(() => {
+        lastDashboardViewSnapshot = {
+            chartData,
+            salesByProduct,
+            recapStats,
+            stats,
+            cashierStats,
+            cashierLocalStats,
+        };
+    }, [chartData, salesByProduct, recapStats, stats, cashierStats, cashierLocalStats]);
     const loadStats = async () => {
         const db = await getDB();
         // Get today's sales

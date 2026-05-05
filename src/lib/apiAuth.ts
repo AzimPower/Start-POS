@@ -48,7 +48,7 @@ export async function clearAuthToken(): Promise<void> {
   }
 }
 
-function isProtectedBackendApiRequest(url: string): boolean {
+export function requiresBackendAuth(url: string): boolean {
   try {
     const parsed = new URL(url, window.location.origin);
     const path = parsed.pathname;
@@ -60,6 +60,26 @@ function isProtectedBackendApiRequest(url: string): boolean {
   } catch (e) {
     return false;
   }
+}
+
+export async function hasAuthToken(): Promise<boolean> {
+  return Boolean(await getAuthToken());
+}
+
+export async function buildAuthenticatedHeaders(initialHeaders?: HeadersInit, url?: string): Promise<Headers> {
+  const headers = new Headers(initialHeaders || {});
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (url && requiresBackendAuth(url) && !headers.has('Authorization')) {
+    const token = await getAuthToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  }
+
+  return headers;
 }
 
 export function installAuthenticatedFetch(): void {
@@ -81,7 +101,7 @@ export function installAuthenticatedFetch(): void {
       }
     })();
 
-    if (!isProtectedBackendApiRequest(requestUrl)) {
+    if (!requiresBackendAuth(requestUrl)) {
       const response = await originalFetch(input, init);
       if (isBackendApiRequest) {
         markBackendReachable();
@@ -89,13 +109,10 @@ export function installAuthenticatedFetch(): void {
       return response;
     }
 
-    const existingHeaders = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
-    if (!existingHeaders.has('Authorization')) {
-      const token = await getAuthToken();
-      if (token) {
-        existingHeaders.set('Authorization', `Bearer ${token}`);
-      }
-    }
+    const existingHeaders = await buildAuthenticatedHeaders(
+      init?.headers || (input instanceof Request ? input.headers : undefined),
+      requestUrl
+    );
 
     const response = await originalFetch(input, {
       ...init,

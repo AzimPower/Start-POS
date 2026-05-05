@@ -1,6 +1,7 @@
 import { BACKEND_BASE, backendAvailable } from '@/lib/backend';
 import { getDB } from '@/lib/db';
 import { connectionState } from '@/lib/sync';
+import { hasAuthToken, requiresBackendAuth } from '@/lib/apiAuth';
 export type NotificationKind = 'info' | 'success' | 'warning' | 'critical';
 export type NotificationTargetType = 'all' | 'role' | 'store' | 'user';
 export type UserRole = 'super_admin' | 'admin' | 'cashier' | 'manager';
@@ -245,7 +246,7 @@ async function executeOrQueueMutation(method: 'POST' | 'PUT', data: any, queueEn
     data: any;
 }) {
     const backendUp = await backendAvailable().catch(() => false);
-    if (backendUp) {
+    if (backendUp && (!requiresBackendAuth(NOTIFICATIONS_API) || await hasAuthToken())) {
         let response: Response;
             try {
                 response = await fetch(NOTIFICATIONS_API, {

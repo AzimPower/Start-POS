@@ -1,4 +1,5 @@
 import { canReachBackendForWrite, queueSyncOp } from './sync';
+import { buildAuthenticatedHeaders, hasAuthToken, requiresBackendAuth } from './apiAuth';
 interface CachedNotificationPayload {
     id: string;
     title: string;
@@ -53,10 +54,15 @@ export async function performSyncOp(op: {
         await queueSyncOp(op);
         return { success: false, queued: true, reason: 'backend_unreachable' };
     }
+    if (requiresBackendAuth(op.url) && !await hasAuthToken()) {
+        await queueSyncOp(op);
+        return { success: false, queued: true, reason: 'missing_auth_token' };
+    }
     try {
+            const headers = await buildAuthenticatedHeaders({ 'Content-Type': 'application/json' }, op.url);
             const res = await fetch(op.url, {
                 method: op.method || 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(op.data),
             });
             if (res.ok) {

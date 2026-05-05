@@ -26,6 +26,18 @@ interface Customer {
     createdAt: number;
     storeId: string;
 }
+type CustomersViewSnapshot = {
+    storeId: string;
+    customers: Customer[];
+    filteredCustomers: Customer[];
+    salesByCustomer: {
+        [customerId: string]: any[];
+    };
+    loadedCount: number;
+    hasMore: boolean;
+    pendingSyncCount: number;
+};
+let lastCustomersViewSnapshot: CustomersViewSnapshot | null = null;
 
 const formatVisitDate = (date: Date | null) => {
     if (!date) {
@@ -46,18 +58,19 @@ export default function Customers() {
     const { isBackendReachable, manualSync } = useNetwork();
     const navigate = useNavigate();
     const isMobile = useIsMobile();
-    const [customers, setCustomers] = useState<Customer[]>([]);
-    const [loadedCount, setLoadedCount] = useState(0);
+    const hasSnapshotForCurrentStore = Boolean(lastCustomersViewSnapshot && String(lastCustomersViewSnapshot.storeId || '') === String(user?.storeId || ''));
+    const [customers, setCustomers] = useState<Customer[]>(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.customers || []) : []);
+    const [loadedCount, setLoadedCount] = useState(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.loadedCount || 0) : 0);
     const [pageSize] = useState(25);
-    const [hasMore, setHasMore] = useState(true);
+    const [hasMore, setHasMore] = useState(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.hasMore ?? true) : true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
+    const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.filteredCustomers || []) : []);
     const [searchTerm, setSearchTerm] = useState('');
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
-    const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+    const [isLoadingCustomers, setIsLoadingCustomers] = useState(() => !hasSnapshotForCurrentStore);
     const [isMutatingCustomer, setIsMutatingCustomer] = useState(false);
-    const [pendingSyncCount, setPendingSyncCount] = useState(0);
+    const [pendingSyncCount, setPendingSyncCount] = useState(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.pendingSyncCount || 0) : 0);
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
@@ -68,11 +81,25 @@ export default function Customers() {
     // Ajout pour détails client
     const [salesByCustomer, setSalesByCustomer] = useState<{
         [customerId: string]: any[];
-    }>({});
+    }>(() => hasSnapshotForCurrentStore ? (lastCustomersViewSnapshot?.salesByCustomer || {}) : {});
     useEffect(() => {
-        loadCustomers();
+        loadCustomers(!hasSnapshotForCurrentStore);
         loadSales();
     }, []);
+    useEffect(() => {
+        if (!user?.storeId) {
+            return;
+        }
+        lastCustomersViewSnapshot = {
+            storeId: user.storeId,
+            customers,
+            filteredCustomers,
+            salesByCustomer,
+            loadedCount,
+            hasMore,
+            pendingSyncCount,
+        };
+    }, [user?.storeId, customers, filteredCustomers, salesByCustomer, loadedCount, hasMore, pendingSyncCount]);
     useEffect(() => {
         // Filtrer les clients en fonction de la recherche
         if (searchTerm.trim() === '') {
@@ -124,8 +151,10 @@ export default function Customers() {
 
         return nextCustomers;
     };
-    const loadCustomers = async () => {
-        setIsLoadingCustomers(true);
+    const loadCustomers = async (showLoading = true) => {
+        if (showLoading) {
+            setIsLoadingCustomers(true);
+        }
         try {
             const db = await getDB();
             // Si en ligne, charger depuis le backend et synchroniser
@@ -183,7 +212,9 @@ export default function Customers() {
             toast.error('Erreur lors du chargement des clients');
         }
         finally {
-            setIsLoadingCustomers(false);
+            if (showLoading) {
+                setIsLoadingCustomers(false);
+            }
         }
     };
     const loadFromLocal = async (db: any) => {
