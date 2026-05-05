@@ -136,6 +136,17 @@ const parseDateTimeLocal = (value?: string): number | null => {
     const parsed = new Date(value).getTime();
     return Number.isFinite(parsed) ? parsed : null;
 };
+const parseDateTimeLocalAsInclusiveEnd = (value?: string, now: number = Date.now()): number | null => {
+    const parsed = parseDateTimeLocal(value);
+    if (parsed === null) {
+        return null;
+    }
+    const hasExplicitSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(String(value || '').trim());
+    if (hasExplicitSeconds) {
+        return Math.min(parsed, now);
+    }
+    return Math.min(parsed + 59999, now);
+};
 const STOCK_SIGNALS_API_PATH = '/backend/api/stock_signals.php';
 const EXPENSES_ADVANCED_API_PATH = '/backend/api/expenses_advanced.php';
 
@@ -500,8 +511,8 @@ export default function StockSignals() {
             if (refreshedExpense) {
                 setSelectedExpense(refreshedExpense);
             }
-            const endTime = parseDateTimeLocal(endIso) ?? Date.now();
             const now = Date.now();
+            const endTime = parseDateTimeLocalAsInclusiveEnd(endIso, now) ?? now;
             const startTime = expenseForCalculation.type === 'direct' && expenseForCalculation.directProduct
                 ? expenseForCalculation.directProduct.startDate
                 : expenseForCalculation.date;
@@ -1322,7 +1333,7 @@ export default function StockSignals() {
         if (!selectedExpense || !marginCalculation || !user?.storeId)
             return;
         // Ensure chosen end date is valid (not before start)
-        const chosenEndDate = Number(marginCalculation?.endTime) || parseDateTimeLocal(endDateInput) || Date.now();
+        const chosenEndDate = Number(marginCalculation?.endTime) || parseDateTimeLocalAsInclusiveEnd(endDateInput) || Date.now();
         const startTime = selectedExpense.type === 'direct' && selectedExpense.directProduct ? selectedExpense.directProduct.startDate : selectedExpense.date;
         if (chosenEndDate < startTime) {
             toast.error('La date de fin sélectionnée est antérieure à la date d\'achat / début du stock. Veuillez choisir une date valide.');
@@ -1345,7 +1356,7 @@ export default function StockSignals() {
         try {
             const db = await getDB();
             // S'assurer que toutes les valeurs sont des nombres valides avant de sauvegarder
-            const chosenEndDate = Number(marginCalculation.endTime) || parseDateTimeLocal(endDateInput) || Date.now();
+            const chosenEndDate = Number(marginCalculation.endTime) || parseDateTimeLocalAsInclusiveEnd(endDateInput) || Date.now();
             const stockSignal: StockSignal = {
                 id: generateId(),
                 expenseId: selectedExpense.id,
@@ -1388,6 +1399,9 @@ export default function StockSignals() {
             };
             await db.put('expensesAdvanced', updatedExpense);
             invalidateCaches();
+            lastSignalDataRefreshAtRef.current = Date.now();
+            await processData(db);
+            await updatePendingSyncCount();
             const [stockSignalSyncResp, expenseSyncResp] = await Promise.all([
                 performSyncOp({
                     url: `${BACKEND_BASE}/api/stock_signals.php`,
@@ -1460,9 +1474,6 @@ export default function StockSignals() {
                 void 0;
                 void 0;
             }
-                        lastSignalDataRefreshAtRef.current = Date.now();
-                        await processData(db);
-                        await updatePendingSyncCount();
                         void sendStockSignalEmail({
                                 stockSignal,
                                 expense: selectedExpense,

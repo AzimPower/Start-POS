@@ -77,7 +77,7 @@ function canViewShift(shift: any, user: any) {
     if (user?.role === 'super_admin') {
         return true;
     }
-    if ((user?.role === 'admin' || user?.role === 'manager') && user?.storeId) {
+    if (user?.role === 'admin' && user?.storeId) {
         // Compat legacy: certains anciens shifts n'avaient pas de storeId.
         // On les garde visibles pour les rôles de supervision du magasin.
         if (!shift?.storeId) {
@@ -88,18 +88,60 @@ function canViewShift(shift: any, user: any) {
     return sameId(shift?.userId, user?.id);
 }
 async function getVisibleShiftsFromLocal(db: any, user: any) {
-    if (user?.role === 'super_admin') {
+    const readShifts = async () => {
+        if (user?.role === 'super_admin') {
+            return db.getAll('shifts');
+        }
+        if (user?.role === 'admin' && user?.storeId) {
+            // Compat legacy: on lit tout puis on filtre via canViewShift pour inclure
+            // les enregistrements historiques sans storeId.
+            return db.getAll('shifts');
+        }
+        if (user?.id) {
+            return db.getAllFromIndex('shifts', 'by-user', user.id);
+        }
         return db.getAll('shifts');
+    };
+    const toNum = (value: any) => {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const allShifts = await readShifts();
+    const zombieCandidates = allShifts.filter((shift: any) => {
+        if (shift?.status !== 'closed') {
+            return false;
+        }
+        return toNum(shift.openingAmount) === 0 &&
+            toNum(shift.closingAmount) === 0 &&
+            toNum(shift.expectedAmount) === 0 &&
+            toNum(shift.difference) === 0 &&
+            toNum(shift.cashAmount) === 0 &&
+            toNum(shift.mobileMoneyAmount) === 0 &&
+            toNum(shift.otherAmount) === 0;
+    });
+    if (zombieCandidates.length === 0) {
+        return allShifts;
     }
-    if ((user?.role === 'admin' || user?.role === 'manager') && user?.storeId) {
-        // Compat legacy: on lit tout puis on filtre via canViewShift pour inclure
-        // les enregistrements historiques sans storeId.
-        return db.getAll('shifts');
+    const zombieIdsToDelete: string[] = [];
+    for (const shift of zombieCandidates) {
+        try {
+            const linkedSales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
+            if (!Array.isArray(linkedSales) || linkedSales.length === 0) {
+                zombieIdsToDelete.push(String(shift.id));
+            }
+        }
+        catch (e) {
+        }
     }
-    if (user?.id) {
-        return db.getAllFromIndex('shifts', 'by-user', user.id);
+    if (zombieIdsToDelete.length === 0) {
+        return allShifts;
     }
-    return db.getAll('shifts');
+    const tx = db.transaction('shifts', 'readwrite');
+    await Promise.all([
+        ...zombieIdsToDelete.map((shiftId) => tx.store.delete(shiftId)),
+        tx.done,
+    ]);
+    return allShifts.filter((shift: any) => !zombieIdsToDelete.includes(String(shift.id)));
 }
 // Fonctions de formatage dÃ©finies hors du composant (stables)
 const formatDateFn = (timestamp: number) => {

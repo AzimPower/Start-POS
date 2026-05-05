@@ -15,6 +15,10 @@ try {
     require_once '../config.php';
     $method = $_SERVER['REQUEST_METHOD'];
     $authClaims = require_auth();
+    $currentUserId = (string)($authClaims['sub'] ?? '');
+    $currentRole = (string)($authClaims['role'] ?? '');
+    $isStoreAdmin = $currentRole === 'admin';
+    $mustRestrictToOwnShifts = !$isStoreAdmin && !is_super_admin_claims($authClaims);
 
     switch ($method) {
         case 'GET':
@@ -23,9 +27,17 @@ try {
             // Récupérer tous les shifts sans limite
             $sql = 'SELECT * FROM shifts';
             $params = [];
+            $conditions = [];
             if ($storeId) {
-                $sql .= ' WHERE storeId = ?';
+                $conditions[] = 'storeId = ?';
                 $params[] = $storeId;
+            }
+            if ($mustRestrictToOwnShifts) {
+                $conditions[] = 'userId = ?';
+                $params[] = $currentUserId;
+            }
+            if (!empty($conditions)) {
+                $sql .= ' WHERE ' . implode(' AND ', $conditions);
             }
             $sql .= ' ORDER BY openedAt DESC';
             
@@ -37,6 +49,9 @@ try {
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
+        if ($mustRestrictToOwnShifts) {
+            $data['userId'] = $currentUserId;
+        }
         
         // 🔒 SÉCURITÉ: Vérifier qu'il n'existe pas déjà un shift ouvert pour cet utilisateur dans ce magasin
         $checkSql = 'SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open"';
@@ -78,6 +93,17 @@ try {
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
+        if ($mustRestrictToOwnShifts) {
+            $ownerStmt = $pdo->prepare('SELECT userId FROM shifts WHERE id = ? LIMIT 1');
+            $ownerStmt->execute([$data['id'] ?? '']);
+            $existingUserId = (string)($ownerStmt->fetchColumn() ?: '');
+            if ($existingUserId !== '' && $existingUserId !== $currentUserId) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Shift access denied']);
+                exit;
+            }
+            $data['userId'] = $currentUserId;
+        }
 
         if (($data['status'] ?? '') === 'open') {
             $checkSql = 'SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open" AND id <> ? LIMIT 1';

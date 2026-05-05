@@ -220,6 +220,15 @@ export default function Expenses() {
         setCurrentStep(prev => Math.min(prev + 1, stepLabels.length - 1));
     };
     const goPrev = () => setCurrentStep(prev => Math.max(prev - 1, 0));
+    const handleExpenseFormKeyDown = useCallback((e: React.KeyboardEvent<HTMLFormElement>) => {
+        if (e.key !== 'Enter') {
+            return;
+        }
+        if (e.target instanceof HTMLTextAreaElement) {
+            return;
+        }
+        e.preventDefault();
+    }, []);
     // Calcul du total sélectionné dès le chargement de la page
     useEffect(() => {
         (async () => {
@@ -1313,7 +1322,7 @@ export default function Expenses() {
             if (canGoNext) {
                 goNext();
             }
-        }} className="space-y-6">
+        }} onKeyDown={handleExpenseFormKeyDown} className="space-y-6">
               {currentStep === 0 && (<div className="rounded-xl border border-border/60 bg-card/50 p-4 space-y-4 ring-1 ring-border/40">
                   <div>
                     <h3 className="text-sm font-semibold">Type de dépense</h3>
@@ -1434,7 +1443,7 @@ export default function Expenses() {
                 </Button>
                 {!isLastStep ? (<Button type="button" className="w-1/3" onClick={goNext} disabled={!canGoNext || loading}>
                     Suivant
-                  </Button>) : (<Button type="submit" className="w-1/3" disabled={loading}>
+                  </Button>) : (<Button type="button" className="w-1/3" disabled={loading} onClick={(e) => void handleSubmit(e as unknown as React.FormEvent)}>
                     {loading ? 'Traitement...' : editingExpense ? 'Mettre à jour' : 'Enregistrer'}
                   </Button>)}
               </div>

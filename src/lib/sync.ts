@@ -901,6 +901,16 @@ function readClosedShiftMarker(userId?: string, storeId?: string) {
         return null;
     }
 }
+function clearClosedShiftMarker(userId?: string, storeId?: string) {
+    if (!userId)
+        return;
+    try {
+        localStorage.removeItem(closedShiftMarkerKey(userId, storeId));
+    }
+    catch {
+        // ignore localStorage issues
+    }
+}
 export function persistClosedShiftMarker(shift: {
     id: string;
     userId: string;
@@ -957,6 +967,7 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
         return null;
     const { getDB } = await import('./db');
     const db = await getDB();
+    let backendOpenShiftIds = new Set<string>();
     if (options?.syncWithBackend && storeId && await hasUsableNetworkConnection()) {
         const backendUp = await backendAvailable().catch(() => false);
         if (backendUp) {
@@ -967,6 +978,12 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
                 if (response.ok) {
                     const backendShifts = await response.json();
                     if (Array.isArray(backendShifts)) {
+                        backendOpenShiftIds = new Set(backendShifts
+                            .filter((shift: any) => String(shift?.status || '') === 'open' &&
+                            String(shift?.userId || '') === String(userId) &&
+                            String(shift?.storeId || '') === String(storeId || ''))
+                            .map((shift: any) => String(shift?.id || ''))
+                            .filter(Boolean));
                         await mergeBackendShifts(backendShifts);
                         await mergeOverlappingShiftsForUserStore(userId, storeId, {
                             backendShiftIds: new Set(backendShifts.map((shift: any) => String(shift?.id || '')).filter(Boolean)),
@@ -1003,7 +1020,11 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
         .sort((a: any, b: any) => Number(b.openedAt || 0) - Number(a.openedAt || 0));
     const closedMarker = readClosedShiftMarker(userId, storeId);
     if (closedMarker) {
-        const staleOpenShifts = openShifts.filter((shift: any) => String(shift.id) === String(closedMarker.id));
+        const markerTargetsBackendOpenShift = backendOpenShiftIds.has(String(closedMarker.id || ''));
+        if (markerTargetsBackendOpenShift) {
+            clearClosedShiftMarker(userId, storeId);
+        }
+        const staleOpenShifts = markerTargetsBackendOpenShift ? [] : openShifts.filter((shift: any) => String(shift.id) === String(closedMarker.id));
         if (staleOpenShifts.length > 0) {
             const tx = db.transaction('shifts', 'readwrite');
             await Promise.all([
@@ -1017,23 +1038,30 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
                 })),
                 tx.done,
             ]);
+            clearClosedShiftMarker(userId, storeId);
             openShifts = openShifts.filter((shift: any) => !staleOpenShifts.some((stale: any) => String(stale.id) === String(shift.id)));
         }
     }
     if (openShifts.length > 1) {
         const [latestShift, ...duplicates] = openShifts;
-        const tx = db.transaction('shifts', 'readwrite');
-        await Promise.all([
-            ...duplicates.map((shift: any) => tx.store.put({
-                ...shift,
-                status: 'closed',
-                closedAt: Date.now(),
-                closingAmount: shift.openingAmount || 0,
-                expectedAmount: shift.openingAmount || 0,
-                difference: 0,
-            })),
-            tx.done,
-        ]);
+        const duplicateIdsToDelete: string[] = [];
+        for (const shift of duplicates) {
+            try {
+                const linkedSales = await db.getAllFromIndex('sales', 'by-shift', shift.id);
+                if (!Array.isArray(linkedSales) || linkedSales.length === 0) {
+                    duplicateIdsToDelete.push(String(shift.id));
+                }
+            }
+            catch (e) {
+            }
+        }
+        if (duplicateIdsToDelete.length > 0) {
+            const tx = db.transaction('shifts', 'readwrite');
+            await Promise.all([
+                ...duplicateIdsToDelete.map((shiftId) => tx.store.delete(shiftId)),
+                tx.done,
+            ]);
+        }
         return latestShift;
     }
     return openShifts[0] || null;

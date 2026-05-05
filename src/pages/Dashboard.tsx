@@ -48,6 +48,12 @@ type DashboardViewSnapshot = {
 };
 
 let lastDashboardViewSnapshot: DashboardViewSnapshot | null = null;
+function percentChange(delta: number, previous: number) {
+    if (previous === 0) {
+        return delta === 0 ? 0 : 100;
+    }
+    return (delta / previous) * 100;
+}
 export default function Dashboard() {
     const [calendarMonthCount, setCalendarMonthCount] = useState<number>(() => typeof window !== 'undefined' && window.innerWidth >= 1280 ? 2 : 1);
     // Sélection de période
@@ -173,6 +179,152 @@ export default function Dashboard() {
         setStartDate(newStartDate);
         setEndDate(newEndDate);
     };
+    async function computeLocalDashboardMetrics(startTs: number, endTs: number, previous?: { start: number; end: number; }) {
+        const db = await getDB();
+        const [allSales, allShifts, allProducts] = await Promise.all([
+            db.getAll('sales'),
+            db.getAll('shifts'),
+            db.getAll('products'),
+        ]);
+        const startMinutes = user?.role === 'cashier' ? 0 : (parseInt(startTime.split(':')[0]) * 60 + parseInt(startTime.split(':')[1]));
+        const endMinutes = user?.role === 'cashier' ? (23 * 60 + 59) : (parseInt(endTime.split(':')[0]) * 60 + parseInt(endTime.split(':')[1]));
+        const withinScope = (record: any) => {
+            if (user?.role === 'cashier') {
+                return String(record?.userId || '') === String(user.id || '');
+            }
+            if (user?.storeId) {
+                return String(record?.storeId || '') === String(user.storeId || '');
+            }
+            return true;
+        };
+        const withinHourRange = (timestamp: number) => {
+            const date = new Date(timestamp);
+            const minutes = date.getHours() * 60 + date.getMinutes();
+            return minutes >= startMinutes && minutes <= endMinutes;
+        };
+        const periodSales = allSales.filter((sale: any) => {
+            const createdAt = Number(sale?.createdAt || 0);
+            return createdAt >= startTs && createdAt <= endTs && withinHourRange(createdAt) && withinScope(sale);
+        });
+        const confirmedSales = periodSales.filter((sale: any) => !sale.refunded);
+        const refundedSales = periodSales.filter((sale: any) => !!sale.refunded);
+        const ventesBrutes = confirmedSales.reduce((sum: number, sale: any) => sum + (Number(sale?.total) || 0), 0);
+        const remboursements = refundedSales.reduce((sum: number, sale: any) => sum + (Number(sale?.total) || 0), 0);
+        const productById = new Map<string, any>(allProducts.map((product: any) => [String(product?.id || ''), product]));
+        const productTotals = new Map<string, { name: string; quantity: number; total: number; }>();
+        let margeBrute = 0;
+        for (const sale of confirmedSales) {
+            const saleItems = Array.isArray(sale?.items) ? sale.items : [];
+            for (const item of saleItems) {
+                const quantity = Number(item?.quantity) || 0;
+                const price = Number(item?.price) || 0;
+                const total = price * quantity;
+                const product = productById.get(String(item?.productId || ''));
+                const targetMargin = Number(product?.targetMargin);
+                const costPrice = Number(product?.costPrice);
+                const unitMargin = Number.isFinite(targetMargin) && targetMargin !== 0
+                    ? price * (targetMargin / 100)
+                    : (Number.isFinite(costPrice) && costPrice !== 0 ? price - costPrice : price - (Number.isFinite(costPrice) ? costPrice : 0));
+                margeBrute += unitMargin * quantity;
+                const key = String(item?.productId || item?.name || 'unknown');
+                const current = productTotals.get(key) || { name: String(item?.name || product?.name || 'Unknown'), quantity: 0, total: 0 };
+                current.quantity += quantity;
+                current.total += total;
+                productTotals.set(key, current);
+            }
+        }
+        const closedShifts = allShifts.filter((shift: any) => String(shift?.status || '') === 'closed' && Number(shift?.closedAt || 0) >= startTs && Number(shift?.closedAt || 0) <= endTs && withinScope(shift));
+        let surplus = 0;
+        let manque = 0;
+        for (const shift of closedShifts) {
+            const difference = Number(shift?.difference);
+            if (!Number.isFinite(difference))
+                continue;
+            if (difference > 0)
+                surplus += difference;
+            if (difference < 0)
+                manque += Math.abs(difference);
+        }
+        const bucketLabel = (timestamp: number) => {
+            const date = new Date(timestamp);
+            switch (groupBy) {
+                case 'minutes': return format(date, 'dd MMM yy, HH:mm', { locale: fr });
+                case 'hours': return format(date, "dd MMM yy, HH'h'", { locale: fr });
+                case 'weeks': {
+                    const startOfWeek = new Date(date);
+                    startOfWeek.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+                    startOfWeek.setHours(0, 0, 0, 0);
+                    return format(startOfWeek, 'dd MMM yy', { locale: fr });
+                }
+                case 'months': return format(date, 'MMM yyyy', { locale: fr });
+                case 'days':
+                default: return format(date, 'dd MMM yy', { locale: fr });
+            }
+        };
+        const bucketKey = (timestamp: number) => {
+            const date = new Date(timestamp);
+            switch (groupBy) {
+                case 'minutes': return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+                case 'hours': return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+                case 'weeks': {
+                    const startOfWeek = new Date(date);
+                    startOfWeek.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+                    startOfWeek.setHours(0, 0, 0, 0);
+                    return String(startOfWeek.getTime());
+                }
+                case 'months': return `${date.getFullYear()}-${date.getMonth()}`;
+                case 'days':
+                default: return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+            }
+        };
+        const grouped = new Map<string, { date: string; ventes: number; sortValue: number; }>();
+        for (const sale of confirmedSales) {
+            const createdAt = Number(sale?.createdAt || 0);
+            const key = bucketKey(createdAt);
+            const current = grouped.get(key) || { date: bucketLabel(createdAt), ventes: 0, sortValue: createdAt };
+            current.ventes += Number(sale?.total) || 0;
+            current.sortValue = Math.min(current.sortValue, createdAt);
+            grouped.set(key, current);
+        }
+        let previousMetrics = { ventesBrutes: 0, remboursements: 0, surplus: 0, manque: 0, margeBrute: 0 };
+        if (previous) {
+            previousMetrics = await computeLocalDashboardMetrics(previous.start, previous.end);
+        }
+        const evolVentes = ventesBrutes - previousMetrics.ventesBrutes;
+        const evolRemboursements = remboursements - previousMetrics.remboursements;
+        const evolSurplus = surplus - previousMetrics.surplus;
+        const evolManque = manque - previousMetrics.manque;
+        const evolMarge = margeBrute - previousMetrics.margeBrute;
+        return {
+            chartData: Array.from(grouped.values()).sort((a, b) => a.sortValue - b.sortValue).map(({ date, ventes }) => ({ date, ventes })),
+            salesByProduct: Array.from(productTotals.values()).sort((a, b) => b.total - a.total).slice(0, 10),
+            recapStats: {
+                ventesBrutes,
+                remboursements,
+                surplus,
+                manque,
+                ventesNettes: ventesBrutes,
+                margeBrute,
+                margeBrutePourcent: ventesBrutes !== 0 ? (margeBrute / ventesBrutes) * 100 : 0,
+                evolVentes,
+                evolVentesPercent: percentChange(evolVentes, previousMetrics.ventesBrutes),
+                evolRemboursements,
+                evolRemboursementsPercent: percentChange(evolRemboursements, previousMetrics.remboursements),
+                evolSurplus,
+                evolSurplusPercent: percentChange(evolSurplus, previousMetrics.surplus),
+                evolManque,
+                evolManquePercent: percentChange(evolManque, previousMetrics.manque),
+                evolNettes: evolVentes,
+                evolMarge,
+                evolMargePercent: percentChange(evolMarge, previousMetrics.margeBrute),
+            },
+            ventesBrutes,
+            remboursements,
+            surplus,
+            manque,
+            margeBrute,
+        };
+    }
     async function filterDataByPeriod() {
         // Call backend for stats/chart data so charts source from server-side
         let start, end;
@@ -185,6 +337,20 @@ export default function Dashboard() {
         else {
             start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), parseInt(startTime.split(':')[0]), parseInt(startTime.split(':')[1])).getTime();
             end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), parseInt(endTime.split(':')[0]), parseInt(endTime.split(':')[1])).getTime();
+        }
+        const periodLength = end - start;
+        const prevStart = start - periodLength - 1;
+        const prevEnd = start - 1;
+        if (!isBackendReachable && user?.role !== 'cashier') {
+            try {
+                const local = await computeLocalDashboardMetrics(start, end, { start: prevStart, end: prevEnd });
+                setChartData(local.chartData);
+                setSalesByProduct(local.salesByProduct);
+                setRecapStats(local.recapStats);
+            }
+            catch (e) {
+            }
+            return;
         }
         try {
             const params = new URLSearchParams();
@@ -250,22 +416,10 @@ export default function Dashboard() {
                 const periodLength = end - start;
                 const prevStart = start - periodLength - 1;
                 const prevEnd = start - 1;
-                const [local, localPrev] = await Promise.all([
-                    computeSurplusManqueForRange(start, end),
-                    computeSurplusManqueForRange(prevStart, prevEnd),
-                ]);
-                const evolSurplusVal = local.surplus - localPrev.surplus;
-                const evolManqueVal = local.manque - localPrev.manque;
-                const pct = (delta: number, prev: number) => prev === 0 ? (delta === 0 ? 0 : 100) : (delta / prev) * 100;
-                setRecapStats((prev: any) => ({
-                    ...prev,
-                    surplus: local.surplus,
-                    manque: local.manque,
-                    evolSurplus: evolSurplusVal,
-                    evolManque: evolManqueVal,
-                    evolSurplusPercent: pct(evolSurplusVal, localPrev.surplus),
-                    evolManquePercent: pct(evolManqueVal, localPrev.manque),
-                }));
+                const local = await computeLocalDashboardMetrics(start, end, { start: prevStart, end: prevEnd });
+                setChartData(local.chartData);
+                setSalesByProduct(local.salesByProduct);
+                setRecapStats(local.recapStats);
             }
             catch (e) {
             }
@@ -706,8 +860,8 @@ export default function Dashboard() {
         </span>
       </div>
 
-      {/* KPI admin (en ligne) */}
-      {isBackendReachable && (<div className="grid gap-3 grid-cols-2 lg:grid-cols-3">
+      {/* KPI admin */}
+      {user?.role !== 'cashier' && (<div className="grid gap-3 grid-cols-2 lg:grid-cols-3">
 
           {/* Ventes brutes */}
           <Card className="border-0 shadow-sm overflow-hidden bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/20 dark:to-background">
@@ -724,9 +878,9 @@ export default function Dashboard() {
               <div className="text-xl font-bold text-emerald-700 dark:text-emerald-400 leading-tight">
                 {formatCurrency(recapStats.ventesBrutes)} <span className="text-sm font-normal text-muted-foreground">F</span>
               </div>
-              <div className="flex items-center gap-0.5 mt-1 text-[11px] text-destructive">
-                <ArrowDownRight className="w-3 h-3 shrink-0"/>
-                {formatCurrency(Math.abs(recapStats.evolVentes))} F ({(recapStats.evolVentesPercent ?? 0).toFixed(2)}%)
+              <div className={`flex items-center gap-0.5 mt-1 text-[11px] ${(Number(recapStats.evolVentes) || 0) >= 0 ? 'text-green-600' : 'text-destructive'}`}>
+                {(Number(recapStats.evolVentes) || 0) >= 0 ? (<ArrowUpRight className="w-3 h-3 shrink-0"/>) : (<ArrowDownRight className="w-3 h-3 shrink-0"/>)}
+                {`${(Number(recapStats.evolVentes) || 0) >= 0 ? '+' : '-'}${formatCurrency(Math.abs(Number(recapStats.evolVentes) || 0))} F (${((Number(recapStats.evolVentesPercent) || 0)).toFixed(2)}%)`}
               </div>
             </CardContent>
           </Card>

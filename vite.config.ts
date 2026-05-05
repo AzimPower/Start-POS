@@ -90,7 +90,12 @@ export default defineConfig(({ mode }) => ({
               const isEmailAPI = url.href.includes('send-email.php');
               const isBackendApi = url.pathname.includes('/backend/api/');
               const hasBypass = url.searchParams.has('_bypass_sw');
-              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com' && !isEmailAPI && !isBackendApi && !hasBypass;
+              const isNavigationRequest = request.mode === 'navigate' || request.destination === 'document';
+              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com'
+                && !isEmailAPI
+                && !isBackendApi
+                && !hasBypass
+                && !isNavigationRequest;
             },
             handler: 'NetworkFirst',
             options: {
