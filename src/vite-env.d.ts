@@ -10,6 +10,12 @@ interface ImportMetaEnv {
 interface ImportMeta {
     readonly env: ImportMetaEnv;
 }
+interface Window {
+    __START_POS_DESKTOP__?: {
+        isDesktop?: boolean;
+        runtime?: string;
+    };
+}
 declare module 'virtual:pwa-register' {
     import type { RegisterSWOptions } from 'vite-plugin-pwa/types';
     export function registerSW(options?: RegisterSWOptions): (reloadPage?: boolean) => Promise<void>;

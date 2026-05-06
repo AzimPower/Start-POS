@@ -3,46 +3,39 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { NotificationProvider } from './contexts/NotificationContext';
 import Layout from "./components/Layout";
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getDB } from "@/lib/db";
 import SubscriptionExpired from "./components/SubscriptionExpired";
 import useAndroidBackButton from './hooks/useAndroidBackButton';
 import { getStoreAccessState } from './lib/status';
 import { toast } from 'sonner';
 import { BACKEND_BASE, backendAvailable } from './lib/backend';
-
-const Login = lazy(() => import("./pages/Login"));
-const Pin = lazy(() => import("./pages/Pin"));
-const RoleRedirect = lazy(() => import("./RoleRedirect"));
-const CustomerReceipts = lazy(() => import("./pages/CustomerReceipts"));
-const DashboardOnlyAdmin = lazy(() => import("./DashboardOnlyAdmin"));
-const POS = lazy(() => import("./pages/POS"));
-const Shifts = lazy(() => import("./pages/Shifts"));
-const Customers = lazy(() => import("./pages/Customers"));
-const Products = lazy(() => import("./pages/Products"));
-const Categories = lazy(() => import("./pages/Categories"));
-const Stores = lazy(() => import("./pages/Stores"));
-const Users = lazy(() => import("./pages/Users"));
-const Receipts = lazy(() => import("./pages/Receipts"));
-const Expenses = lazy(() => import("./pages/Expenses"));
-const StockSignals = lazy(() => import("./pages/StockSignals"));
-const StockAdjustmentHistory = lazy(() => import("./pages/StockAdjustmentHistory"));
-const SubscriptionPayments = lazy(() => import("./pages/SubscriptionPayments"));
-const Notifications = lazy(() => import("./pages/Notifications"));
-const Settings = lazy(() => import("./pages/Settings"));
-const NotFound = lazy(() => import("./pages/NotFound"));
+import Login from "./pages/Login";
+import Pin from "./pages/Pin";
+import RoleRedirect from "./RoleRedirect";
+import CustomerReceipts from "./pages/CustomerReceipts";
+import DashboardOnlyAdmin from "./DashboardOnlyAdmin";
+import POS from "./pages/POS";
+import Shifts from "./pages/Shifts";
+import Customers from "./pages/Customers";
+import Products from "./pages/Products";
+import Categories from "./pages/Categories";
+import Stores from "./pages/Stores";
+import Users from "./pages/Users";
+import Receipts from "./pages/Receipts";
+import Expenses from "./pages/Expenses";
+import StockSignals from "./pages/StockSignals";
+import StockAdjustmentHistory from "./pages/StockAdjustmentHistory";
+import SubscriptionPayments from "./pages/SubscriptionPayments";
+import Notifications from "./pages/Notifications";
+import Settings from "./pages/Settings";
+import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 const STORES_STATUS_URL = `${BACKEND_BASE}/api/stores.php?include_inactive=1`;
-
-function RouteFallback() {
-    return (<div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-    </div>);
-}
 
 function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
     const ids = Array.isArray(storeIds) ? storeIds : [];
@@ -94,7 +87,7 @@ function SuperAdminRoute({ children }: {
     return <>{children}</>;
 }
 function BackButtonInitializer() {
-    // Hook must be called inside a Router - this component is rendered just under BrowserRouter
+    // Hook must be called inside a Router - this component is rendered just under HashRouter
     useAndroidBackButton();
     return null;
 }
@@ -353,12 +346,11 @@ const App = () => (<ErrorBoundary>
     </QueryClientProvider>
   </ErrorBoundary>);
 function InnerApp() {
-    return (<BrowserRouter>
+    return (<HashRouter>
       {/* Back button initializer must be inside Router so useNavigate/useLocation work */}
       <BackButtonInitializer />
       <AuthProvider>
         <NotificationProvider>
-        <Suspense fallback={<RouteFallback />}>
           <PinOverlay />
           <StoreStatusChecker>
             <Routes>
@@ -429,9 +421,8 @@ function InnerApp() {
               {/* Printer debug page removed for production builds */}
             </Routes>
           </StoreStatusChecker>
-        </Suspense>
         </NotificationProvider>
         </AuthProvider>
-      </BrowserRouter>);
+      </HashRouter>);
 }
 export default App;

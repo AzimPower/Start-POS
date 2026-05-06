@@ -8,7 +8,40 @@ import { pendingEmailService } from '@/lib/pendingEmailService';
 import { isActiveFlag } from '@/lib/status';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { hashPasswordForCache } from '@/lib/auth';
-import { clearAuthToken, setAuthToken } from '@/lib/apiAuth';
+import { clearAuthToken, getAuthToken, setAuthToken } from '@/lib/apiAuth';
+function normalizePhoneDigits(phone?: string | null): string {
+    return String(phone || '').replace(/\D/g, '');
+}
+function buildPhoneCandidates(phone?: string | null): string[] {
+    const raw = String(phone || '').replace(/[^0-9+]/g, '');
+    const digits = normalizePhoneDigits(raw);
+    const last8 = digits.slice(-8);
+    const values = new Set<string>();
+    if (raw.startsWith('+')) {
+        values.add(raw);
+    }
+    if (digits) {
+        values.add(`+${digits}`);
+        values.add(digits);
+    }
+    if (last8) {
+        values.add(last8);
+        values.add(`+226${last8}`);
+        values.add(`226${last8}`);
+    }
+    return Array.from(values).filter(Boolean);
+}
+function phonesMatch(candidatePhone: string, storedPhone?: string | null): boolean {
+    const candidateDigits = normalizePhoneDigits(candidatePhone);
+    const storedDigits = normalizePhoneDigits(storedPhone);
+    if (!candidateDigits || !storedDigits) {
+        return false;
+    }
+    if (candidateDigits === storedDigits) {
+        return true;
+    }
+    return candidateDigits.slice(-8) === storedDigits.slice(-8);
+}
 function resolvePrimaryStoreId(storeId?: string | null, storeIds?: Array<string | null | undefined>): string {
     const candidates = [storeId, ...(storeIds || [])];
     for (const candidate of candidates) {
@@ -372,6 +405,7 @@ interface User {
     storeIds?: string[]; // liste des magasins liés à l'utilisateur
     active?: boolean;
     pinEnabled?: boolean; // Activation du code PIN
+    authToken?: string;
 }
 interface UserRecord extends User {
     password?: string;
@@ -432,6 +466,9 @@ export function AuthProvider({ children }: {
                 if (storedUser) {
                     try {
                         const parsed = JSON.parse(storedUser);
+                        if (parsed?.authToken || parsed?.token) {
+                            await setAuthToken(String(parsed.authToken || parsed.token));
+                        }
                         // Check if user has PIN enabled before locking
                         const db = await getDB();
                         let userRecord = await db.get('users', parsed.id) as any;
@@ -494,13 +531,7 @@ export function AuthProvider({ children }: {
         try {
             const db = await getDB();
             // Normalize phone (allow passing with or without +226)
-            const candidatePhones = [] as string[];
-            const raw = String(phone || '').replace(/[^0-9+]/g, '');
-            if (raw.startsWith('+'))
-                candidatePhones.push(raw);
-            else
-                candidatePhones.push(`+226${raw}`);
-            candidatePhones.push(raw.replace(/^\+/, ''));
+            const candidatePhones = buildPhoneCandidates(phone);
             let backendIsUp = false;
             let remoteAttempted = false;
             let remoteReachable = false;
@@ -585,6 +616,7 @@ export function AuthProvider({ children }: {
                                 storeIds: (remoteUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
                                 active: remoteUser.active,
                                 pinEnabled: (remoteUser as any).pinEnabled || false,
+                                authToken: (remoteUser as any).token ? String((remoteUser as any).token) : undefined,
                             };
                             setUser(userData);
                             setPendingUser(null);
@@ -678,6 +710,7 @@ export function AuthProvider({ children }: {
                             storeIds: (localUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
                             active: localUser.active,
                             pinEnabled: (localUser as any).pinEnabled || false,
+                            authToken: await getAuthToken() || undefined,
                         };
                         setUser(userData);
                         setPendingUser(null);
@@ -722,6 +755,84 @@ export function AuthProvider({ children }: {
                 }
             }
             // Si aucune méthode n'a fonctionné
+            if (!localUser) {
+                try {
+                    const allUsers = await db.getAll('users') as UserRecord[];
+                    localUser = allUsers.find((candidate) => candidatePhones.some((p) => phonesMatch(p, candidate.phone)));
+                    if (localUser) {
+                        const localPasswordHash = localUser.passwordHash;
+                        const candidateHash = localPasswordHash ? await hashPasswordForCache(password) : '';
+                        const legacyPasswordMatches = !!(localUser.password === password);
+                        const hashedPasswordMatches = !!(localPasswordHash && localPasswordHash === candidateHash);
+                        if (legacyPasswordMatches || hashedPasswordMatches) {
+                            const primaryStoreId = resolvePrimaryStoreId(localUser.storeId, (localUser as any).storeIds);
+                            let localStoreIsInactive = false;
+                            if (localUser.role !== 'super_admin' && primaryStoreId) {
+                                try {
+                                    const localStore = await db.get('stores', primaryStoreId);
+                                    if (localStore) {
+                                        localStoreIsInactive = !isActiveFlag(localStore.active);
+                                    }
+                                }
+                                catch (e) {
+                                }
+                            }
+                            if (!isActiveFlag(localUser.active) && !localStoreIsInactive) {
+                                return false;
+                            }
+                            const userData = {
+                                id: localUser.id,
+                                username: localUser.username,
+                                phone: localUser.phone,
+                                email: localUser.email,
+                                role: localUser.role,
+                                storeId: primaryStoreId,
+                                storeIds: (localUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
+                                active: localUser.active,
+                                pinEnabled: (localUser as any).pinEnabled || false,
+                                authToken: await getAuthToken() || undefined,
+                            };
+                            setUser(userData);
+                            setPendingUser(null);
+                            setIsLocked(false);
+                            try {
+                                await secureStorage.setItem('pos-user', JSON.stringify(userData));
+                                try {
+                                    localStorage.setItem('pos-user', JSON.stringify(userData));
+                                }
+                                catch (e) { }
+                            }
+                            catch (e) {
+                                try {
+                                    localStorage.setItem('pos-user', JSON.stringify(userData));
+                                }
+                                catch (ee) { }
+                            }
+                            try {
+                                localStorage.removeItem(`pos-pin-fails-${userData.id}`);
+                                localStorage.removeItem(`pos-pin-locked-${userData.id}`);
+                            }
+                            catch (e) {
+                            }
+                            setPinFailState({ userId: userData.id, count: 0 });
+                            localStorage.removeItem('pos-login-last-error');
+                            try {
+                                await cleanupAdminCache();
+                            }
+                            catch (e) {
+                            }
+                            try {
+                                await sendLoginInboxNotification(userData);
+                            }
+                            catch (e) {
+                            }
+                            return true;
+                        }
+                    }
+                }
+                catch (e) {
+                }
+            }
             if (!remoteAttempted && !backendIsUp) {
                 localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
             }

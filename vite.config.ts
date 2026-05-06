@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       injectRegister: 'auto',
       devOptions: {
         enabled: false,
@@ -29,7 +29,8 @@ export default defineConfig(({ mode }) => ({
         theme_color: '#ffffff',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/',
+        start_url: '/#/',
+        scope: '/',
         icons: [
           {
             src: 'favicon/site.webmanifest',
@@ -47,9 +48,16 @@ export default defineConfig(({ mode }) => ({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [
+          /^\/backend\//,
+          /^\/api\//,
+          /^\/assets\//,
+          /^\/favicon\//,
+          /\/[^/?]+\.[^/]+$/,
+        ],
         // Améliorer la gestion des versions
         mode: 'generateSW',
-        swDest: 'sw.js',
         // Fichiers à précacher
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,webp,woff2}'
@@ -152,6 +160,10 @@ export default defineConfig(({ mode }) => ({
         ],
         // Code personnalisé pour gérer les mises à jour
         additionalManifestEntries: [
+          {
+            url: '/',
+            revision: null
+          },
           {
             url: '/offline.html',
             revision: null

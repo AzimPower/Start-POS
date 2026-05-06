@@ -46,6 +46,11 @@ type ShiftsViewSnapshot = {
     activeShift: Shift | null;
     loadedCount: number;
     hasMore: boolean;
+    computedDiffs: Record<string, {
+        expected: number | null;
+        difference: number | null;
+    }>;
+    encaisses: Record<string, number>;
 };
 let lastShiftsViewSnapshot: ShiftsViewSnapshot | null = null;
 function normalizeStoreIds(storeIds?: Array<string | null | undefined>, fallbackStoreId?: string | null) {
@@ -292,8 +297,8 @@ export default function Shifts() {
     const [computedDiffsState, setComputedDiffsState] = useState<Record<string, {
         expected: number | null;
         difference: number | null;
-    }>>({});
-    const [encaissesState, setEncaissesState] = useState<Record<string, number>>({});
+    }>>(() => lastShiftsViewSnapshot?.computedDiffs || {});
+    const [encaissesState, setEncaissesState] = useState<Record<string, number>>(() => lastShiftsViewSnapshot?.encaisses || {});
     // State pour suivre la synchronisation
     const [syncing, setSyncing] = useState(false);
     // Cache des ventes en mÃ©moire pour Ã©viter les appels DB rÃ©pÃ©tÃ©s
@@ -310,8 +315,10 @@ export default function Shifts() {
             activeShift,
             loadedCount,
             hasMore,
+            computedDiffs: computedDiffsState,
+            encaisses: encaissesState,
         };
-    }, [dataLoaded, shifts, cashiers, activeShift, loadedCount, hasMore]);
+    }, [dataLoaded, shifts, cashiers, activeShift, loadedCount, hasMore, computedDiffsState, encaissesState]);
     // Debounce pour la recherche (optimisation)
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -341,7 +348,10 @@ export default function Shifts() {
             return;
         salesRefreshInFlight.current = true;
         try {
-            const params = user?.storeId && user?.role !== 'super_admin' ? { storeId: String(user.storeId) } : undefined;
+            const params = {
+                ...(user?.storeId && user?.role !== 'super_admin' ? { storeId: String(user.storeId) } : {}),
+                all: '1',
+            };
             await fetchAndMerge(`${BACKEND_BASE}/api/sales.php`, 'sales', 'sales', undefined, params);
             await reconcileSalesToLastClosedShift(user?.storeId);
             const db = await getDB();
@@ -627,9 +637,10 @@ export default function Shifts() {
                 difference: number | null;
             }> = {};
             const encaissesResults: Record<string, number> = {};
-            // Utiliser le cache des ventes seulement si un shift ouvert en a besoin
-            let allSales = hasOpenShifts ? salesCache.current : [];
-            if (hasOpenShifts && allSales.length === 0) {
+            // Pour les shifts ouverts, lire les ventes fraîches depuis IndexedDB afin
+            // d'éviter qu'un cache de page ne garde un total obsolète.
+            let allSales = hasOpenShifts ? [] : [];
+            if (hasOpenShifts) {
                 const db = await getDB();
                 allSales = await db.getAll('sales');
                 salesCache.current = allSales;
@@ -661,9 +672,32 @@ export default function Shifts() {
                 }
                 // O(1) lookup au lieu de O(N) filter
                 let sales = salesByShiftId.get(shift.id) || [];
-                // Fallback: ventes sans shiftId dans l'intervalle de temps
-                if (salesNoShiftId.length > 0) {
-                    const shiftEnd = shift.closedAt || Date.now();
+                const shiftEnd = shift.closedAt || Date.now();
+                if (shift.status === 'open') {
+                    const salesById = new Map<string, any>();
+                    for (const sale of sales) {
+                        salesById.set(String(sale?.id || crypto.randomUUID()), sale);
+                    }
+                    for (const sale of allSales) {
+                        if (sale?.draft) {
+                            continue;
+                        }
+                        if (String(sale?.storeId || '') !== String(shift.storeId || '')) {
+                            continue;
+                        }
+                        if (String(sale?.userId || '') !== String(shift.userId || '')) {
+                            continue;
+                        }
+                        const saleTime = getSaleTime(sale);
+                        if (saleTime < shift.openedAt || saleTime > shiftEnd) {
+                            continue;
+                        }
+                        salesById.set(String(sale?.id || crypto.randomUUID()), sale);
+                    }
+                    sales = Array.from(salesById.values());
+                }
+                else if (salesNoShiftId.length > 0) {
+                    // Fallback: ventes sans shiftId dans l'intervalle de temps
                     const extra = salesNoShiftId.filter((s: any) => {
                         const t = getSaleTime(s);
                         return t >= shift.openedAt && t <= shiftEnd;
@@ -858,15 +892,21 @@ export default function Shifts() {
             return;
         refreshInFlight.current = true;
         try {
+            if (isOnline && isBackendReachable) {
+                await Promise.all([
+                    loadCashiers({ syncFromBackend: true }),
+                    loadShifts(),
+                    refreshSalesFromBackend(true),
+                ]);
+            }
+            else {
+                await loadCashiers({ syncFromBackend: false });
+            }
+
             const db = await getDB();
             const page = await loadShiftsPage(db, 0, pageSize, true);
-            await loadCashiers({ syncFromBackend: isOnline && isBackendReachable });
             if (Array.isArray(page) && page.some((shift: Shift) => shift.status === 'open')) {
                 await refreshLocalSalesCache(db);
-            }
-            if (isOnline && isBackendReachable) {
-                loadShifts().catch(() => { });
-                refreshSalesFromBackend(true).catch(() => { });
             }
         } catch (e) {
         }

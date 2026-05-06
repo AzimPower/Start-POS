@@ -389,7 +389,6 @@ export default function Expenses() {
             }
             else {
                 if (typeof lastCheck === 'number' && lastCheck > 0 && !isOnline) {
-                    toast.error('Mode hors ligne : chargement des données locales');
                 }
                 await loadFromLocal(db);
             }

@@ -10,6 +10,24 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 require_once '../config.php';
 
+function normalize_phone_digits($phone) {
+    return preg_replace('/\D+/', '', (string)$phone);
+}
+
+function phone_matches_any_candidate($storedPhone, array $normalizedCandidates, array $last8Candidates) {
+    $storedDigits = normalize_phone_digits($storedPhone);
+    if ($storedDigits === '') {
+        return false;
+    }
+
+    if (in_array($storedDigits, $normalizedCandidates, true)) {
+        return true;
+    }
+
+    $storedLast8 = substr($storedDigits, -8);
+    return $storedLast8 !== '' && in_array($storedLast8, $last8Candidates, true);
+}
+
 function normalize_store_ids($storeIds, $fallbackStoreId = null) {
     $normalized = [];
 
@@ -49,23 +67,33 @@ $phoneCandidates = array_values(array_unique(array_filter(array_map(function ($p
     return trim((string)$phone);
 }, $phoneCandidates))));
 
+$normalizedPhoneCandidates = array_values(array_unique(array_filter(array_map(function ($phone) {
+    return normalize_phone_digits($phone);
+}, $phoneCandidates))));
+
+$last8Candidates = array_values(array_unique(array_filter(array_map(function ($digits) {
+    return substr($digits, -8);
+}, $normalizedPhoneCandidates))));
+
 if (empty($phoneCandidates) || $password === '') {
     http_response_code(422);
     echo json_encode(['error' => 'Phone and password are required']);
     exit;
 }
 
-$placeholders = implode(',', array_fill(0, count($phoneCandidates), '?'));
-$stmt = $pdo->prepare(
+$stmt = $pdo->query(
     "SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt
      FROM users
-     WHERE phone IN ($placeholders)"
+     WHERE phone IS NOT NULL AND phone <> ''"
 );
-$stmt->execute($phoneCandidates);
 $users = $stmt->fetchAll();
 
 $authenticatedUser = null;
 foreach ($users as $candidate) {
+    if (!phone_matches_any_candidate($candidate['phone'] ?? '', $normalizedPhoneCandidates, $last8Candidates)) {
+        continue;
+    }
+
     $storedPassword = (string)($candidate['password'] ?? '');
     $isHashed = password_get_info($storedPassword)['algo'] !== null;
     $isValid = $isHashed ? password_verify($password, $storedPassword) : hash_equals($storedPassword, $password);

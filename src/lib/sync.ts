@@ -1394,7 +1394,10 @@ export async function refreshAllFromBackend(storeId?: string) {
     // Batch 2 : shifts et sales (en parallèle, doivent être terminés avant la réconciliation)
     await Promise.all([
         fetchAndMerge(`${API_BASE}/shifts.php`, 'shifts', 'shifts', undefined, params),
-        fetchAndMerge(`${API_BASE}/sales.php`, 'sales', 'sales', undefined, params),
+        fetchAndMerge(`${API_BASE}/sales.php`, 'sales', 'sales', undefined, {
+            ...(params || {}),
+            all: '1',
+        }),
     ]);
     await mergeOverlappingShiftsForStoreScope(storeId);
     await reconcileSalesToLastClosedShift(storeId);

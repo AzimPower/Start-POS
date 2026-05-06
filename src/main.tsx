@@ -7,6 +7,28 @@ import { toast } from 'sonner';
 import * as secureStorage from '@/lib/secureStorage';
 import '@/lib/versionDebug';
 import { installAuthenticatedFetch } from '@/lib/apiAuth';
+import { isDesktopApp } from '@/lib/runtime';
+
+function normalizeLegacyPathToHashRoute() {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    const { pathname, search, hash } = window.location;
+    if (hash.startsWith('#/')) {
+        return false;
+    }
+
+    const normalizedPath = pathname.replace(/\/+$/, '') || '/';
+    const ignoredPaths = new Set(['/sw.js', '/manifest.webmanifest', '/offline.html']);
+    if (normalizedPath === '/' || ignoredPaths.has(normalizedPath)) {
+        return false;
+    }
+
+    const nextHashRoute = `/#${pathname}${search || ''}`;
+    window.location.replace(nextHashRoute);
+    return true;
+}
 
 // Early back button handler: register before React mounts so we intercept native back immediately
 (async function registerEarlyBackHandler() {
@@ -70,9 +92,39 @@ function isIgnorableGlobalError(errorLike: any) {
         combined.includes('timeout');
 }
 
+function isDynamicImportFailure(errorLike: any) {
+    const name = String(errorLike?.name || '').trim();
+    const message = String(errorLike?.message || errorLike || '').trim();
+    const combined = `${name} ${message}`.toLowerCase();
+    return combined.includes('failed to fetch dynamically imported module') ||
+        combined.includes('importing a module script failed') ||
+        combined.includes('loading chunk') ||
+        combined.includes('chunkloaderror');
+}
+
+function tryRecoverFromChunkFailure(errorLike: any) {
+    if (!isDynamicImportFailure(errorLike)) {
+        return false;
+    }
+
+    const retryKey = '__pos_chunk_retry__';
+    const alreadyRetried = sessionStorage.getItem(retryKey) === '1';
+    if (!alreadyRetried) {
+        sessionStorage.setItem(retryKey, '1');
+        window.location.replace(isDesktopApp() ? '/#/dashboard' : '/');
+        return true;
+    }
+
+    sessionStorage.removeItem(retryKey);
+    return false;
+}
+
 // Gestion d'erreurs globales
 window.onerror = function (message, source, lineno, colno, error) {
     if (isIgnorableGlobalError(error || message)) {
+        return true;
+    }
+    if (tryRecoverFromChunkFailure(error || message)) {
         return true;
     }
     showGlobalError(message);
@@ -81,6 +133,10 @@ window.onerror = function (message, source, lineno, colno, error) {
 
 window.onunhandledrejection = function (event) {
     if (isIgnorableGlobalError(event.reason)) {
+        event.preventDefault();
+        return;
+    }
+    if (tryRecoverFromChunkFailure(event.reason)) {
         event.preventDefault();
         return;
     }
@@ -99,8 +155,13 @@ function showGlobalError(errorMsg: any) {
 }
 
 installAuthenticatedFetch();
-renderApp();
 registerServiceWorker();
+if (normalizeLegacyPathToHashRoute()) {
+    // Let the redirect complete before mounting React with the hash-based router.
+}
+else {
+renderApp();
+}
 
 // Delay printer auto-connect to avoid blocking app startup on slower Android devices.
 // Only reconnect the previously selected printer automatically.

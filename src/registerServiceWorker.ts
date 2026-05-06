@@ -1,4 +1,5 @@
 import { versionManager } from './lib/versionManager';
+import { isDesktopApp } from './lib/runtime';
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | undefined;
 
 async function cleanupDevelopmentServiceWorkers() {
@@ -26,6 +27,10 @@ async function cleanupDevelopmentServiceWorkers() {
 }
 // Service worker registration using vite-plugin-pwa
 export function registerServiceWorker() {
+    if (isDesktopApp()) {
+        return;
+    }
+
     if ('serviceWorker' in navigator) {
         if (import.meta.env.DEV) {
             void cleanupDevelopmentServiceWorkers();
@@ -38,6 +43,7 @@ export function registerServiceWorker() {
             import('virtual:pwa-register')
                 .then(({ registerSW }) => {
                 updateSW = registerSW({
+                    immediate: true,
                     onNeedRefresh() {
                         // Ne notifier que si ce n'est pas en développement
                         if (versionManager.getCurrentVersion().environment === 'production') {
@@ -89,6 +95,10 @@ export function registerServiceWorker() {
 }
 // Fallback service worker registration for development
 function registerServiceWorkerFallback() {
+    if (isDesktopApp()) {
+        return;
+    }
+
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', async () => {
             try {
@@ -144,6 +154,10 @@ export const forceUpdateApp = () => {
 };
 // Fonction pour vérifier manuellement les mises à jour
 export const checkForUpdates = async () => {
+    if (isDesktopApp()) {
+        return;
+    }
+
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
         try {
             navigator.serviceWorker.controller.postMessage({
