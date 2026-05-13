@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
+import { tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
+import { buildPlainTextReceiptHtml } from '@/lib/saleReceiptDocument';
+import { getReceiptPaperLayout } from '@/lib/receiptPaper';
 export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
     selectedShift: any;
     cashiers: any[];
@@ -235,9 +237,10 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
         resolveCashier();
         return () => { isMounted = false; };
     }, [selectedShift, cashiers]);
+    const previewLayout = getReceiptPaperLayout('80');
     return (<div id="shift-receipt-print" className="font-mono text-xs p-2 border rounded bg-white" style={{
             width: '100%',
-            maxWidth: '260px', // largeur réduite pour reçu plus long
+            maxWidth: `${previewLayout.contentWidthMm}mm`,
             minHeight: '480px', // hauteur augmentée
             margin: '0 auto',
             boxSizing: 'border-box',
@@ -398,10 +401,6 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                     difference = encaisseNetVentesPrint - expected;
                 }
             }
-            const printContent = document.getElementById('shift-receipt-print');
-            if (!printContent)
-                return;
-            const html = buildReceiptHtml(printContent, 'Rapport service');
             try {
                 // Try native ESC/POS: build plain-text representation directly from data
                 const lines: string[] = [];
@@ -465,8 +464,18 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const encaisseNetTotal = formatMoney(cash + mobile_money);
                 const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(encaisseNetTotal + ' FCFA'), width);
                 lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
+                const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+                const printableLogo = storedLogoSource
+                    ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
+                    : undefined;
+                const html = buildPlainTextReceiptHtml({
+                    lines,
+                    title: 'Rapport service',
+                    paper: paper === '58' ? '58' : '80',
+                    logoSource: printableLogo,
+                });
                 const printed = await NativePrinter.printText(lines, undefined, {
-                    logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
+                    logoSource: printableLogo,
                     paper: paper === '58' ? '58' : '80',
                     title: `Rapport-${selectedShift?.id || 'service'}`
                 });

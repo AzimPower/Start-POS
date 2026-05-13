@@ -97,6 +97,7 @@ export default function Settings() {
     const { user } = useAuth();
     const runtimeLabel = getRuntimeLabel();
     const isWebPrinterDialogMode = runtimeLabel === 'web';
+    const [isWideDesktop, setIsWideDesktop] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
     // Store balance admin section state
     const [store, setStore] = useState<any | null>(null);
     const [loadingStore, setLoadingStore] = useState(false);
@@ -104,11 +105,10 @@ export default function Settings() {
     const [manualValue, setManualValue] = useState<string>('');
     const [note, setNote] = useState<string>('');
     const [confirmOpen, setConfirmOpen] = useState(false);
-    const [isWideDesktop, setIsWideDesktop] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
-    const [printerOpen, setPrinterOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
-    const [notificationsOpen, setNotificationsOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
-    const [pinSectionOpen, setPinSectionOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
-    const [appearanceOpen, setAppearanceOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+    const [printerOpen, setPrinterOpen] = useState(false);
+    const [notificationsOpen, setNotificationsOpen] = useState(false);
+    const [pinSectionOpen, setPinSectionOpen] = useState(false);
+    const [appearanceOpen, setAppearanceOpen] = useState(false);
     // Email notification settings
     const [emailSettings, setEmailSettings] = useState<StoreAlertSettings>(DEFAULT_STORE_ALERT_SETTINGS);
     const [loadingEmailSettings, setLoadingEmailSettings] = useState(false);
@@ -127,25 +127,12 @@ export default function Settings() {
     const [selectedFondCats, setSelectedFondCats] = useState<Array<string>>([]);
     const [selectedBenefCats, setSelectedBenefCats] = useState<Array<string>>([]);
     useEffect(() => {
-        const syncResponsiveSections = () => {
-            const mobile = window.innerWidth < 768;
-            const wideDesktop = window.innerWidth >= 1280;
-            setIsWideDesktop(wideDesktop);
-            if (mobile) {
-                setPrinterOpen(false);
-                setNotificationsOpen(false);
-                setPinSectionOpen(false);
-                setAppearanceOpen(false);
-                return;
-            }
-            if (wideDesktop) {
-                setPinSectionOpen(true);
-                setAppearanceOpen(true);
-            }
+        const syncLayoutMode = () => {
+            setIsWideDesktop(window.innerWidth >= 1280);
         };
-        syncResponsiveSections();
-        window.addEventListener('resize', syncResponsiveSections);
-        return () => window.removeEventListener('resize', syncResponsiveSections);
+        syncLayoutMode();
+        window.addEventListener('resize', syncLayoutMode);
+        return () => window.removeEventListener('resize', syncLayoutMode);
     }, []);
     // Format currency for XOF
     function formatCurrency(v: number | string | undefined | null) {
@@ -2144,13 +2131,15 @@ export default function Settings() {
           {/* PIN Security Configuration card */}
                                         <Card className={`${elevatedCardClassName} xl:col-span-5`}>
                         <CardHeader className="space-y-4 pb-4">
-                                                        <SettingsSectionHeading icon={Shield} title="Sécurité par code PIN" description="Ajoutez un code PIN demandé au retour sur l'application pour sécuriser le poste." action={isWideDesktop ? <Badge variant="outline" className={pinEnabled ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>
+                                                        <SettingsSectionHeading icon={Shield} title="Sécurité par code PIN" description="Ajoutez un code PIN demandé au retour sur l'application pour sécuriser le poste." action={<Badge variant="outline" className={pinEnabled ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>
                                         {pinEnabled ? 'Protection active' : 'Protection inactive'}
-                                    </Badge> : <SectionToggleButton open={pinSectionOpen} onClick={() => setPinSectionOpen((current) => !current)}/>}/>
+                                    </Badge>}/>
             </CardHeader>
-            <Collapsible open={pinSectionOpen} onOpenChange={setPinSectionOpen} disabled={isWideDesktop}>
-              <CollapsibleContent>
             <CardContent>
+                            <div className="mb-4 xl:hidden">
+                                <SectionToggleButton open={pinSectionOpen} onClick={() => setPinSectionOpen((current) => !current)}/>
+                            </div>
+                            <div className={`${!isWideDesktop && !pinSectionOpen ? 'hidden' : 'block'}`}>
                             <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
                                                                 <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
                                     <p className="text-sm font-medium">État actuel</p>
@@ -2199,18 +2188,19 @@ export default function Settings() {
                   </DialogContent>
                 </Dialog>
               </div>
+              </div>
             </CardContent>
-              </CollapsibleContent>
-            </Collapsible>
           </Card>
           {/* Appearance / Logo card */}
                                         <Card className={`${elevatedCardClassName} xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
-                                                        <SettingsSectionHeading icon={Palette} title="Apparence" description="Ajustez le thème et l’identité visuelle affichée sur les reçus et dans l’interface." action={isWideDesktop ? <Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{darkMode ? 'Mode sombre' : 'Mode clair'}</Badge> : <SectionToggleButton open={appearanceOpen} onClick={() => setAppearanceOpen((current) => !current)}/>}/>
+                                                        <SettingsSectionHeading icon={Palette} title="Apparence" description="Ajustez le thème et l’identité visuelle affichée sur les reçus et dans l’interface." action={<Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{darkMode ? 'Mode sombre' : 'Mode clair'}</Badge>}/>
             </CardHeader>
-            <Collapsible open={appearanceOpen} onOpenChange={setAppearanceOpen} disabled={isWideDesktop}>
-              <CollapsibleContent>
             <CardContent>
+                            <div className="mb-4 xl:hidden">
+                                <SectionToggleButton open={appearanceOpen} onClick={() => setAppearanceOpen((current) => !current)}/>
+                            </div>
+                            <div className={`${!isWideDesktop && !appearanceOpen ? 'hidden' : 'block'}`}>
                             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:items-start">
                                 <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
                                 <div className="flex items-center justify-between gap-4">
@@ -2257,9 +2247,8 @@ export default function Settings() {
                   </div>
                 </div>
               </div>
+              </div>
             </CardContent>
-              </CollapsibleContent>
-            </Collapsible>
           </Card>
         </div>
 

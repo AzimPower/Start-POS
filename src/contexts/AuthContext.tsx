@@ -5,7 +5,7 @@ import * as secureStorage from '@/lib/secureStorage';
 import { refreshAllFromBackend } from '@/lib/sync';
 import { BACKEND_BASE, backendAvailable } from '@/lib/backend';
 import { pendingEmailService } from '@/lib/pendingEmailService';
-import { isActiveFlag } from '@/lib/status';
+import { getStoreAccessState, isActiveFlag } from '@/lib/status';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { hashPasswordForCache } from '@/lib/auth';
 import { clearAuthToken, getAuthToken, setAuthToken } from '@/lib/apiAuth';
@@ -862,7 +862,32 @@ export function AuthProvider({ children }: {
         try {
             if (!user)
                 return;
-            const newUser = { ...user, storeId } as User;
+            const previousStoreId = String(user.storeId || '').trim();
+            const nextStoreId = String(storeId || '').trim();
+            if (!nextStoreId) {
+                throw new Error('Magasin invalide');
+            }
+            try {
+                const db = await getDB();
+                const targetStore = await db.get('stores', nextStoreId);
+                if (targetStore) {
+                    const accessState = getStoreAccessState(targetStore);
+                    if (!accessState.active) {
+                        throw new Error(accessState.reason === 'expired'
+                            ? `Le magasin ${targetStore.name || nextStoreId} est expire. Retour sur le magasin precedent.`
+                            : `Le magasin ${targetStore.name || nextStoreId} est desactive. Retour sur le magasin precedent.`);
+                    }
+                }
+            }
+            catch (validationError) {
+                if (validationError instanceof Error) {
+                    throw validationError;
+                }
+                throw new Error(previousStoreId
+                    ? 'Impossible de verifier le magasin cible. Retour sur le magasin precedent.'
+                    : 'Impossible de verifier le magasin cible.');
+            }
+            const newUser = { ...user, storeId: nextStoreId } as User;
             setUser(newUser);
             try {
                 await secureStorage.setItem('pos-user', JSON.stringify(newUser));
@@ -882,13 +907,14 @@ export function AuthProvider({ children }: {
                 const db = await getDB();
                 const rec = await db.get('users', newUser.id);
                 if (rec) {
-                    await db.put('users', { ...rec, storeId });
+                    await db.put('users', { ...rec, storeId: nextStoreId });
                 }
             }
             catch (e) {
             }
         }
         catch (e) {
+            throw e;
         }
     };
     // Verify PIN: the PINs are expected to be stored in the local DB users table

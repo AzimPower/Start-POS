@@ -4,7 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetwork } from '@/hooks/useNetwork';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
-import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
+import { tryNativePrint } from '@/lib/print';
 import { getEmailSettings } from '@/lib/emailSettingsCache';
 import { emailService } from '@/lib/emailService';
 import { pendingEmailService } from '@/lib/pendingEmailService';
@@ -26,6 +26,7 @@ import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShifts
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
+import { buildPlainTextReceiptHtml } from '@/lib/saleReceiptDocument';
 interface Shift {
     id: string;
     userId: string;
@@ -1147,21 +1148,22 @@ export default function Shifts() {
             lines.push(NativePrinter.formatColumns('Mobile Money :', `${formatMoney(mobile)} FCFA`, width));
             lines.push(NativePrinter.formatColumns('Total encaisse :', `${formatMoney(totalPaid)} FCFA`, width));
             lines.push('');
+            const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const printableLogo = storedLogoSource
+                ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
+                : undefined;
             const ok = await NativePrinter.printText(lines, undefined, {
-                logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
+                logoSource: printableLogo,
                 paper: paper === '58' ? '58' : '80',
                 title: `Rapport-${shift.id}`
             });
             if (!ok) {
-                // fallback: build simple HTML using the same lines
-                const tmp = document.createElement('div');
-                tmp.innerHTML = `
-          <div class="receipt font-mono">
-            <h3>${storeName}</h3>
-            <pre>${lines.join('\n')}</pre>
-          </div>
-        `;
-                const html = buildReceiptHtml(tmp, 'Rapport service');
+                const html = buildPlainTextReceiptHtml({
+                    lines,
+                    title: 'Rapport service',
+                    paper: paper === '58' ? '58' : '80',
+                    logoSource: printableLogo,
+                });
                 const used = await tryNativePrint(html, `Rapport-${shift.id}`);
                 if (!used) {
                 }

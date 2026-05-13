@@ -488,7 +488,9 @@ export default function Stores() {
         }
         catch (e) {
             setIsSwitching(false);
-            toast.error('Impossible de basculer sur ce magasin');
+            const message = e instanceof Error && e.message ? e.message : 'Impossible de basculer sur ce magasin';
+            toast.error(message);
+            setSwitchingStore(null);
         }
     };
     const renderStoreSwitchDialog = () => {

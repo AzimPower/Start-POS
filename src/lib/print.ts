@@ -51,13 +51,43 @@ async function browserPrint(html: string, title = 'Impression'): Promise<boolean
         iframe.style.border = '0';
         iframe.style.opacity = '0';
         iframe.onload = () => {
-            window.setTimeout(() => {
+            window.setTimeout(async () => {
                 try {
                     const frameWindow = iframe.contentWindow;
+                    const frameDocument = iframe.contentDocument;
                     if (!frameWindow) {
                         finish(false);
                         return;
                     }
+                    if (frameDocument) {
+                        const images = Array.from(frameDocument.images || []);
+                        await Promise.all(images.map((image) => {
+                            if (image.complete) {
+                                return Promise.resolve();
+                            }
+                            return new Promise<void>((imageResolve) => {
+                                const done = () => imageResolve();
+                                image.addEventListener('load', done, { once: true });
+                                image.addEventListener('error', done, { once: true });
+                            });
+                        }));
+                        if (frameDocument.fonts?.ready) {
+                            try {
+                                await frameDocument.fonts.ready;
+                            }
+                            catch (e) {
+                            }
+                        }
+                    }
+                    if ((frameWindow as any).__START_POS_RENDER_DONE === false) {
+                        const startedAt = Date.now();
+                        while ((frameWindow as any).__START_POS_RENDER_DONE === false && (Date.now() - startedAt) < 2500) {
+                            await new Promise((waitResolve) => window.setTimeout(waitResolve, 50));
+                        }
+                    }
+                    await new Promise((frameResolve) => frameWindow.requestAnimationFrame(() => {
+                        frameWindow.requestAnimationFrame(() => frameResolve(undefined));
+                    }));
                     frameWindow.onafterprint = () => finish(true);
                     frameWindow.focus();
                     frameWindow.print();
@@ -66,7 +96,7 @@ async function browserPrint(html: string, title = 'Impression'): Promise<boolean
                 catch (e) {
                     finish(false);
                 }
-            }, 250);
+            }, 100);
         };
         try {
             iframe.srcdoc = html;

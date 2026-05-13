@@ -1008,8 +1008,12 @@ export default function POS() {
                                 }
                             }
                             const mac = printerMacRef.current || localStorage.getItem('printer_mac') || undefined;
+                            const storedLogoSource = receiptData.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+                            const printableLogo = storedLogoSource
+                                ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
+                                : undefined;
                             const ok = await NativePrinter.printText(lines, mac as any, {
-                                logoSource: receiptData.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
+                                logoSource: printableLogo,
                                 paper: paper === '58' ? '58' : '80',
                                 title: `Recu-${receiptData.receiptNumber || 'vente'}`
                             });

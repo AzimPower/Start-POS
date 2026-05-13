@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowLeft, CalendarDays, Eye, Loader2, Phone, Printer, ReceiptText, RefreshCcw, Search, Store } from 'lucide-react';
 import { toast } from 'sonner';
-import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
+import { tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +16,7 @@ import Receipt from '@/components/Receipt';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
+import { buildSaleReceiptHtml, buildSaleReceiptLines } from '@/lib/saleReceiptDocument';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { BACKEND_BASE } from '@/lib/backend';
@@ -358,99 +359,45 @@ export default function CustomerReceipts() {
             const receiptNumber = formatReceiptNumber(sale, sales);
             const date = new Date(sale.createdAt);
             const receiptSettings = await getStoreReceiptSettings(sale.storeId || '');
-            const lines: string[] = [];
-
-            const centerText = (value: string, width: number) => {
-                const normalizedValue = (value || '').toString();
-
-                if (normalizedValue.length >= width) {
-                    return normalizedValue;
-                }
-
-                const left = Math.floor((width - normalizedValue.length) / 2);
-                return ' '.repeat(left) + normalizedValue;
-            };
-
             const paper = localStorage.getItem('printer_paper') || '80';
-            const width = paper === '58' ? 32 : 48;
-
-            lines.push(centerText(store.name || 'Magasin', width));
-            if (store.address) {
-                lines.push(centerText(store.address, width));
-            }
-
-            lines.push('');
-            lines.push(NativePrinter.formatColumns(date.toLocaleString('fr-FR'), `Recu N°: ${receiptNumber}`, width));
-            lines.push('--------------------------------');
-
-            for (const item of sale.items || []) {
-                const name = item.name || '';
-                const quantity = Number(item.quantity) || 0;
-                const price = Number.isNaN(Number(item.price)) ? 0 : Math.round(Number(item.price));
-                const totalItem = Math.round(getReceiptItemDisplayTotal(item, sale));
-                const quantityText = `${quantity} x ${price} FCFA`;
-                const totalText = `${totalItem} FCFA`;
-                const leftFull = `${name} ${quantityText}`.trim();
-
-                if (leftFull.length + 1 + totalText.length <= width) {
-                    lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
-                }
-                else if (name.length + 1 + totalText.length <= width) {
-                    lines.push(NativePrinter.formatColumns(name, totalText, width));
-                    lines.push(NativePrinter.formatColumns(quantityText, '', width));
-                }
-                else {
-                    lines.push(NativePrinter.formatColumns(name, totalText, width));
-                    lines.push(NativePrinter.formatColumns(quantityText, '', width));
-                }
-            }
-
-            lines.push('--------------------------------');
-            lines.push(NativePrinter.formatColumns('Sous-total:', formatCurrency(sale.subtotal || 0), width));
-            lines.push(NativePrinter.formatColumns('TVA:', formatCurrency(sale.tax || 0), width));
-            lines.push(NativePrinter.formatColumns('TOTAL:', formatCurrency(sale.total || 0), width));
-            lines.push('');
-            lines.push(NativePrinter.formatColumns('Mode de paiement:', getPaymentMethodText(sale.paymentMethod), width));
-
-            if (sale.payments?.length) {
-                for (const payment of sale.payments) {
-                    const label = payment.method === 'cash' ? 'Especes' : payment.method === 'mobile_money' ? 'Mobile Money' : payment.method;
-                    lines.push(NativePrinter.formatColumns(`${label}:`, formatCurrency(payment.amount || 0), width));
-                }
-            }
             const footerLines = getReceiptFooterLines(receiptSettings.thankYouMessage);
-            if (footerLines.length > 0) {
-                lines.push('');
-                for (const line of footerLines) {
-                    lines.push(centerText(line, width));
-                }
-            }
+            const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const printableLogo = storedLogoSource
+                ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
+                : undefined;
+            const receiptDocument = {
+                storeName: store.name || 'Magasin',
+                storeAddress: store.address || '',
+                receiptNumber,
+                dateText: date.toLocaleString('fr-FR'),
+                items: (sale.items || []).map((item) => ({
+                    name: item.name || '',
+                    quantity: Number(item.quantity) || 0,
+                    unitPrice: Number.isNaN(Number(item.price)) ? 0 : Math.round(Number(item.price)),
+                    displayTotal: Math.round(getReceiptItemDisplayTotal(item, sale)),
+                })),
+                subtotal: sale.subtotal || 0,
+                tax: sale.tax || 0,
+                total: sale.total || 0,
+                paymentMethod: sale.paymentMethod || '',
+                paymentDetails: sale.payments?.map((payment) => ({
+                    label: payment.method === 'cash' ? 'Especes' : payment.method === 'mobile_money' ? 'Mobile Money' : payment.method,
+                    amount: payment.amount || 0,
+                })) || [],
+                footerLines,
+                paper: paper === '58' ? '58' : '80',
+                logoSource: printableLogo,
+            } as const;
+            const lines = buildSaleReceiptLines(receiptDocument);
 
             const printed = await NativePrinter.printText(lines, undefined, {
-                logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
+                logoSource: receiptDocument.logoSource,
                 paper: paper === '58' ? '58' : '80',
                 title: `Recu-${receiptNumber}`
             });
 
             if (!printed) {
-                const tmp = document.createElement('div');
-                tmp.innerHTML = `
-          <div>
-            <h2>${store.name || 'Magasin'}</h2>
-            <div>${store.address || ''}</div>
-            <div>Recu N°: ${receiptNumber}</div>
-            <div>Date: ${date.toLocaleString('fr-FR')}</div>
-            <hr/>
-            ${(sale.items || []).map((item) => `<div>${item.name} - ${item.quantity} x ${Math.round(item.price || 0)} = ${Math.round(item.total || 0)}</div>`).join('')}
-            <hr/>
-            <div>Sous-total: ${Math.round(sale.subtotal || 0)} FCFA</div>
-            <div>TVA: ${Math.round(sale.tax || 0)} FCFA</div>
-            <div><strong>TOTAL: ${Math.round(sale.total || 0)} FCFA</strong></div>
-            ${footerLines.length > 0 ? `<hr/><div>${footerLines.join('<br/>')}</div>` : ''}
-          </div>
-        `;
-
-                const html = buildReceiptHtml(tmp, `Reçu-${receiptNumber}`);
+                const html = buildSaleReceiptHtml(receiptDocument, `Recu-${receiptNumber}`);
                 const usedNative = await tryNativePrint(html, `Reçu-${receiptNumber}`);
 
                 if (!usedNative) {
