@@ -10,6 +10,7 @@ import { ArrowLeft, CalendarDays, Eye, Loader2, Phone, Printer, ReceiptText, Ref
 import { toast } from 'sonner';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { Badge } from '@/components/ui/badge';
 import Receipt from '@/components/Receipt';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
@@ -384,7 +385,7 @@ export default function CustomerReceipts() {
                 const name = item.name || '';
                 const quantity = Number(item.quantity) || 0;
                 const price = Number.isNaN(Number(item.price)) ? 0 : Math.round(Number(item.price));
-                const totalItem = Number.isNaN(Number(item.total)) ? quantity * price : Math.round(Number(item.total));
+                const totalItem = Math.round(getReceiptItemDisplayTotal(item, sale));
                 const quantityText = `${quantity} x ${price} FCFA`;
                 const totalText = `${totalItem} FCFA`;
                 const leftFull = `${name} ${quantityText}`.trim();
@@ -419,7 +420,11 @@ export default function CustomerReceipts() {
             lines.push('');
             lines.push('Merci pour votre visite !');
 
-            const printed = await NativePrinter.printText(lines);
+            const printed = await NativePrinter.printText(lines, undefined, {
+                logoSource: NativePrinter.getStoredPrintableLogo(),
+                paper: paper === '58' ? '58' : '80',
+                title: `Recu-${receiptNumber}`
+            });
 
             if (!printed) {
                 const tmp = document.createElement('div');

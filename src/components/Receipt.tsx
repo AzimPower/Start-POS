@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { getReceiptPaperLayout, getStoredReceiptPaper } from '@/lib/receiptPaper';
+import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Printer } from 'lucide-react';
@@ -50,6 +52,7 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
         const printContent = receiptRef.current;
         if (!printContent)
             return;
+        const paperLayout = getReceiptPaperLayout();
         // Build HTML for automatic/native flows that expect HTML
         const html = `<!DOCTYPE html>
       <html>
@@ -57,8 +60,9 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
           <meta charset="utf-8">
           <title>Reçu #${receiptNumber}</title>
           <style>
+            @page { size: ${paperLayout.pageWidthMm}mm auto; margin: 0; }
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Courier New', monospace; width: 80mm; padding: 5mm; font-size: 11px; }
+            body { font-family: 'Courier New', monospace; width: ${paperLayout.pageWidthMm}mm; padding: ${paperLayout.paddingMm}mm; font-size: 11px; }
             .receipt { width: 100%; }
             .header { text-align: center; margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
             .store-name { font-size: 14px; font-weight: bold; margin-bottom: 5px; }
@@ -73,7 +77,7 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
             .total-row.grand-total { font-weight: bold; font-size: 13px; margin-top: 5px; padding-top: 5px; border-top: 1px solid #000; }
             .payment-info { border-top: 1px dashed #000; padding-top: 10px; margin-bottom: 10px; }
             .footer { text-align: center; margin-top: 15px; border-top: 1px dashed #000; padding-top: 10px; font-size: 10px; }
-            @media print { body { width: 80mm; } }
+            @media print { body { width: ${paperLayout.pageWidthMm}mm; } }
           </style>
         </head>
         <body>
@@ -84,16 +88,6 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
         // styles don't get included as literal text. Build a concise text representation
         // and send via NativePrinter.printText. If that fails, fall back to tryNativePrint.
         try {
-            // If a store logo is saved (data URL or URL) print it first (centered)
-            const savedLogo = localStorage.getItem('storeLogo');
-            if (savedLogo) {
-                try {
-                    const paper = localStorage.getItem('printer_paper') || '80';
-                    await NativePrinter.printImage(savedLogo, undefined, paper === '58' ? '58' : '80');
-                }
-                catch (e) {
-                }
-            }
             const lines: string[] = [];
             // small helper to center text for plain-text ESC/POS receipts
             const centerText = (s: string, w: number) => {
@@ -103,7 +97,7 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
                 const left = Math.floor((w - str.length) / 2);
                 return ' '.repeat(left) + str;
             };
-            const paper = localStorage.getItem('printer_paper') || '80';
+            const paper = getStoredReceiptPaper();
             const width = paper === '58' ? 32 : 48;
             // Center store name and address
             lines.push(centerText(storeName || 'Magasin', width));
@@ -117,7 +111,7 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
                 const name = it.name;
                 const qty = it.quantity;
                 const price = isNaN(it.price) ? 0 : Math.round(it.price);
-                const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
+                const totalItem = Math.round(getReceiptItemDisplayTotal(it, { subtotal, tax, total }));
                 const qtyText = `${qty} x ${price} FCFA`;
                 const totalText = `${totalItem} FCFA`;
                 const leftFull = (name + ' ' + qtyText).trim();
@@ -161,7 +155,11 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
             }
             lines.push('');
             lines.push('Merci pour votre visite !');
-            const printed = await NativePrinter.printText(lines);
+            const printed = await NativePrinter.printText(lines, undefined, {
+                logoSource: NativePrinter.getStoredPrintableLogo(),
+                paper: paper === '58' ? '58' : '80',
+                title: 'Recu'
+            });
             if (!printed) {
                 // fallback: try native print with HTML as older path
                 const usedNative = await tryNativePrint(html, `Reçu-${receiptNumber}`);
@@ -230,7 +228,7 @@ export default function Receipt({ open, onOpenChange, storeName, storeAddress, i
                 <div className="item-name font-bold">{item.name}</div>
                 <div className="item-details flex justify-between text-xs">
                   <span>{item.quantity} x {isNaN(item.price) ? 0 : item.price.toFixed(0)} FCFA</span>
-                  <span>{isNaN(item.total) ? (item.quantity * (isNaN(item.price) ? 0 : item.price)).toFixed(0) : item.total.toFixed(0)} FCFA</span>
+                  <span>{getReceiptItemDisplayTotal(item, { subtotal, tax, total }).toFixed(0)} FCFA</span>
                 </div>
               </div>))}
           </div>

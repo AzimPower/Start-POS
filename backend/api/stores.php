@@ -22,6 +22,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once '../config.php';
+require_once '../store_metrics.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -61,6 +62,29 @@ function resolve_track_indirect_enabled_at($nextTracking, $requestedEnabledAt, $
 try {
     switch ($method) {
         case 'GET':
+            $includeInactiveFast = isset($_GET['include_inactive']) && $_GET['include_inactive'] === '1' && is_super_admin_claims($authClaims);
+            if (is_super_admin_claims($authClaims)) {
+                if ($includeInactiveFast) {
+                    $stmt = $pdo->query('SELECT * FROM stores');
+                    $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                } else {
+                    $stmt = $pdo->prepare('SELECT * FROM stores WHERE active = 1');
+                    $stmt->execute();
+                    $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
+            } else {
+                $allowedStoreIdsFast = get_claim_store_ids($authClaims);
+                if (empty($allowedStoreIdsFast)) {
+                    echo json_encode([]);
+                    break;
+                }
+                $placeholdersFast = implode(',', array_fill(0, count($allowedStoreIdsFast), '?'));
+                $stmt = $pdo->prepare("SELECT * FROM stores WHERE active = 1 AND id IN ($placeholdersFast)");
+                $stmt->execute($allowedStoreIdsFast);
+                $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            echo json_encode(store_metrics_build_for_stores($pdo, $stores));
+            break;
             // Retourne la liste des magasins en incluant le solde calculé
             // Par défaut on ne renvoie que les magasins actifs (active = 1)
             // Pour le super-admin ou debug vous pouvez ajouter `?include_inactive=1`
@@ -464,6 +488,7 @@ try {
                         $sql = 'INSERT INTO store_balance_overrides (id, storeId, value, appliedAt, userId, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)';
                         $stmt = $pdo->prepare($sql);
                         $stmt->execute([$id, $storeId, $value, $appliedAt, $userId, $note, (int)(microtime(true)*1000)]);
+                        store_metrics_invalidate_cache($storeId);
                         echo json_encode(['success' => true, 'id' => $id]);
                     } catch (PDOException $ex) {
                         http_response_code(500);
@@ -488,6 +513,7 @@ try {
                         $sql = 'INSERT INTO store_indicator_overrides (id, storeId, indicator, value, appliedAt, userId, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
                         $stmt = $pdo->prepare($sql);
                         $stmt->execute([$id, $storeId, $indicator, $value, $appliedAt, $userId, $note, (int)(microtime(true)*1000)]);
+                        store_metrics_invalidate_cache($storeId);
                         echo json_encode(['success' => true, 'id' => $id]);
                     } catch (PDOException $ex) {
                         http_response_code(500);
@@ -517,6 +543,7 @@ try {
                             $id = $data['id'] ?? uniqid();
                             $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
                             $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $now]);
+                            store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
                             if ($trackIndirectExpenses === null) {
@@ -526,6 +553,7 @@ try {
                                 $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, updatedAt = ? WHERE storeId = ?');
                                 $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $storeId]);
                             }
+                            store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true]);
                         }
                     } catch (PDOException $ex) {
@@ -552,10 +580,12 @@ try {
                             $id = $data['id'] ?? uniqid();
                             $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
                             $ins->execute([$id, $storeId, null, null, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $now]);
+                            store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
                             $upd = $pdo->prepare('UPDATE store_balance_settings SET trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, updatedAt = ? WHERE storeId = ?');
                             $upd->execute([$trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $storeId]);
+                            store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true]);
                         }
                     } catch (PDOException $ex) {
@@ -586,6 +616,7 @@ try {
                     $data['subscriptionEnd'] ?? null,
                     $data['lastPayment'] ?? null
                 ]);
+                store_metrics_invalidate_cache($id);
 
                 // Optionally link or create an admin for this store
                 if (!empty($data['adminId']) || !empty($data['admin'])) {
@@ -659,6 +690,7 @@ try {
                 array_key_exists('lastPayment', $data) ? $data['lastPayment'] : $existingStore['lastPayment'],
                 $data['id']
             ]);
+            store_metrics_invalidate_cache($data['id']);
 
             // If adminId provided during edit, create mapping to this store
             if (!empty($data['adminId'])) {
@@ -698,6 +730,7 @@ try {
                     try {
                         $upd = $pdo->prepare('UPDATE stores SET active = 0 WHERE id = ?');
                         $upd->execute([$id]);
+                        store_metrics_invalidate_cache($id);
                         echo json_encode(['success' => true, 'soft' => true, 'id' => $id]);
                     } catch (PDOException $ex) {
                         http_response_code(500);
@@ -815,11 +848,13 @@ try {
                     $stmt->execute([$id]);
                     $stmt = $pdo->prepare('DELETE FROM store_indicator_overrides WHERE storeId=?');
                     $stmt->execute([$id]);
+                    store_metrics_delete_store_summaries($pdo, (string)$id);
                     // Enfin, supprimer le magasin
                     $stmt = $pdo->prepare('DELETE FROM stores WHERE id=?');
                     $stmt->execute([$id]);
                     $deleted = $stmt->rowCount();
                     $pdo->commit();
+                    store_metrics_invalidate_cache((string)$id);
                     error_log('Résultat suppression magasin: ' . $deleted . ' ligne(s) supprimée(s)');
                     echo json_encode(['success' => true, 'deleted' => $deleted]);
                 } catch (PDOException $ex) {

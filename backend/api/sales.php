@@ -12,6 +12,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once '../config.php';
+require_once '../store_metrics.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -354,6 +355,11 @@ switch ($method) {
             }
 
             $pdo->commit();
+            store_metrics_refresh_sales_summary_for_timestamp($pdo, $data['storeId'] ?? null, (int)($data['createdAt'] ?? time() * 1000));
+            if (!empty($data['shiftId'])) {
+                store_metrics_refresh_sales_summaries_for_shift($pdo, (string)$data['shiftId'], $data['storeId'] ?? null);
+            }
+            store_metrics_invalidate_cache($data['storeId'] ?? null);
             echo json_encode(['success' => true, 'id' => $id]);
         } catch (Exception $exception) {
             if ($pdo->inTransaction()) {
@@ -380,10 +386,13 @@ switch ($method) {
         try {
             $pdo->beginTransaction();
 
-            $existingSaleStmt = $pdo->prepare('SELECT refunded, refundedAt FROM sales WHERE id = ? LIMIT 1 FOR UPDATE');
+            $existingSaleStmt = $pdo->prepare('SELECT refunded, refundedAt, storeId, createdAt, shiftId FROM sales WHERE id = ? LIMIT 1 FOR UPDATE');
             $existingSaleStmt->execute([$data['id'] ?? '']);
             $existingSale = $existingSaleStmt->fetch(PDO::FETCH_ASSOC);
             $wasRefunded = $existingSale ? is_refunded_sale_flag($existingSale['refunded'] ?? false) : false;
+            $previousStoreId = $existingSale['storeId'] ?? null;
+            $previousCreatedAt = isset($existingSale['createdAt']) ? (int)$existingSale['createdAt'] : null;
+            $previousShiftId = $existingSale['shiftId'] ?? null;
 
             $isRefund = isset($data['refunded']) && $data['refunded'] === true && isset($data['refundedAt']);
             $shouldRestoreStock = $isRefund && !$wasRefunded;
@@ -434,6 +443,15 @@ switch ($method) {
             }
 
             $pdo->commit();
+            store_metrics_refresh_sales_summary_for_timestamp($pdo, $previousStoreId, $previousCreatedAt);
+            store_metrics_refresh_sales_summary_for_timestamp($pdo, $data['storeId'] ?? null, (int)($data['createdAt'] ?? 0));
+            if (!empty($previousShiftId)) {
+                store_metrics_refresh_sales_summaries_for_shift($pdo, (string)$previousShiftId, $previousStoreId);
+            }
+            if (!empty($data['shiftId'])) {
+                store_metrics_refresh_sales_summaries_for_shift($pdo, (string)$data['shiftId'], $data['storeId'] ?? null);
+            }
+            store_metrics_invalidate_cache($data['storeId'] ?? $previousStoreId);
 
             $response = ['success' => true];
             if ($isRefund) {
@@ -460,14 +478,28 @@ switch ($method) {
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            $targetStoreId = null;
+            $targetCreatedAt = null;
+            $targetShiftId = null;
             if (!is_super_admin_claims($authClaims)) {
                 $checkStmt = $pdo->prepare('SELECT storeId FROM sales WHERE id = ? LIMIT 1');
                 $checkStmt->execute([$id]);
                 $targetStoreId = $checkStmt->fetchColumn();
                 ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
             }
+            $summaryStmt = $pdo->prepare('SELECT storeId, createdAt, shiftId FROM sales WHERE id = ? LIMIT 1');
+            $summaryStmt->execute([$id]);
+            $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $targetStoreId = $summaryRow['storeId'] ?? $targetStoreId;
+            $targetCreatedAt = isset($summaryRow['createdAt']) ? (int)$summaryRow['createdAt'] : null;
+            $targetShiftId = $summaryRow['shiftId'] ?? null;
             $stmt = $pdo->prepare('DELETE FROM sales WHERE id=?');
             $stmt->execute([$id]);
+            store_metrics_refresh_sales_summary_for_timestamp($pdo, $targetStoreId, $targetCreatedAt);
+            if (!empty($targetShiftId)) {
+                store_metrics_refresh_sales_summaries_for_shift($pdo, (string)$targetShiftId, $targetStoreId);
+            }
+            store_metrics_invalidate_cache($targetStoreId);
             echo json_encode(['success' => true]);
         } else {
             echo json_encode(['error' => 'ID requis']);

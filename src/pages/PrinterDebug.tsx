@@ -105,7 +105,7 @@ export default function PrinterDebug() {
           </CardHeader>
           <CardContent>
             <div className="flex gap-2 mb-3">
-              <Button onClick={refresh} disabled={loading}>{loading ? 'Recherche...' : 'Rechercher appareils appairés'}</Button>
+              <Button onClick={refresh} disabled={loading}>{loading ? 'Recherche...' : 'Rechercher imprimantes'}</Button>
               <Button variant="outline" onClick={() => {
             const info = NativePrinter.inspectPlugin();
             log('Plugin info: ' + JSON.stringify(info));
@@ -124,7 +124,7 @@ export default function PrinterDebug() {
             </div>
 
             <div className="space-y-2">
-              {paired.length === 0 ? (<div className="text-sm text-muted-foreground">Aucun appareil appairé trouvé.</div>) : (paired.map(d => (<div key={d.id} className={`p-2 border rounded flex items-center justify-between ${selected === d.id ? 'bg-muted' : ''}`}>
+              {paired.length === 0 ? (<div className="text-sm text-muted-foreground">Aucune imprimante trouvée.</div>) : (paired.map(d => (<div key={d.id} className={`p-2 border rounded flex items-center justify-between ${selected === d.id ? 'bg-muted' : ''}`}>
                     <div>
                       <div className="font-medium">{d.name}</div>
                       <div className="text-xs text-muted-foreground">{d.id}</div>

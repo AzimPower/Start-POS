@@ -14,6 +14,32 @@ interface Window {
     __START_POS_DESKTOP__?: {
         isDesktop?: boolean;
         runtime?: string;
+        printers?: {
+            list?: () => Promise<Array<{
+                id: string;
+                name: string;
+                isDefault?: boolean;
+                status?: number | null;
+            }>>;
+            printHtml?: (payload: {
+                html: string;
+                deviceName?: string;
+                title?: string;
+            }) => Promise<{
+                ok: boolean;
+                error?: string;
+                printer?: string;
+            }>;
+            printRaw?: (payload: {
+                dataBase64: string;
+                deviceName?: string;
+                title?: string;
+            }) => Promise<{
+                ok: boolean;
+                error?: string;
+                printer?: string;
+            }>;
+        };
     };
 }
 declare module 'virtual:pwa-register' {

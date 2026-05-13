@@ -403,15 +403,6 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
             const html = buildReceiptHtml(printContent, 'Rapport service');
             try {
                 // Try native ESC/POS: build plain-text representation directly from data
-                const savedLogo = localStorage.getItem('storeLogo');
-                if (savedLogo) {
-                    try {
-                        const paper = localStorage.getItem('printer_paper') || '80';
-                        await NativePrinter.printImage(savedLogo, undefined, paper === '58' ? '58' : '80');
-                    }
-                    catch (e) {
-                    }
-                }
                 const lines: string[] = [];
                 const paper = localStorage.getItem('printer_paper') || '80';
                 const width = paper === '58' ? 32 : 48;
@@ -472,7 +463,11 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const encaisseNetTotal = formatMoney(cash + mobile_money);
                 const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(encaisseNetTotal + ' FCFA'), width);
                 lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
-                const printed = await NativePrinter.printText(lines);
+                const printed = await NativePrinter.printText(lines, undefined, {
+                    logoSource: NativePrinter.getStoredPrintableLogo(),
+                    paper: paper === '58' ? '58' : '80',
+                    title: `Rapport-${shift?.id || 'service'}`
+                });
                 if (!printed) {
                     const used = await tryNativePrint(html, 'Rapport-shift');
                     if (!used)

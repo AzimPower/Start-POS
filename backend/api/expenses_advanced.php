@@ -16,6 +16,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once '../config.php';
+require_once '../store_metrics.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -111,11 +112,16 @@ switch ($method) {
             $data['createdAt'] ?? time()*1000,
             $data['updatedAt'] ?? time()*1000
         ]);
+        store_metrics_refresh_expense_summary_for_timestamp($pdo, $data['storeId'] ?? null, (int)($data['date'] ?? 0));
+        store_metrics_invalidate_cache($data['storeId'] ?? null);
         echo json_encode(['success' => true, 'id' => $id]);
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
+        $existingStmt = $pdo->prepare('SELECT storeId, date FROM expenses_advanced WHERE id = ? LIMIT 1');
+        $existingStmt->execute([$data['id'] ?? '']);
+        $existingExpense = $existingStmt->fetch(PDO::FETCH_ASSOC) ?: [];
         $directProduct = $data['directProduct'] ?? [];
         $sql = 'UPDATE expenses_advanced SET type=?, name=?, amount=?, description=?, date=?, userId=?, storeId=?, status=?, directProduct_productId=?, directProduct_quantity=?, directProduct_startDate=?, directProduct_endDate=?, categoryId=?, createdAt=?, updatedAt=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
@@ -137,19 +143,31 @@ switch ($method) {
             $data['updatedAt'],
             $data['id']
         ]);
+        store_metrics_refresh_expense_summary_for_timestamp($pdo, $existingExpense['storeId'] ?? null, isset($existingExpense['date']) ? (int)$existingExpense['date'] : null);
+        store_metrics_refresh_expense_summary_for_timestamp($pdo, $data['storeId'] ?? null, (int)($data['date'] ?? 0));
+        store_metrics_invalidate_cache($data['storeId'] ?? ($existingExpense['storeId'] ?? null));
         echo json_encode(['success' => true]);
         break;
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            $targetStoreId = null;
+            $targetDate = null;
             if (!is_super_admin_claims($authClaims)) {
                 $checkStmt = $pdo->prepare('SELECT storeId FROM expenses_advanced WHERE id = ? LIMIT 1');
                 $checkStmt->execute([$id]);
                 $targetStoreId = $checkStmt->fetchColumn();
                 ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
             }
+            $summaryStmt = $pdo->prepare('SELECT storeId, date FROM expenses_advanced WHERE id = ? LIMIT 1');
+            $summaryStmt->execute([$id]);
+            $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $targetStoreId = $summaryRow['storeId'] ?? $targetStoreId;
+            $targetDate = isset($summaryRow['date']) ? (int)$summaryRow['date'] : null;
             $stmt = $pdo->prepare('DELETE FROM expenses_advanced WHERE id=?');
             $stmt->execute([$id]);
+            store_metrics_refresh_expense_summary_for_timestamp($pdo, $targetStoreId, $targetDate);
+            store_metrics_invalidate_cache($targetStoreId);
             echo json_encode(['success' => true]);
         } else {
             echo json_encode(['error' => 'ID requis']);

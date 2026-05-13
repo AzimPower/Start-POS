@@ -3,6 +3,7 @@ import { useDeferredValue, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getDB, generateId, performSyncOp } from '@/lib/db';
 import { BACKEND_BASE, backendAvailable, normalizeImageUrl } from '@/lib/backend';
+import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,13 +11,27 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Edit, Trash2, Package, History } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, History, Upload, Download, FileSpreadsheet, FileOutput } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNetwork } from '@/hooks/useNetwork';
 import { hasPendingStockOperations } from '@/lib/sync';
 import { sendStockAdjustmentNotifications, type StockAdjustmentNotificationPayload } from '@/lib/storeAdminNotifications';
+declare global {
+    interface Window {
+        showOpenFilePicker?: (options?: {
+            multiple?: boolean;
+            excludeAcceptAllOption?: boolean;
+            types?: Array<{
+                description?: string;
+                accept: Record<string, string[]>;
+            }>;
+        }) => Promise<Array<{
+            getFile: () => Promise<File>;
+        }>>;
+    }
+}
 interface Product {
     id: string;
     name: string;
@@ -58,6 +73,61 @@ interface StockAdjustmentLine {
     oldStockRaw?: number;
     roundedPreview?: boolean;
     reason: string;
+}
+interface ImportProductRow {
+    name: string;
+    sku: string;
+    categoryName: string;
+    salePrice?: number;
+    costPrice?: number;
+    targetMargin?: number;
+    variablePrices?: Array<{
+        label: string;
+        price: number;
+    }>;
+    unit: string;
+    taxRate?: number;
+    stock?: number;
+    minStock?: number;
+    trackStock: boolean;
+    imageUrl?: string;
+}
+interface SaleRecord {
+    id: string;
+    storeId: string;
+    createdAt: number;
+    refunded?: boolean;
+    draft?: boolean;
+    items: Array<{
+        productId: string;
+        quantity?: number;
+        price?: number;
+        total?: number;
+    }>;
+}
+interface DirectExpenseRecord {
+    id: string;
+    type: 'direct' | 'indirect' | 'operational';
+    storeId: string;
+    amount: number;
+    directProduct?: {
+        productId: string;
+        quantity: number;
+        startDate: number;
+        endDate?: number;
+    };
+}
+interface StockSignalRecord {
+    id: string;
+    expenseId: string;
+    productId: string;
+    storeId: string;
+    endDate: number;
+}
+interface ProductStockValueInfo {
+    label: string;
+    amount: number | null;
+    tone: 'success' | 'warning' | 'danger' | 'muted';
 }
 export default function Products() {
     // Calcul automatique de la marge en %
@@ -121,6 +191,8 @@ export default function Products() {
     // Permettre aux managers, admins et super_admins de gérer les ajustements de stock
     const canManageStockAdjustments = user.role === 'manager' || user.role === 'admin' || user.role === 'super_admin';
     const canViewExactStock = user.role === 'admin' || user.role === 'super_admin';
+    const canViewStockValueAmounts = user.role === 'admin' || user.role === 'super_admin';
+    const canViewStockDelta = user.role === 'admin' || user.role === 'super_admin';
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
     const isMobile = useIsMobile();
@@ -128,6 +200,9 @@ export default function Products() {
     const [products, setProducts] = useState<Product[]>([]);
     const [categoryAddStatus, setCategoryAddStatus] = useState<'idle' | 'success' | 'error'>('idle');
     const [categories, setCategories] = useState<Category[]>([]);
+    const [sales, setSales] = useState<SaleRecord[]>([]);
+    const [directExpenses, setDirectExpenses] = useState<DirectExpenseRecord[]>([]);
+    const [stockSignals, setStockSignals] = useState<StockSignalRecord[]>([]);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [productSubmitting, setProductSubmitting] = useState(false);
@@ -186,9 +261,472 @@ export default function Products() {
     const [draftProductId, setDraftProductId] = useState('');
     const [draftPhysicalQty, setDraftPhysicalQty] = useState('');
     const [draftReason, setDraftReason] = useState('');
+    const [importDialogOpen, setImportDialogOpen] = useState(false);
+    const [importRows, setImportRows] = useState<ImportProductRow[]>([]);
+    const [importErrors, setImportErrors] = useState<string[]>([]);
+    const [importFileName, setImportFileName] = useState('');
+    const [importSubmitting, setImportSubmitting] = useState(false);
+    const importFileInputRef = useRef<HTMLInputElement | null>(null);
     const loadedOnceRef = useRef(false);
     const backgroundRefreshInFlightRef = useRef(false);
     const lastBackgroundRefreshAtRef = useRef(0);
+    const readTextFile = (file: File) => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Lecture du fichier impossible'));
+        reader.readAsText(file);
+    });
+    const parseImportNumber = (value: unknown): number | undefined => {
+        if (value == null)
+            return undefined;
+        const normalized = String(value).trim().replace(/\u00A0|\u202F/g, '').replace(/\s/g, '').replace(',', '.');
+        if (!normalized)
+            return undefined;
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const parseImportBoolean = (value: unknown): boolean => {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return ['1', 'true', 'oui', 'yes', 'y', 'on'].includes(normalized);
+    };
+    const normalizeImportHeader = (value: unknown) => String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[%()]/g, '')
+        .replace(/[^a-z0-9]+/g, '');
+    const parseVariablePricesText = (value: unknown) => {
+        const raw = String(value ?? '').trim();
+        if (!raw)
+            return undefined;
+        const parsed = raw
+            .split('|')
+            .map((chunk) => chunk.trim())
+            .filter(Boolean)
+            .map((chunk) => {
+            const parts = chunk.split(':');
+            if (parts.length < 2)
+                return null;
+            const label = parts.slice(0, -1).join(':').trim();
+            const price = parseImportNumber(parts[parts.length - 1]);
+            if (!label || price == null)
+                return null;
+            return { label, price };
+        })
+            .filter((entry): entry is {
+            label: string;
+            price: number;
+        } => Boolean(entry));
+        return parsed.length > 0 ? parsed : undefined;
+    };
+    const parseDelimitedLine = (line: string, delimiter: string) => {
+        const cells: string[] = [];
+        let current = '';
+        let insideQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+                if (insideQuotes && line[i + 1] === '"') {
+                    current += '"';
+                    i++;
+                }
+                else {
+                    insideQuotes = !insideQuotes;
+                }
+                continue;
+            }
+            if (char === delimiter && !insideQuotes) {
+                cells.push(current.trim());
+                current = '';
+                continue;
+            }
+            current += char;
+        }
+        cells.push(current.trim());
+        return cells;
+    };
+    const detectDelimiter = (line: string) => {
+        const delimiters = [',', ';', '\t'];
+        let best = ';';
+        let bestScore = -1;
+        for (const delimiter of delimiters) {
+            const score = line.split(delimiter).length;
+            if (score > bestScore) {
+                bestScore = score;
+                best = delimiter;
+            }
+        }
+        return best;
+    };
+    const parseImportFileContent = (content: string) => {
+        const sanitized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = sanitized
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
+        if (lines.length < 2) {
+            return { rows: [] as ImportProductRow[], errors: ['Le fichier doit contenir un en-tête et au moins une ligne produit.'] };
+        }
+        const delimiter = detectDelimiter(lines[0]);
+        const headers = parseDelimitedLine(lines[0], delimiter).map((header) => normalizeImportHeader(header));
+        const rows: ImportProductRow[] = [];
+        const errors: string[] = [];
+        const getCell = (cells: string[], names: string[]) => {
+            const normalizedNames = names.map((name) => normalizeImportHeader(name));
+            const index = headers.findIndex((header) => normalizedNames.includes(header));
+            return index >= 0 ? cells[index] ?? '' : '';
+        };
+        for (let i = 1; i < lines.length; i++) {
+            const cells = parseDelimitedLine(lines[i], delimiter);
+            const name = getCell(cells, ['name', 'nom', 'produit', 'nom du produit']).trim();
+            if (!name) {
+                errors.push(`Ligne ${i + 1}: nom du produit manquant.`);
+                continue;
+            }
+            const variablePrices = parseVariablePricesText(getCell(cells, ['variableprices', 'prixvariables', 'variants', 'variantes', 'variantes de prix']));
+            const salePrice = parseImportNumber(getCell(cells, ['saleprice', 'prixvente', 'prix_vente', 'prix de vente']));
+            const costPrice = parseImportNumber(getCell(cells, ['costprice', 'prixrevient', 'prix_revient', 'cout', 'coût', 'prix de revient']));
+            const targetMargin = parseImportNumber(getCell(cells, ['targetmargin', 'marge', 'margecible', 'pourcentage de gain cible']));
+            const stock = parseImportNumber(getCell(cells, ['stock', 'stockinitial', 'stock_initial', 'stock initial']));
+            const minStock = parseImportNumber(getCell(cells, ['minstock', 'stockmin', 'stock_min', 'stockminimal', 'stock minimal']));
+            const taxRate = parseImportNumber(getCell(cells, ['taxrate', 'tva', 'taxe', 'tva %']));
+            const trackStockCell = getCell(cells, ['trackstock', 'suivistock', 'suivi_stock', 'suivi de stock']);
+            const explicitTrackStock = trackStockCell.trim().length > 0 ? parseImportBoolean(trackStockCell) : undefined;
+            rows.push({
+                name,
+                sku: getCell(cells, ['sku', 'code']).trim(),
+                categoryName: getCell(cells, ['category', 'categorie', 'catégorie', 'categorie']).trim(),
+                salePrice,
+                costPrice,
+                targetMargin,
+                variablePrices,
+                unit: getCell(cells, ['unit', 'unite', 'unité', 'unite']).trim() || 'pièce',
+                taxRate,
+                stock,
+                minStock,
+                trackStock: explicitTrackStock ?? (stock != null || minStock != null),
+                imageUrl: getCell(cells, ['imageurl', 'image', 'image_url', 'image du produit']).trim() || undefined,
+            });
+        }
+        return { rows, errors };
+    };
+    const parseImportObjects = (records: Record<string, unknown>[]) => {
+        const rows: ImportProductRow[] = [];
+        const errors: string[] = [];
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i] || {};
+            const normalizedRecord = Object.fromEntries(Object.entries(record).map(([key, value]) => [normalizeImportHeader(key), value]));
+            const getValue = (...names: string[]) => {
+                for (const name of names) {
+                    const normalizedName = normalizeImportHeader(name);
+                    if (Object.prototype.hasOwnProperty.call(normalizedRecord, normalizedName)) {
+                        return normalizedRecord[normalizedName];
+                    }
+                }
+                return '';
+            };
+            const name = String(getValue('name', 'nom', 'produit', 'nom du produit') ?? '').trim();
+            if (!name) {
+                errors.push(`Ligne ${i + 2}: nom du produit manquant.`);
+                continue;
+            }
+            const variablePrices = parseVariablePricesText(getValue('variableprices', 'prixvariables', 'variants', 'variantes', 'variantes de prix'));
+            const salePrice = parseImportNumber(getValue('saleprice', 'prixvente', 'prix_vente', 'prix de vente'));
+            const costPrice = parseImportNumber(getValue('costprice', 'prixrevient', 'prix_revient', 'cout', 'coût', 'prix de revient'));
+            const targetMargin = parseImportNumber(getValue('targetmargin', 'marge', 'margecible', 'pourcentage de gain cible'));
+            const stock = parseImportNumber(getValue('stock', 'stockinitial', 'stock_initial', 'stock initial'));
+            const minStock = parseImportNumber(getValue('minstock', 'stockmin', 'stock_min', 'stockminimal', 'stock minimal'));
+            const taxRate = parseImportNumber(getValue('taxrate', 'tva', 'taxe', 'tva %'));
+            const trackStockCell = String(getValue('trackstock', 'suivistock', 'suivi_stock', 'suivi de stock') ?? '').trim();
+            const explicitTrackStock = trackStockCell ? parseImportBoolean(trackStockCell) : undefined;
+            rows.push({
+                name,
+                sku: String(getValue('sku', 'code') ?? '').trim(),
+                categoryName: String(getValue('category', 'categorie', 'catégorie') ?? '').trim(),
+                salePrice,
+                costPrice,
+                targetMargin,
+                variablePrices,
+                unit: String(getValue('unit', 'unite', 'unité') ?? '').trim() || 'pièce',
+                taxRate,
+                stock,
+                minStock,
+                trackStock: explicitTrackStock ?? (stock != null || minStock != null),
+                imageUrl: String(getValue('imageurl', 'image', 'image_url', 'image du produit') ?? '').trim() || undefined,
+            });
+        }
+        return { rows, errors };
+    };
+    const handleImportFile = async (file: File) => {
+        try {
+            let parsed: { rows: ImportProductRow[]; errors: string[]; };
+            const lowerName = file.name.toLowerCase();
+            const allowedExtensions = ['.csv', '.txt', '.xlsx', '.xls'];
+            const isAllowed = allowedExtensions.some((extension) => lowerName.endsWith(extension));
+            if (!isAllowed) {
+                setImportRows([]);
+                setImportErrors(['Format non supporté. Utilisez un fichier CSV ou Excel (.xlsx, .xls).']);
+                setImportFileName(file.name);
+                toast.error('Format non supporté. Fichier CSV ou Excel uniquement.');
+                return;
+            }
+            if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                if (!firstSheetName) {
+                    throw new Error('Aucune feuille trouvée dans le fichier Excel.');
+                }
+                const sheet = workbook.Sheets[firstSheetName];
+                const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+                    defval: '',
+                    raw: false,
+                });
+                parsed = parseImportObjects(records);
+            }
+            else {
+                const content = await readTextFile(file);
+                parsed = parseImportFileContent(content);
+            }
+            setImportRows(parsed.rows);
+            setImportErrors(parsed.errors);
+            setImportFileName(file.name);
+            if (parsed.rows.length > 0) {
+                toast.success(`${parsed.rows.length} produit(s) prêt(s) à être importé(s).`);
+            }
+            else {
+                toast.error('Aucune ligne valide trouvée dans le fichier.');
+            }
+        }
+        catch (error) {
+            setImportRows([]);
+            setImportErrors(['Impossible de lire le fichier sélectionné.']);
+            setImportFileName(file.name);
+            toast.error('Lecture du fichier impossible');
+        }
+    };
+    const resetImportState = () => {
+        setImportRows([]);
+        setImportErrors([]);
+        setImportFileName('');
+        setImportSubmitting(false);
+    };
+    const submitImport = async () => {
+        if (importSubmitting || importRows.length === 0)
+            return;
+        setImportSubmitting(true);
+        try {
+            const db = await getDB();
+            const localProducts = await db.getAll('products');
+            const existingSkuSet = new Set((localProducts || [])
+                .map((product: any) => String(product?.sku || '').trim().toLowerCase())
+                .filter(Boolean));
+            const existingNameSet = new Set((localProducts || [])
+                .filter((product: any) => String(product?.storeId || '') === String(user.storeId || ''))
+                .map((product: any) => String(product?.name || '').trim().toLowerCase())
+                .filter(Boolean));
+            const categoryByName = new Map(categories.map((category) => [category.name.trim().toLowerCase(), category]));
+            const createdCategories: Category[] = [];
+            const createdProducts: Product[] = [];
+            const skippedReasons: string[] = [];
+            const seenImportSkuSet = new Set<string>();
+            const seenImportNameSet = new Set<string>();
+            const createUniqueSku = () => {
+                let sku = '';
+                do {
+                    sku = `PRD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 900 + 100)}`;
+                } while (existingSkuSet.has(sku.toLowerCase()) || seenImportSkuSet.has(sku.toLowerCase()));
+                return sku;
+            };
+            for (const row of importRows) {
+                const normalizedSku = String(row.sku || '').trim().toLowerCase();
+                const normalizedName = String(row.name || '').trim().toLowerCase();
+                if (normalizedSku) {
+                    if (existingSkuSet.has(normalizedSku)) {
+                        skippedReasons.push(`${row.name}: SKU déjà existant (${row.sku}).`);
+                        continue;
+                    }
+                    if (seenImportSkuSet.has(normalizedSku)) {
+                        skippedReasons.push(`${row.name}: SKU en doublon dans le fichier (${row.sku}).`);
+                        continue;
+                    }
+                }
+                else if (normalizedName) {
+                    if (existingNameSet.has(normalizedName)) {
+                        skippedReasons.push(`${row.name}: produit déjà présent dans ce magasin.`);
+                        continue;
+                    }
+                    if (seenImportNameSet.has(normalizedName)) {
+                        skippedReasons.push(`${row.name}: produit en doublon dans le fichier.`);
+                        continue;
+                    }
+                }
+                let categoryId: string | undefined;
+                const categoryName = row.categoryName.trim();
+                if (categoryName) {
+                    const key = categoryName.toLowerCase();
+                    let category = categoryByName.get(key);
+                    if (!category) {
+                        category = {
+                            id: generateId(),
+                            name: categoryName,
+                            description: '',
+                            storeId: user.storeId,
+                            createdAt: Date.now(),
+                        };
+                        await db.put('categories', category);
+                        await performSyncOp({
+                            url: `${BACKEND_BASE}/api/categories.php`,
+                            method: 'POST',
+                            data: category,
+                        });
+                        categoryByName.set(key, category);
+                        createdCategories.push(category);
+                    }
+                    categoryId = category.id;
+                }
+                const finalSku = normalizedSku ? String(row.sku).trim() : createUniqueSku();
+                const product: Product = {
+                    id: generateId(),
+                    name: row.name,
+                    sku: finalSku,
+                    storeId: user.storeId,
+                    categoryId,
+                    salePrice: row.salePrice,
+                    costPrice: row.costPrice,
+                    targetMargin: row.targetMargin,
+                    variablePrices: row.variablePrices,
+                    unit: row.unit || 'pièce',
+                    taxRate: row.taxRate,
+                    stock: row.trackStock ? { [user.storeId]: row.stock ?? 0 } : {},
+                    minStock: row.trackStock ? row.minStock : undefined,
+                    imageUrl: row.imageUrl || '',
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                    trackStock: row.trackStock,
+                };
+                await db.put('products', product);
+                await performSyncOp({
+                    url: `${BACKEND_BASE}/api/products.php`,
+                    method: 'POST',
+                    data: {
+                        ...product,
+                        stock: row.trackStock ? row.stock ?? 0 : 0,
+                    }
+                });
+                createdProducts.push(product);
+                existingSkuSet.add(finalSku.trim().toLowerCase());
+                seenImportSkuSet.add(finalSku.trim().toLowerCase());
+                if (normalizedName) {
+                    existingNameSet.add(normalizedName);
+                    seenImportNameSet.add(normalizedName);
+                }
+            }
+            if (createdCategories.length > 0) {
+                setCategories((prev) => [...prev, ...createdCategories]);
+            }
+            setProducts((prev) => [...prev, ...createdProducts]);
+            if (skippedReasons.length > 0) {
+                setImportErrors(skippedReasons);
+            }
+            if (createdProducts.length > 0 && skippedReasons.length > 0) {
+                toast.success(`${createdProducts.length} produit(s) importé(s), ${skippedReasons.length} ignoré(s).`);
+            }
+            else if (createdProducts.length > 0) {
+                toast.success(`${createdProducts.length} produit(s) importé(s) avec succès.`);
+            }
+            else {
+                toast.warning(`Aucun produit importé. ${skippedReasons.length} ligne(s) ignorée(s).`);
+            }
+            if (skippedReasons.length > 0) {
+                toast.warning(skippedReasons.slice(0, 3).join(' '));
+            }
+            setImportDialogOpen(false);
+            resetImportState();
+            if (isBackendReachable) {
+                setTimeout(() => loadData(), 500);
+            }
+        }
+        catch (error) {
+            toast.error(`Erreur pendant l'import: ${(error as Error).message}`);
+        }
+        finally {
+            setImportSubmitting(false);
+        }
+    };
+    const exportProducts = () => {
+        try {
+            const rows = products.map((product) => {
+                const categoryName = getCategoryName(product.categoryId || '');
+                const stockQty = product.trackStock ? Number(product.stock?.[user.storeId] ?? 0) : '';
+                const minStock = product.trackStock ? (product.minStock ?? '') : '';
+                const variablePrices = Array.isArray(product.variablePrices) && product.variablePrices.length > 0
+                    ? product.variablePrices
+                        .map((variant) => `${variant.label}:${variant.price}`)
+                        .join('|')
+                    : '';
+                return {
+                    'Nom du produit': product.name || '',
+                    'SKU': product.sku || '',
+                    'Catégorie': categoryName || '',
+                    'Prix de vente': product.salePrice ?? '',
+                    'Prix de revient': product.costPrice ?? '',
+                    'Pourcentage de gain cible': product.targetMargin ?? '',
+                    'Unité': product.unit || 'pièce',
+                    'TVA %': product.taxRate ?? '',
+                    'Stock initial': stockQty,
+                    'Stock minimal': minStock,
+                    'Suivi de stock': product.trackStock ? 'oui' : 'non',
+                    'Image du produit': product.imageUrl || '',
+                    'Variantes de prix': variablePrices,
+                };
+            });
+            const worksheet = XLSX.utils.json_to_sheet(rows);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Produits');
+            const today = new Date();
+            const formattedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+            XLSX.writeFile(workbook, `produits_magasin_${formattedDate}.xlsx`);
+            toast.success(`${products.length} produit(s) exporté(s) avec succès.`);
+        }
+        catch (error) {
+            toast.error(`Erreur pendant l'export: ${(error as Error).message}`);
+        }
+    };
+    const openImportFilePicker = async () => {
+        try {
+            if (typeof window.showOpenFilePicker === 'function') {
+                const [handle] = await window.showOpenFilePicker({
+                    multiple: false,
+                    excludeAcceptAllOption: true,
+                    types: [
+                        {
+                            description: 'Fichiers produits',
+                            accept: {
+                                'text/csv': ['.csv'],
+                                'text/plain': ['.txt'],
+                                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+                                'application/vnd.ms-excel': ['.xls'],
+                            },
+                        },
+                    ],
+                });
+                if (!handle) {
+                    return;
+                }
+                const file = await handle.getFile();
+                await handleImportFile(file);
+                return;
+            }
+        }
+        catch (error) {
+            if ((error as DOMException)?.name === 'AbortError') {
+                return;
+            }
+        }
+        importFileInputRef.current?.click();
+    };
     const refreshFromBackend = async (db: any, force = false) => {
         if (!user?.storeId || !isBackendReachable)
             return;
@@ -333,8 +871,13 @@ export default function Products() {
     }, [user?.storeId, isBackendReachable]);
     const loadFromLocal = async (db: any) => {
         try {
-            const localProducts = await db.getAll('products');
-            const localCategories = await db.getAll('categories');
+            const [localProducts, localCategories, localSales, localExpenses, localSignals] = await Promise.all([
+                db.getAll('products'),
+                db.getAll('categories'),
+                db.getAll('sales'),
+                db.getAll('expensesAdvanced'),
+                db.getAll('stockSignals'),
+            ]);
             // Filtrer par magasin courant
             const prods = (localProducts || [])
                 .filter((p: any) => p.storeId === user.storeId || !p.storeId)
@@ -345,12 +888,21 @@ export default function Products() {
                 imageUrl: normalizeImageUrl(p.imageUrl)
             }));
             const cats = (localCategories || []).filter((c: any) => c.storeId === user.storeId || !c.storeId);
+            const scopedSales = (localSales || []).filter((sale: any) => sale.storeId === user.storeId);
+            const scopedDirectExpenses = (localExpenses || []).filter((expense: any) => expense.storeId === user.storeId && expense.type === 'direct');
+            const scopedSignals = (localSignals || []).filter((signal: any) => signal.storeId === user.storeId);
             setProducts(prods);
             setCategories(cats);
+            setSales(scopedSales);
+            setDirectExpenses(scopedDirectExpenses);
+            setStockSignals(scopedSignals);
         }
         catch (e) {
             setProducts([]);
             setCategories([]);
+            setSales([]);
+            setDirectExpenses([]);
+            setStockSignals([]);
         }
     };
     const handleSubmit = async (e: React.FormEvent) => {
@@ -920,6 +1472,151 @@ export default function Products() {
             return false;
         });
     }, [products, deferredProductsSearch, categoryNameById]);
+    const productStockValueInfoById = useMemo(() => {
+        const validSignalsByExpenseId = new Map<string, StockSignalRecord>();
+        const latestSignalEndByProductId = new Map<string, number>();
+        for (const signal of stockSignals) {
+            if (!signal?.expenseId || !signal?.productId || !Number.isFinite(Number(signal.endDate))) {
+                continue;
+            }
+            validSignalsByExpenseId.set(signal.expenseId, signal);
+            const currentLatest = latestSignalEndByProductId.get(signal.productId) ?? 0;
+            const signalEnd = Number(signal.endDate) || 0;
+            if (signalEnd > currentLatest) {
+                latestSignalEndByProductId.set(signal.productId, signalEnd);
+            }
+        }
+        const salesByProductId = new Map<string, Array<{ createdAt: number; total: number }>>();
+        for (const sale of sales) {
+            if (sale.refunded || sale.draft) {
+                continue;
+            }
+            for (const item of sale.items || []) {
+                if (!item?.productId) {
+                    continue;
+                }
+                const itemTotal = Number(item.total);
+                const fallbackTotal = (Number(item.quantity) || 0) * (Number(item.price) || 0);
+                const total = Number.isFinite(itemTotal) && itemTotal > 0 ? itemTotal : fallbackTotal;
+                if (!Number.isFinite(total) || total <= 0) {
+                    continue;
+                }
+                const existing = salesByProductId.get(item.productId) || [];
+                existing.push({ createdAt: Number(sale.createdAt) || 0, total });
+                salesByProductId.set(item.productId, existing);
+            }
+        }
+        const infoById = new Map<string, ProductStockValueInfo>();
+        for (const product of products) {
+            const hasTrackedStock = Boolean(product.trackStock || (product.stock && Object.keys(product.stock).length > 0));
+            if (hasTrackedStock) {
+                const stockQty = Number(product.stock?.[user.storeId] ?? 0);
+                if (stockQty < 0) {
+                    infoById.set(product.id, { label: 'Stock négatif', amount: null, tone: 'danger' });
+                    continue;
+                }
+                const salePrice = Number(product.salePrice);
+                if (!Number.isFinite(salePrice) || salePrice <= 0) {
+                    infoById.set(product.id, { label: 'Prix de vente manquant', amount: null, tone: 'warning' });
+                    continue;
+                }
+                const amount = stockQty * salePrice;
+                infoById.set(product.id, {
+                    label: `${amount.toLocaleString('fr-FR')} FCFA`,
+                    amount,
+                    tone: 'success',
+                });
+                continue;
+            }
+            const activeDirectExpenses = directExpenses.filter((expense) => {
+                if (expense.directProduct?.productId !== product.id) {
+                    return false;
+                }
+                if (expense.directProduct?.endDate) {
+                    return false;
+                }
+                return !validSignalsByExpenseId.has(expense.id);
+            });
+            if (activeDirectExpenses.length === 0) {
+                infoById.set(product.id, { label: 'Aucune dépense active', amount: null, tone: 'muted' });
+                continue;
+            }
+            const targetMarginRaw = Number(product.targetMargin);
+            let targetMargin = Number.isFinite(targetMarginRaw) ? targetMarginRaw : null;
+            if (targetMargin === null) {
+                const salePrice = Number(product.salePrice);
+                const costPrice = Number(product.costPrice);
+                if (Number.isFinite(salePrice) && salePrice > 0 && Number.isFinite(costPrice) && costPrice > 0 && costPrice < salePrice) {
+                    targetMargin = ((salePrice - costPrice) / salePrice) * 100;
+                }
+            }
+            if (targetMargin === null || targetMargin < 0 || targetMargin >= 100) {
+                infoById.set(product.id, { label: 'Données de calcul manquantes', amount: null, tone: 'warning' });
+                continue;
+            }
+            const purchaseAmount = activeDirectExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0);
+            if (!Number.isFinite(purchaseAmount) || purchaseAmount <= 0) {
+                infoById.set(product.id, { label: 'Montant de dépense manquant', amount: null, tone: 'warning' });
+                continue;
+            }
+            const earliestActiveStartDate = activeDirectExpenses.reduce((minStart, expense) => {
+                const nextStart = Number(expense.directProduct?.startDate) || 0;
+                if (minStart === 0) {
+                    return nextStart;
+                }
+                return nextStart > 0 ? Math.min(minStart, nextStart) : minStart;
+            }, 0);
+            const latestSignalEnd = latestSignalEndByProductId.get(product.id) ?? 0;
+            const effectiveStartDate = Math.max(earliestActiveStartDate, latestSignalEnd);
+            const soldAmount = (salesByProductId.get(product.id) || []).reduce((sum, entry) => {
+                if (entry.createdAt < effectiveStartDate) {
+                    return sum;
+                }
+                return sum + entry.total;
+            }, 0);
+            const expectedRevenue = purchaseAmount / (1 - targetMargin / 100);
+            if (!Number.isFinite(expectedRevenue) || expectedRevenue <= 0) {
+                infoById.set(product.id, { label: 'Estimation impossible', amount: null, tone: 'warning' });
+                continue;
+            }
+            const estimatedRemainingValue = Math.max(expectedRevenue - soldAmount, 0);
+            infoById.set(product.id, {
+                label: `${estimatedRemainingValue.toLocaleString('fr-FR')} FCFA`,
+                amount: estimatedRemainingValue,
+                tone: estimatedRemainingValue > 0 ? 'success' : 'muted',
+            });
+        }
+        return infoById;
+    }, [directExpenses, products, sales, stockSignals, user.storeId]);
+    const getPotentialStockValueInfo = (product: Product) => {
+        return productStockValueInfoById.get(product.id) || {
+            label: 'Non calculable',
+            amount: null,
+            tone: 'muted',
+        };
+    };
+    const getPotentialStockValueLabel = (product: Product) => {
+        return getPotentialStockValueInfo(product).label;
+    };
+    const getPotentialStockValueToneClass = (product: Product) => {
+        const tone = getPotentialStockValueInfo(product).tone;
+        if (tone === 'success') {
+            return 'text-emerald-700 dark:text-emerald-300';
+        }
+        if (tone === 'danger') {
+            return 'text-red-600 dark:text-red-400';
+        }
+        if (tone === 'warning') {
+            return 'text-amber-700 dark:text-amber-300';
+        }
+        return 'text-muted-foreground';
+    };
+    const totalPotentialStockValue = useMemo(() => {
+        return products.reduce((total, product) => {
+            const amount = getPotentialStockValueInfo(product).amount;
+            return total + (amount && amount > 0 ? amount : 0);
+        }, 0);
+    }, [products, productStockValueInfoById]);
     return (<div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -935,6 +1632,134 @@ export default function Products() {
               <History className="w-4 h-4 mr-1.5"/>
               Historique
             </Button>)}
+          <Dialog open={importDialogOpen} onOpenChange={(open) => {
+            setImportDialogOpen(open);
+            if (!open)
+                resetImportState();
+        }}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none h-9 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 hover:text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                <Upload className="w-4 h-4 mr-1.5"/>
+                Importer
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-3xl [&>button]:hidden">
+              <DialogHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+                <DialogTitle>Importer des produits</DialogTitle>
+                <Button type="button" variant="outline" onClick={exportProducts} className="h-9 rounded-lg border-blue-200 bg-white px-3 text-sm font-semibold text-blue-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 dark:border-blue-800 dark:bg-slate-950/40 dark:text-blue-300 dark:hover:bg-blue-950/30">
+                  <FileOutput className="mr-2 h-4 w-4"/>
+                  Exporter mes produits
+                </Button>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-teal-50 shadow-sm dark:border-emerald-900 dark:from-emerald-950/60 dark:via-emerald-950/40 dark:to-slate-950">
+                  <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/20">
+                        <FileSpreadsheet className="h-5 w-5"/>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold tracking-tight text-emerald-950 dark:text-emerald-50">
+                          Télécharger le modèle d'exemple
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-emerald-800/90 dark:text-emerald-100/85">
+                          Ouvrez ce fichier pour voir directement les bonnes colonnes et des exemples de produits avant votre import.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+                      <Button asChild type="button" className="h-11 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm shadow-emerald-600/20 transition-colors hover:bg-emerald-700 focus-visible:ring-emerald-500">
+                        <a href="/produits_import.xlsx" download="produits_import.xlsx">
+                          <Download className="mr-2 h-4 w-4"/>
+                          Télécharger l'exemple
+                        </a>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Fichier CSV ou Excel</Label>
+                  <input ref={importFileInputRef} type="file" accept=".csv,text/csv,.txt,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                        void handleImportFile(file);
+                    }
+                    e.currentTarget.value = '';
+                }}/>
+                  <Button type="button" variant="outline" className="h-11 w-full justify-start rounded-xl border-dashed border-emerald-300 bg-emerald-50/40 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/70 hover:text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-100 dark:hover:bg-emerald-950/40" onClick={() => void openImportFilePicker()}>
+                    <Upload className="w-4 h-4 mr-2"/>
+                    Choisir un fichier (CSV ou Excel)
+                  </Button>
+                  {importFileName ? <p className="text-xs text-muted-foreground">Fichier chargé: {importFileName}</p> : null}
+                </div>
+
+                {importErrors.length > 0 ? (<div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                    <p className="font-medium">Lignes ignorées</p>
+                    <div className="mt-2 space-y-1 text-xs">
+                      {importErrors.slice(0, 8).map((error) => <p key={error}>{error}</p>)}
+                    </div>
+                  </div>) : null}
+
+                <div className="rounded-lg border">
+                  <div className="border-b px-3 py-2 text-sm font-medium">
+                    Aperçu {importRows.length > 0 ? `(${importRows.length} ligne(s))` : ''}
+                  </div>
+                  <div className="max-h-72 overflow-auto">
+                    <Table>
+                        <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[72px]">Image</TableHead>
+                          <TableHead>Nom</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Catégorie</TableHead>
+                          <TableHead>Prix</TableHead>
+                          <TableHead>Stock</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {importRows.length === 0 ? (<TableRow>
+                            <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                              Aucun fichier analysé
+                            </TableCell>
+                          </TableRow>) : (importRows.slice(0, 12).map((row, index) => (<TableRow key={`${row.name}-${index}`}>
+                              <TableCell>
+                                {row.imageUrl ? (<div className="h-11 w-11 overflow-hidden rounded-xl border border-border/70 bg-muted shadow-sm">
+                                    <img src={row.imageUrl} alt={row.name} className="h-full w-full object-cover" onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (fallback)
+                        fallback.style.display = 'flex';
+                }}/>
+                                    <div className="hidden h-full w-full items-center justify-center bg-muted text-[10px] font-medium text-muted-foreground">
+                                      No img
+                                    </div>
+                                  </div>) : (<div className="flex h-11 w-11 items-center justify-center rounded-xl border border-dashed border-border bg-muted/40 text-[10px] font-medium text-muted-foreground">
+                                    Aucune
+                                  </div>)}
+                              </TableCell>
+                              <TableCell className="font-medium">{row.name}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground font-mono">{row.sku || 'Auto'}</TableCell>
+                              <TableCell>{row.categoryName || '—'}</TableCell>
+                              <TableCell>{row.salePrice != null ? `${row.salePrice} FCFA` : 'Variable / vide'}</TableCell>
+                              <TableCell>{row.trackStock ? `${row.stock ?? 0}` : 'Non suivi'}</TableCell>
+                            </TableRow>)))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" className="w-1/2" onClick={() => setImportDialogOpen(false)} disabled={importSubmitting}>
+                    Annuler
+                  </Button>
+                  <Button type="button" className="w-1/2" onClick={submitImport} disabled={importSubmitting || importRows.length === 0}>
+                    {importSubmitting ? 'Import en cours...' : `Importer ${importRows.length || ''}`.trim()}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
             setIsDialogOpen(open);
             if (!open)
@@ -1249,6 +2074,26 @@ export default function Products() {
       </div>
 
       <div className="space-y-4">
+        {canViewStockValueAmounts ? (<Card className="border-emerald-200/80 bg-gradient-to-r from-emerald-50 via-white to-teal-50 shadow-sm dark:border-emerald-900 dark:from-emerald-950/40 dark:via-background dark:to-slate-950">
+            <CardContent className="p-4 sm:p-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/20">
+                  <Package className="h-5 w-5"/>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">
+                    Valeur globale du magasin
+                  </p>
+                  <p className="mt-1 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+                    {totalPotentialStockValue.toLocaleString('fr-FR')} FCFA
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Somme de la vente totale potentielle des produits en stock et calculables.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>) : null}
         <Card className="border-muted/60">
           <CardContent className="p-4">
             <div className="flex flex-col sm:flex-row sm:items-end gap-3">
@@ -1321,7 +2166,7 @@ export default function Products() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Produit</TableHead>
-                              <TableHead>Delta</TableHead>
+                              {canViewStockDelta ? (<TableHead>Delta</TableHead>) : null}
                               <TableHead>Motif</TableHead>
                               <TableHead className="w-[80px]">Actions</TableHead>
                             </TableRow>
@@ -1334,15 +2179,15 @@ export default function Products() {
                                     {'phys: '}{line.physical ?? '-'}{' • app: '}{canViewExactStock ? (line.oldStock ?? '-') : 'masqué'}
                                   </div>
                                 </TableCell>
-                                <TableCell>
-                                  {(() => {
+                                {canViewStockDelta ? (<TableCell>
+                                    {(() => {
                         const n = parseInt(line.delta || '0', 10);
                         const sign = n > 0 ? '+' : '';
                         return (<span className={`font-semibold ${n > 0 ? 'text-green-600' : 'text-red-500'}`}>
                                         {sign}{n}
                                       </span>);
                     })()}
-                                </TableCell>
+                                  </TableCell>) : null}
                                 <TableCell>{line.reason || '-'}</TableCell>
                                 <TableCell>
                                   <Button type="button" variant="ghost" size="icon" onClick={() => removeAdjustmentLine(index)} title="Supprimer">
@@ -1385,6 +2230,8 @@ export default function Products() {
             const hasStock = product.stock && Object.keys(product.stock).length > 0;
             const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
             const catName = getCategoryName(product.categoryId || '');
+            const potentialStockValueLabel = getPotentialStockValueLabel(product);
+            const potentialStockValueToneClass = getPotentialStockValueToneClass(product);
             return (<div key={product.id} className="flex items-center gap-3 bg-card border rounded-xl p-3 shadow-sm">
                   {/* Image */}
                   <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-muted flex items-center justify-center">
@@ -1419,6 +2266,10 @@ export default function Products() {
                               {'\u26a0 stock bas'}
                             </span>)}
                         </div>) : (<span className="text-muted-foreground text-xs">Via ajustement</span>)}
+                      {canViewStockValueAmounts ? (<div className="mt-1 text-[11px] font-medium text-foreground">
+                          Vente totale possible:{' '}
+                          <span className={potentialStockValueToneClass}>{potentialStockValueLabel}</span>
+                        </div>) : null}
                     </div>
                   </div>
                 </div>);
@@ -1459,6 +2310,8 @@ export default function Products() {
             const stockQty = product.stock?.[user.storeId] ?? 0;
             const hasStock = product.stock && Object.keys(product.stock).length > 0;
             const isLow = hasStock && product.minStock != null && stockQty <= product.minStock;
+            const potentialStockValueLabel = getPotentialStockValueLabel(product);
+            const potentialStockValueToneClass = getPotentialStockValueToneClass(product);
             return (<TableRow key={product.id}>
                         <TableCell className="font-medium">
                           <div className="flex items-center gap-2">
@@ -1478,17 +2331,29 @@ export default function Products() {
                           {product.salePrice ? `${product.salePrice} FCFA` : (<span className="text-muted-foreground text-xs italic">Variable</span>)}
                         </TableCell>
                         <TableCell>
-                          {hasStock ? (<div className="flex items-center gap-1.5">
-                              <span className={`font-semibold text-sm ${stockQty <= 0 ? 'text-red-500' : ''}`}>
-                                {canViewExactStock ? stockQty : (stockQty > 0 ? 'Disponible' : 'Rupture')}
+                          {hasStock ? (<div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`font-semibold text-sm ${stockQty <= 0 ? 'text-red-500' : ''}`}>
+                                  {canViewExactStock ? stockQty : (stockQty > 0 ? 'Disponible' : 'Rupture')}
+                                </span>
+                                {canViewExactStock ? (<span className="text-muted-foreground text-xs">{product.unit}</span>) : null}
+                                {isLow && (<span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                                    {'\u26a0 stock bas'}
+                                  </span>)}
+                              </div>
+                              {canViewStockValueAmounts ? (<div className="text-xs font-medium text-foreground">
+                                  Valeur totale:{' '}
+                                  <span className={potentialStockValueToneClass}>{potentialStockValueLabel}</span>
+                                </div>) : null}
+                            </div>) : (<div className="space-y-1">
+                              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                Non suivi
                               </span>
-                              {canViewExactStock ? (<span className="text-muted-foreground text-xs">{product.unit}</span>) : null}
-                              {isLow && (<span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                                  {'\u26a0 stock bas'}
-                                </span>)}
-                            </div>) : (<span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                              Non suivi
-                            </span>)}
+                              {canViewStockValueAmounts ? (<div className="text-xs font-medium text-foreground">
+                                  Valeur totale:{' '}
+                                  <span className={potentialStockValueToneClass}>{potentialStockValueLabel}</span>
+                                </div>) : null}
+                            </div>)}
                         </TableCell>
                         <TableCell>
                           {user.role !== 'manager' ? (<div className="flex gap-1">

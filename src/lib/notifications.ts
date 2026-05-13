@@ -2,6 +2,7 @@ import { BACKEND_BASE, backendAvailable } from '@/lib/backend';
 import { getDB } from '@/lib/db';
 import { connectionState } from '@/lib/sync';
 import { hasAuthToken, requiresBackendAuth } from '@/lib/apiAuth';
+import { generateId } from '@/lib/id';
 export type NotificationKind = 'info' | 'success' | 'warning' | 'critical';
 export type NotificationTargetType = 'all' | 'role' | 'store' | 'user';
 export type UserRole = 'super_admin' | 'admin' | 'cashier' | 'manager';
@@ -161,7 +162,7 @@ function isQueuedDismiss(entry: NotificationSyncQueueEntry) {
 function notificationFromCreatePayload(payload: CreateNotificationPayload): AppNotification {
     return normalizeNotification({
         ...payload,
-        id: payload.id || `notif_${crypto.randomUUID()}`,
+        id: payload.id || `notif_${generateId()}`,
         createdAt: payload.createdAt || Date.now(),
         active: 1,
         isRead: false,
@@ -222,7 +223,7 @@ async function addNotificationQueueEntry(entry: NotificationSyncQueueEntryInput)
     if (duplicate) {
         return duplicate.id;
     }
-    const id = crypto.randomUUID();
+    const id = generateId();
     await db.put('syncQueue', {
         id,
         table: NOTIFICATIONS_TABLE,

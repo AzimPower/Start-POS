@@ -1,5 +1,6 @@
 import { canReachBackendForWrite, queueSyncOp } from './sync';
 import { buildAuthenticatedHeaders, hasAuthToken, requiresBackendAuth } from './apiAuth';
+import { generateId } from './id';
 interface CachedNotificationPayload {
     id: string;
     title: string;
@@ -654,7 +655,7 @@ export async function getDB() {
             const allUsers = await dbInstance.getAll('users');
             for (const u of allUsers) {
                 if (u.storeId) {
-                    const id = crypto.randomUUID();
+                    const id = generateId();
                     try {
                         await dbInstance.add('userStores', { id, userId: u.id, storeId: u.storeId });
                     }
@@ -676,7 +677,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
     if (usersCount === 0) {
         // Create super admin
         await db.add('users', {
-            id: crypto.randomUUID(),
+            id: generateId(),
             username: 'superadmin',
             phone: '+22600000000', // Téléphone par défaut pour super admin
             email: 'superadmin@example.com',
@@ -689,7 +690,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
         // Create default store
         const now = Date.now();
         const defaultStore = {
-            id: crypto.randomUUID(),
+            id: generateId(),
             name: 'Magasin Principal',
             address: '',
             active: true,
@@ -701,7 +702,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
         await db.add('stores', defaultStore);
         // Create default admin user
         await db.add('users', {
-            id: crypto.randomUUID(),
+            id: generateId(),
             username: 'admin',
             phone: '1111111111', // Téléphone par défaut pour admin
             email: 'admin@example.com',
@@ -713,16 +714,16 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
         });
         // Create default customers
         const defaultCustomers = [
-            { id: crypto.randomUUID(), name: 'Client Test', phone: '0000000000', email: '', address: '', notes: '', balance: 0, createdAt: Date.now(), storeId: defaultStore.id },
+            { id: generateId(), name: 'Client Test', phone: '0000000000', email: '', address: '', notes: '', balance: 0, createdAt: Date.now(), storeId: defaultStore.id },
         ];
         for (const customer of defaultCustomers) {
             await db.add('customers', customer);
         }
         // Create sample categories
         const categories = [
-            { id: crypto.randomUUID(), name: 'Boissons', description: 'Boissons diverses', createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Alimentation', description: 'Produits alimentaires', createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Hygiène', description: 'Produits d\'hygiène', createdAt: Date.now() },
+            { id: generateId(), name: 'Boissons', description: 'Boissons diverses', createdAt: Date.now() },
+            { id: generateId(), name: 'Alimentation', description: 'Produits alimentaires', createdAt: Date.now() },
+            { id: generateId(), name: 'Hygiène', description: 'Produits d\'hygiène', createdAt: Date.now() },
         ];
         for (const category of categories) {
             await db.add('categories', { ...category, storeId: defaultStore.id });
@@ -730,22 +731,20 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
         // Create default expense categories
         const expenseCategories = [
             // Indirect expenses (liées à plusieurs produits)
-            { id: crypto.randomUUID(), name: 'Huile de cuisson', type: 'indirect' as const, description: 'Pour friture et cuisson', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Gaz', type: 'indirect' as const, description: 'Bouteille de gaz', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Condiments', type: 'indirect' as const, description: 'Épices, sel, cube, etc.', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Emballages', type: 'indirect' as const, description: 'Sachets, boîtes, papier', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Huile de cuisson', type: 'indirect' as const, description: 'Pour friture et cuisson', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Gaz', type: 'indirect' as const, description: 'Bouteille de gaz', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Condiments', type: 'indirect' as const, description: 'Épices, sel, cube, etc.', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Emballages', type: 'indirect' as const, description: 'Sachets, boîtes, papier', storeId: defaultStore.id, active: true, createdAt: Date.now() },
             // Operational expenses
-            { id: crypto.randomUUID(), name: 'Électricité', type: 'operational' as const, description: 'Facture électricité', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Loyer', type: 'operational' as const, description: 'Loyer du local', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Salaires', type: 'operational' as const, description: 'Salaires employés', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Transport', type: 'operational' as const, description: 'Frais de transport', storeId: defaultStore.id, active: true, createdAt: Date.now() },
-            { id: crypto.randomUUID(), name: 'Maintenance', type: 'operational' as const, description: 'Réparations et maintenance', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Électricité', type: 'operational' as const, description: 'Facture électricité', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Loyer', type: 'operational' as const, description: 'Loyer du local', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Salaires', type: 'operational' as const, description: 'Salaires employés', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Transport', type: 'operational' as const, description: 'Frais de transport', storeId: defaultStore.id, active: true, createdAt: Date.now() },
+            { id: generateId(), name: 'Maintenance', type: 'operational' as const, description: 'Réparations et maintenance', storeId: defaultStore.id, active: true, createdAt: Date.now() },
         ];
         for (const expenseCategory of expenseCategories) {
             await db.add('expenseCategories', expenseCategory);
         }
     }
 }
-export function generateId() {
-    return crypto.randomUUID();
-}
+export { generateId } from './id';

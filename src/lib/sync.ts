@@ -3,6 +3,7 @@ import { openDB } from 'idb';
 import { BACKEND_BASE, backendAvailable } from './backend';
 import { addNativeNetworkListener, getNativeNetworkStatus } from './nativeNetwork';
 import { buildAuthenticatedHeaders, hasAuthToken, requiresBackendAuth } from './apiAuth';
+import { generateId } from './id';
 export const SYNC_DB_NAME = 'pos_sync_db';
 export const SYNC_STORE = 'pending_ops';
 const API_BASE = `${BACKEND_BASE}/api`;
@@ -104,7 +105,7 @@ async function writeSyncLog(entry: {
         const { getDB } = await import('./db');
         const db = await getDB();
         await db.add('syncLogs' as any, {
-            id: crypto.randomUUID(),
+            id: generateId(),
             level: entry.level,
             message: entry.message,
             entity: entry.entity,
@@ -417,7 +418,7 @@ async function queueCanonicalShiftSync(shift: any, backendShiftIds?: Set<string>
         await db.delete('syncQueue', duplicateOp.id);
     }
     await db.put('syncQueue', {
-        id: existingOp?.id || crypto.randomUUID(),
+        id: existingOp?.id || generateId(),
         table: 'shifts',
         operation,
         method: operation === 'create' ? 'POST' : 'PUT',
@@ -440,7 +441,7 @@ async function upsertSyncQueueOp(match: (op: any) => boolean, nextOp: any) {
     }
     await db.put('syncQueue', {
         ...nextOp,
-        id: existingOp?.id || nextOp.id || crypto.randomUUID(),
+        id: existingOp?.id || nextOp.id || generateId(),
         createdAt: existingOp?.createdAt || nextOp.createdAt || Date.now(),
         attempts: 0,
     });
@@ -890,6 +891,7 @@ async function getQueuedShiftIds() {
     return queuedShiftIds;
 }
 const closedShiftMarkerKey = (userId?: string, storeId?: string) => `closed_shift_marker_${String(userId || '')}_${String(storeId || '')}`;
+const shiftStatusCacheKey = (userId?: string, storeId?: string) => `shift_status_cache_${String(userId || '')}_${String(storeId || '')}`;
 function readClosedShiftMarker(userId?: string, storeId?: string) {
     if (!userId)
         return null;
@@ -926,6 +928,71 @@ export function persistClosedShiftMarker(shift: {
             openedAt: Number(shift.openedAt || 0),
             closedAt: Number(shift.closedAt || Date.now()),
             storedAt: Date.now(),
+        }));
+    }
+    catch {
+        // ignore localStorage issues
+    }
+}
+export function readShiftStatusCache(userId?: string, storeId?: string) {
+    if (!userId) {
+        return null;
+    }
+    try {
+        const raw = localStorage.getItem(shiftStatusCacheKey(userId, storeId));
+        return raw ? JSON.parse(raw) : null;
+    }
+    catch {
+        return null;
+    }
+}
+export function persistActiveShiftCache(shift: {
+    id: string;
+    userId: string;
+    storeId: string;
+    openedAt?: number;
+    status?: string;
+    [key: string]: any;
+}) {
+    if (!shift?.userId) {
+        return;
+    }
+    try {
+        localStorage.setItem(shiftStatusCacheKey(shift.userId, shift.storeId), JSON.stringify({
+            userId: shift.userId,
+            storeId: shift.storeId,
+            status: 'open',
+            shift: {
+                ...shift,
+                status: 'open',
+            },
+            updatedAt: Date.now(),
+        }));
+    }
+    catch {
+        // ignore localStorage issues
+    }
+}
+export function persistInactiveShiftCache(userId?: string, storeId?: string, lastShift?: {
+    id?: string;
+    openedAt?: number;
+    closedAt?: number | null;
+}) {
+    if (!userId) {
+        return;
+    }
+    try {
+        localStorage.setItem(shiftStatusCacheKey(userId, storeId), JSON.stringify({
+            userId,
+            storeId,
+            status: 'closed',
+            shift: null,
+            lastShift: lastShift ? {
+                id: lastShift.id,
+                openedAt: Number(lastShift.openedAt || 0),
+                closedAt: Number(lastShift.closedAt || Date.now()),
+            } : null,
+            updatedAt: Date.now(),
         }));
     }
     catch {
@@ -1062,9 +1129,15 @@ export async function resolveUserOpenShift(userId?: string, storeId?: string, op
                 tx.done,
             ]);
         }
+        persistActiveShiftCache(latestShift);
         return latestShift;
     }
-    return openShifts[0] || null;
+    if (openShifts[0]) {
+        persistActiveShiftCache(openShifts[0]);
+        return openShifts[0];
+    }
+    persistInactiveShiftCache(userId, storeId, closedMarker || undefined);
+    return null;
 }
 function isRefundedSale(item: any) {
     return item?.refunded === true || item?.refunded === 1 || item?.refunded === '1';

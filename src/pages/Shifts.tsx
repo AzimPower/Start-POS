@@ -22,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import ShiftReceiptDetails from './ShiftReceiptDetails';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerTrigger, DrawerClose } from '@/components/ui/drawer';
-import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistClosedShiftMarker, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
+import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistActiveShiftCache, persistClosedShiftMarker, persistInactiveShiftCache, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 interface Shift {
@@ -676,7 +676,7 @@ export default function Shifts() {
                 if (shift.status === 'open') {
                     const salesById = new Map<string, any>();
                     for (const sale of sales) {
-                        salesById.set(String(sale?.id || crypto.randomUUID()), sale);
+                        salesById.set(String(sale?.id || generateId()), sale);
                     }
                     for (const sale of allSales) {
                         if (sale?.draft) {
@@ -692,7 +692,7 @@ export default function Shifts() {
                         if (saleTime < shift.openedAt || saleTime > shiftEnd) {
                             continue;
                         }
-                        salesById.set(String(sale?.id || crypto.randomUUID()), sale);
+                        salesById.set(String(sale?.id || generateId()), sale);
                     }
                     sales = Array.from(salesById.values());
                 }
@@ -1145,16 +1145,11 @@ export default function Shifts() {
             lines.push(NativePrinter.formatColumns('Mobile Money :', `${formatMoney(mobile)} FCFA`, width));
             lines.push(NativePrinter.formatColumns('Total encaisse :', `${formatMoney(totalPaid)} FCFA`, width));
             lines.push('');
-            // Try to print logo first if present
-            const savedLogo = localStorage.getItem('storeLogo');
-            if (savedLogo) {
-                try {
-                    await NativePrinter.printImage(savedLogo, undefined, paper === '58' ? '58' : '80');
-                }
-                catch (e) {
-                }
-            }
-            const ok = await NativePrinter.printText(lines);
+            const ok = await NativePrinter.printText(lines, undefined, {
+                logoSource: NativePrinter.getStoredPrintableLogo(),
+                paper: paper === '58' ? '58' : '80',
+                title: `Rapport-${shift.id}`
+            });
             if (!ok) {
                 // fallback: build simple HTML using the same lines
                 const tmp = document.createElement('div');
@@ -1224,6 +1219,7 @@ export default function Shifts() {
                     storeId: user!.storeId,
                     data: newShift,
                 });
+                persistActiveShiftCache(newShift);
                 setActiveShift(newShift);
                 setShowOpenDialog(false);
                 setOpeningAmount('');
@@ -1254,6 +1250,7 @@ export default function Shifts() {
                         toast.error('Le shift trouve n\'a pas pu etre active. Rechargez la page et reessayez.');
                         return;
                     }
+                    persistActiveShiftCache(resolvedShift);
                     setActiveShift(resolvedShift);
                     toast.success('Shift actif récupéré.');
                     setShowOpenDialog(false);
@@ -1295,6 +1292,7 @@ export default function Shifts() {
                                     toast.error('Le shift trouve n\'a pas pu etre active. Rechargez la page et reessayez.');
                                     return;
                                 }
+                                persistActiveShiftCache(resolvedShift);
                                 setActiveShift(resolvedShift);
                                 toast.success('Shift actif récupéré.');
                                 try {
@@ -1318,6 +1316,7 @@ export default function Shifts() {
                     throw new Error(`Erreur backend: ${response.status}`);
                 }
                 await db.add('shifts', newShift);
+                persistActiveShiftCache(newShift);
                 toast.success('Shift ouvert et synchronisé avec succès');
             }
             catch (error) {
@@ -1455,6 +1454,11 @@ export default function Shifts() {
                         data: { id: activeShift.id },
                     });
                 }
+                persistInactiveShiftCache(activeShift.userId, activeShift.storeId, {
+                    id: activeShift.id,
+                    openedAt: activeShift.openedAt,
+                    closedAt: Date.now(),
+                });
                 setActiveShift(null);
                 setShowCloseDialog(false);
                 setCashAmount('');
@@ -1462,12 +1466,14 @@ export default function Shifts() {
                 setOtherAmount('');
                 shiftsCache.current.clear();
                 await loadShiftsPage(db, 0, pageSize, true);
+                setLoading(false);
                 toast.success('Shift sans vente supprimé automatiquement');
                 return;
             }
             // Sauvegarder localement d'abord
             await db.put('shifts', updatedShift);
             persistClosedShiftMarker(updatedShift);
+            persistInactiveShiftCache(updatedShift.userId, updatedShift.storeId, updatedShift);
             // Mettre à jour l'état UI immédiatement — ne pas attendre email/sync
             setActiveShift(null);
             setShowCloseDialog(false);
@@ -1475,13 +1481,15 @@ export default function Shifts() {
             setMobileMoneyAmount('');
             setOtherAmount('');
             await loadShiftsPage(db, 0, pageSize, true);
+            setLoading(false);
             toast.success('Shift fermé avec succès');
             // Notifier les autres onglets (POS, etc.) que le shift est fermé
             try {
                 localStorage.setItem('shift_closed_event', JSON.stringify({ shiftId: updatedShift.id, closedAt: updatedShift.closedAt }));
             }
             catch { }
-            try {
+            void (async () => {
+                try {
                 const dbInstance = await getDB();
                 const store = await dbInstance.get('stores', updatedShift.storeId);
                 const storeName = store?.name || updatedShift.storeId || 'Magasin';
@@ -1494,11 +1502,11 @@ export default function Shifts() {
                     title: (updatedShift.difference ?? 0) < 0 ? 'Fermeture de service avec écart' : 'Fermeture de service',
                     message: `${user?.username || 'Un utilisateur'} a fermé le service du magasin ${storeName}. Ouverture: ${formatDateFn(updatedShift.openedAt)}. Fermeture: ${formatDateFn(updatedShift.closedAt ?? Date.now())}. Montant de fermeture: ${(updatedShift.closingAmount ?? 0).toLocaleString('fr-FR')} FCFA. Attendu: ${(updatedShift.expectedAmount ?? 0).toLocaleString('fr-FR')} FCFA. Écart: ${(updatedShift.difference ?? 0).toLocaleString('fr-FR')} FCFA.`,
                 });
-            }
-            catch (notificationError) {
-            }
-            // Envoi automatique d'un email à l'admin avec résumé complet du shift
-            try {
+                }
+                catch (notificationError) {
+                }
+                // Envoi automatique d'un email à l'admin avec résumé complet du shift
+                try {
                 const dbInstance = await getDB();
                 // Vérifier les paramètres d'email pour les shifts (lit depuis le backend = source de vérité)
                 const emailSettings = await getEmailSettings(updatedShift.storeId);
@@ -1621,47 +1629,49 @@ export default function Shifts() {
                         toast.error('Erreur lors de la programmation email');
                     }
                 }
-            }
-            catch (e) {
-                toast.error('Erreur: ' + (e as Error).message);
-            }
-            // Auto-print the closed shift receipt (best-effort)
-            try {
-                printShiftReceipt(updatedShift);
-            }
-            catch (e) {
-            }
-            // Si en ligne, synchroniser immÃ©diatement avec le backend
-            if (isOnline) {
-                try {
-                    const response = await fetch(`${BACKEND_BASE}/api/shifts.php`, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(updatedShift)
-                    });
-                    if (!response.ok) {
-                        throw new Error(`Erreur backend: ${response.status}`);
-                    }
                 }
                 catch (error) {
-                    // Mettre en file via performSyncOp (gÃ¨re mise en file si offline)
+                    toast.error('Erreur: ' + (error as Error).message);
+                }
+                // Auto-print the closed shift receipt (best-effort)
+                try {
+                    printShiftReceipt(updatedShift);
+                }
+                catch (e) {
+                }
+                // Si en ligne, synchroniser immÃ©diatement avec le backend
+                if (isOnline) {
+                    try {
+                        const response = await fetch(`${BACKEND_BASE}/api/shifts.php`, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(updatedShift)
+                        });
+                        if (!response.ok) {
+                            throw new Error(`Erreur backend: ${response.status}`);
+                        }
+                    }
+                    catch (error) {
+                        // Mettre en file via performSyncOp (gÃ¨re mise en file si offline)
+                        await performSyncOp({
+                            url: `${BACKEND_BASE}/api/shifts.php`,
+                            method: 'PUT',
+                            data: updatedShift
+                        });
+                    }
+                }
+                else {
+                    // Hors ligne : mettre en file via performSyncOp
                     await performSyncOp({
                         url: `${BACKEND_BASE}/api/shifts.php`,
                         method: 'PUT',
                         data: updatedShift
                     });
                 }
-            }
-            else {
-                // Hors ligne : mettre en file via performSyncOp
-                await performSyncOp({
-                    url: `${BACKEND_BASE}/api/shifts.php`,
-                    method: 'PUT',
-                    data: updatedShift
-                });
-            }
+            })();
+            return;
         }
         catch (error) {
             toast.error('Erreur lors de la fermeture du shift');

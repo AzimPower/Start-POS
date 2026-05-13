@@ -16,11 +16,13 @@ import { Label } from '@/components/ui/label';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { getStoredReceiptPaper } from '@/lib/receiptPaper';
 import { assignReceiptMetadata, formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
 import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
+import { calculateReceiptLineAmounts, getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import * as secureStorage from '@/lib/secureStorage';
 interface Product {
     id: string;
@@ -162,14 +164,10 @@ export default function POS() {
     // MÃ©moriser les calculs du panier pour optimiser les performances
     const cartCalculations = useMemo(() => {
         const subtotal = cart.reduce((sum, item) => {
-            const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
-            return sum + (price * item.quantity);
+            return sum + calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate).subtotal;
         }, 0);
         const tax = cart.reduce((sum, item) => {
-            const price = (item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice))) ? Number(item.product.salePrice) : 0;
-            const taxRate = (typeof item.product.taxRate === 'number' && !isNaN(item.product.taxRate)) ? item.product.taxRate : 0;
-            const itemTotal = price * item.quantity;
-            return sum + (itemTotal * (taxRate / 100));
+            return sum + calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate).tax;
         }, 0);
         const total = subtotal + tax;
         return { subtotal, tax, total };
@@ -769,14 +767,17 @@ export default function POS() {
                 userId: user!.id,
                 storeId: user!.storeId,
                 customerId: selectedCustomerId === 'none' ? null : selectedCustomerId,
-                items: cart.map(item => ({
-                    productId: item.product.id,
-                    name: item.product.name,
-                    quantity: item.quantity,
-                    price: Number(item.product.salePrice) || 0,
-                    tax: (Number(item.product.salePrice) || 0) * item.quantity * ((item.product.taxRate || 0) / 100),
-                    total: (Number(item.product.salePrice) || 0) * item.quantity * (1 + ((item.product.taxRate || 0) / 100)),
-                })),
+                items: cart.map(item => {
+                    const lineAmounts = calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate);
+                    return {
+                        productId: item.product.id,
+                        name: item.product.name,
+                        quantity: item.quantity,
+                        price: Number(item.product.salePrice) || 0,
+                        tax: lineAmounts.tax,
+                        total: lineAmounts.total,
+                    };
+                }),
                 subtotal: calculateSubtotal(),
                 tax: calculateTax(),
                 total: total,
@@ -928,20 +929,20 @@ export default function POS() {
                 try {
                     const autoPrintSetting = localStorage.getItem('auto_print');
                     const autoPrint = autoPrintSetting === null ? true : autoPrintSetting === 'true';
-                    if (autoPrint) {
-                        try {
-                            const lines: string[] = [];
-                            const centerText = (s: string, w: number) => {
-                                const str = (s || '').toString();
+	                    if (autoPrint) {
+	                        try {
+	                            const lines: string[] = [];
+	                            const centerText = (s: string, w: number) => {
+	                                const str = (s || '').toString();
                                 if (str.length >= w)
                                     return str;
                                 const left = Math.floor((w - str.length) / 2);
                                 return ' '.repeat(left) + str;
-                            };
-                            const paper = localStorage.getItem('printer_paper') || '80';
-                            const width = paper === '58' ? 32 : 48;
-                            const headerLine = centerText(receiptData.storeName || 'Magasin', width);
-                            lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
+	                            };
+	                            const paper = getStoredReceiptPaper();
+	                            const width = paper === '58' ? 32 : 48;
+	                            const headerLine = centerText(receiptData.storeName || 'Magasin', width);
+	                            lines.push('\x1bE\x01' + headerLine + '\x1bE\x00');
                             if (receiptData.storeAddress) {
                                 const addrLine = centerText(receiptData.storeAddress, width);
                                 lines.push('\x1bE\x01' + addrLine + '\x1bE\x00');
@@ -954,7 +955,7 @@ export default function POS() {
                                 const name = it.name || '';
                                 const qty = it.quantity || 0;
                                 const price = isNaN(it.price) ? 0 : Math.round(it.price);
-                                const totalItem = isNaN(it.total) ? qty * price : Math.round(it.total);
+                                const totalItem = Math.round(getReceiptItemDisplayTotal(it, receiptData));
                                 const qtyText = qty + ' x ' + price + ' FCFA';
                                 const totalText = totalItem + ' FCFA';
                                 const leftFull = (name + ' ' + qtyText).trim();
@@ -997,7 +998,11 @@ export default function POS() {
                             lines.push('');
                             lines.push('Merci pour votre visite !');
                             const mac = printerMacRef.current || localStorage.getItem('printer_mac') || undefined;
-                            const ok = await NativePrinter.printText(lines, mac as any);
+                            const ok = await NativePrinter.printText(lines, mac as any, {
+                                logoSource: NativePrinter.getStoredPrintableLogo(),
+                                paper: paper === '58' ? '58' : '80',
+                                title: `Recu-${receiptData.receiptNumber || 'vente'}`
+                            });
                             if (!ok) {
                                 toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
                             }

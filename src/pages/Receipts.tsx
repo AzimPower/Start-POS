@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import Receipt from '@/components/Receipt';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, buildProjectedLocalSales, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -48,6 +49,12 @@ interface Sale {
     refundedAt?: number;
     receiptSequence?: number;
     receiptNumber?: string;
+}
+function sameId(a: unknown, b: unknown) {
+    if (a === null || a === undefined || b === null || b === undefined) {
+        return false;
+    }
+    return String(a) === String(b);
 }
 type ReceiptsViewSnapshot = {
     sales: Sale[];
@@ -344,6 +351,39 @@ export default function Receipts() {
         setFilteredSales(salesData);
         return salesData;
     };
+    const getRefundAccess = (sale: Sale) => {
+        const saleShift = shifts.find((shift) => sameId(shift?.id, sale.shiftId));
+        const isClosed = saleShift?.status === 'closed';
+        const isPrivileged = user?.role === 'admin' || user?.role === 'super_admin';
+        if (isClosed) {
+            return {
+                visible: true,
+                allowed: false,
+                reason: 'Impossible : shift fermé',
+            };
+        }
+        if (isPrivileged) {
+            return {
+                visible: true,
+                allowed: true,
+                reason: 'Rembourser',
+            };
+        }
+        const belongsToActiveShift = activeShift && sameId(activeShift?.id, sale.shiftId);
+        const belongsToCurrentCashier = sameId(user?.id, sale.userId);
+        if (!belongsToActiveShift || !belongsToCurrentCashier) {
+            return {
+                visible: false,
+                allowed: false,
+                reason: 'Impossible : reçu hors de votre service',
+            };
+        }
+        return {
+            visible: true,
+            allowed: true,
+            reason: 'Rembourser',
+        };
+    };
     useEffect(() => {
         let filtered = sales;
         // Filter by search
@@ -398,7 +438,7 @@ export default function Receipts() {
                 const name = it.name || '';
                 const qty = Number(it.quantity) || 0;
                 const price = isNaN(Number(it.price)) ? 0 : Math.round(Number(it.price));
-                const totalItem = isNaN(Number(it.total)) ? qty * price : Math.round(Number(it.total));
+                const totalItem = Math.round(getReceiptItemDisplayTotal(it, sale));
                 const qtyText = `${qty} x ${price} FCFA`;
                 const totalText = `${totalItem} FCFA`;
                 const leftFull = (name + ' ' + qtyText).trim();
@@ -431,7 +471,11 @@ export default function Receipts() {
             }
             lines.push('');
             lines.push('Merci pour votre visite !');
-            const printed = await NativePrinter.printText(lines);
+            const printed = await NativePrinter.printText(lines, undefined, {
+                logoSource: NativePrinter.getStoredPrintableLogo(),
+                paper: paper === '58' ? '58' : '80',
+                title: `Recu-${receiptNumber}`
+            });
             if (!printed) {
                 // Build HTML fallback and try native HTML print
                 const tmp = document.createElement('div');
@@ -463,6 +507,13 @@ export default function Receipts() {
     const handleRefund = async () => {
         if (!saleToRefund)
             return;
+        const refundAccess = getRefundAccess(saleToRefund);
+        if (!refundAccess.allowed) {
+            toast.error(refundAccess.reason);
+            setShowRefundDialog(false);
+            setSaleToRefund(null);
+            return;
+        }
         const targetSaleId = saleToRefund.id;
         try {
             setLoading(true);
@@ -771,8 +822,11 @@ export default function Receipts() {
                                 <Printer className="w-4 h-4"/>
                               </Button>)}
                             {!sale.refunded && !pendingRefundIds.has(sale.id) && (() => {
-                    const shift = shifts.find(s => s.id === sale.shiftId);
-                    const isClosed = shift && shift.status === 'closed';
+                    const refundAccess = getRefundAccess(sale);
+                    if (!refundAccess.visible) {
+                        return null;
+                    }
+                    const isClosed = !refundAccess.allowed;
                     return (<Button variant="destructive" size="icon" disabled={isClosed || loading} title={isClosed ? 'Impossible : shift fermé' : 'Rembourser'} onClick={() => {
                             if (!isClosed) {
                                 setSaleToRefund(sale);

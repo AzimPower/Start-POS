@@ -58,6 +58,8 @@ import { Printer, ImageIcon, Trash, Check, RefreshCw, BellRing, Palette, Shield,
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
 import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
+import { tryNativePrint } from '@/lib/print';
+import { getRuntimeLabel } from '@/lib/runtime';
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
 const elevatedCardClassName = 'overflow-hidden rounded-[1.75rem] border border-border/60 bg-card/95 shadow-sm shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90';
 function SettingsSectionHeading({ icon: Icon, title, description, action }: {
@@ -81,6 +83,8 @@ function SettingsSectionHeading({ icon: Icon, title, description, action }: {
 }
 export default function Settings() {
     const { user } = useAuth();
+    const runtimeLabel = getRuntimeLabel();
+    const isWebPrinterDialogMode = runtimeLabel === 'web';
     // Store balance admin section state
     const [store, setStore] = useState<any | null>(null);
     const [loadingStore, setLoadingStore] = useState(false);
@@ -528,6 +532,7 @@ export default function Settings() {
                         setLogoPreview(null);
                         try {
                             localStorage.removeItem('storeLogo');
+                            NativePrinter.clearPrintableLogoCache();
                         }
                         catch (e) { /* ignore */ }
                         try {
@@ -660,22 +665,13 @@ export default function Settings() {
             catch (err) {
             }
         })();
-        // Detect native bluetooth serial
+        // Detect native printer support on either Android (Bluetooth) or desktop (system printer)
         try {
-            type CordovaWindow = {
-                plugins?: {
-                    printer?: unknown;
-                    bluetoothSerial?: unknown;
-                };
-            };
-            const w = window as unknown as {
-                cordova?: CordovaWindow;
-                bluetoothSerial?: unknown;
-                BluetoothSerial?: unknown;
-            };
-            const cordova = w.cordova;
-            const hasBtSerial = !!(cordova && cordova.plugins && cordova.plugins.bluetoothSerial) || !!(w.bluetoothSerial || w.BluetoothSerial);
-            setNativePrinterAvailable(hasBtSerial);
+            void NativePrinter.isNativePrinterAvailable().then((available) => {
+                setNativePrinterAvailable(available);
+            }).catch(() => {
+                setNativePrinterAvailable(false);
+            });
         }
         catch (err) {
             setNativePrinterAvailable(false);
@@ -799,6 +795,8 @@ export default function Settings() {
                                 localStorage.removeItem('storeLogo_ts');
                             }
                             catch (e) { /* ignore */ }
+                            void NativePrinter.cachePrintableLogo(logoUrl).catch(() => {
+                            });
                         }
                     }
                     catch (err) {
@@ -809,6 +807,8 @@ export default function Settings() {
                             localStorage.setItem('storeLogo', logoUrl);
                         }
                         catch (e) { /* ignore */ }
+                        void NativePrinter.cachePrintableLogo(logoUrl).catch(() => {
+                        });
                     }
                     // Verify remote file exists (in case backend points to removed file)
                     try {
@@ -822,6 +822,7 @@ export default function Settings() {
                     setLogoPreview(null);
                     try {
                         localStorage.removeItem('storeLogo');
+                        NativePrinter.clearPrintableLogoCache();
                     }
                     catch (e) { /* ignore */ }
                     try {
@@ -870,6 +871,11 @@ export default function Settings() {
     };
     const handlePrinterDiagnostics = () => {
         try {
+            if (isWebPrinterDialogMode) {
+                setLastPrinterDiagAt(new Date().toLocaleString());
+                toast.info('Sur la version web, Edge ne peut pas lister directement les imprimantes Windows. Utilisez Imprimer pour choisir POS-58 dans la boîte de dialogue.');
+                return;
+            }
             const info = NativePrinter.inspectPlugin();
             setLastPrinterDiagAt(new Date().toLocaleString());
             toast.info('Diagnostic imprimante envoyé au journal');
@@ -1092,6 +1098,9 @@ export default function Settings() {
                 localStorage.setItem('storeLogo', logo);
             else
                 localStorage.removeItem('storeLogo');
+            if (!logo) {
+                NativePrinter.clearPrintableLogoCache();
+            }
             toast.success('Paramètres enregistrés');
         }
         catch (err) {
@@ -1243,8 +1252,8 @@ export default function Settings() {
     }
     const canManageStoreBalance = user.role === 'admin' || user.role === 'super_admin';
     const canEditEmailSettings = user.role === 'admin';
-    const selectedPrinterName = paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante';
-    const printerStatusLabel = selectedPrinter ? (printerConnected ? 'Connectée' : 'À reconnecter') : 'Non configurée';
+    const selectedPrinterName = isWebPrinterDialogMode ? 'Choix dans Edge/Chrome' : (paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante');
+    const printerStatusLabel = isWebPrinterDialogMode ? 'Boîte navigateur' : (selectedPrinter ? (printerConnected ? 'Connectée' : 'À reconnecter') : 'Non configurée');
     // Unified test-print function: prefer using NativePrinter.printHtml which handles
     // connecting and sending via the configured native plugin. If no native plugin
     // is available, show an informative toast.
@@ -1253,6 +1262,18 @@ export default function Settings() {
         setLastTest(null);
         try {
             const html = `<div style="font-family:monospace; white-space:pre">TEST IMPRESSION\nPOS App\n${new Date().toLocaleString()}\n\nMerci</div>`;
+            if (isWebPrinterDialogMode) {
+                const ok = await tryNativePrint(html, 'Test impression');
+                const at = new Date().toLocaleString();
+                setLastTest({ ok: !!ok, at, message: ok ? 'Boîte d\'impression ouverte' : 'Impossible d\'ouvrir la boîte d\'impression' });
+                if (ok) {
+                    toast.success('La boîte d\'impression du navigateur a été ouverte');
+                }
+                else {
+                    toast.error('Impossible d\'ouvrir la boîte d\'impression');
+                }
+                return;
+            }
             const deviceId = selectedPrinter || undefined;
             const ok = await NativePrinter.printHtml(html, deviceId as any);
             const at = new Date().toLocaleString();
@@ -1317,6 +1338,33 @@ export default function Settings() {
                 setLogoPreview(dataUrl);
                 // Try to upload to backend like product images
                 (async () => {
+                    const persistLocalLogo = async (logoValue: string) => {
+                        setLogoPreview(logoValue);
+                        setLogo(logoValue);
+                        localStorage.setItem('storeLogo', logoValue);
+                        try {
+                            localStorage.setItem('storeLogo_ts', String(Date.now()));
+                        }
+                        catch (e) { /* ignore */ }
+                        try {
+                            await NativePrinter.cachePrintableLogo(logoValue, dataUrl);
+                        }
+                        catch (e) {
+                        }
+                        try {
+                            const storeId = (user as any)?.storeId;
+                            if (storeId) {
+                                const db = await getDB();
+                                const rec = await db.get('stores', storeId);
+                                const updated = rec ? { ...rec } as any : { id: storeId } as any;
+                                updated.logo = logoValue;
+                                updated.updatedAt = Date.now();
+                                await db.put('stores', updated);
+                            }
+                        }
+                        catch (err) {
+                        }
+                    };
                     try {
                         const res = await fetch(BACKEND_BASE + '/api/upload_image.php', {
                             method: 'POST',
@@ -1327,27 +1375,7 @@ export default function Settings() {
                             const body = await res.json();
                             if (body && body.url) {
                                 const full = BACKEND_BASE + '/' + body.url.replace(/^\/+/, '');
-                                setLogoPreview(full);
-                                setLogo(full);
-                                localStorage.setItem('storeLogo', full);
-                                try {
-                                    localStorage.setItem('storeLogo_ts', String(Date.now()));
-                                }
-                                catch (e) { /* ignore */ }
-                                // Also persist to IndexedDB so sync merge sees the update
-                                try {
-                                    const storeId = (user as any)?.storeId;
-                                    if (storeId) {
-                                        const db = await getDB();
-                                        const rec = await db.get('stores', storeId);
-                                        const updated = rec ? { ...rec } as any : { id: storeId } as any;
-                                        updated.logo = full;
-                                        updated.updatedAt = Date.now();
-                                        await db.put('stores', updated);
-                                    }
-                                }
-                                catch (err) {
-                                }
+                                await persistLocalLogo(full);
                                 // persist logo to server-side store record if we have a storeId
                                 try {
                                     const storeId = (user as any)?.storeId;
@@ -1667,8 +1695,8 @@ export default function Settings() {
           {/* Printer card */}
                     <Card className={`${elevatedCardClassName} 2xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
-                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique via Bluetooth et gardez un statut lisible pour l'impression des reçus." action={<Badge variant="outline" className={nativePrinterAvailable ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-red-200 bg-red-500/10 text-red-700'}>
-                                        {nativePrinterAvailable ? 'Plugin natif détecté' : 'Plugin natif absent'}
+                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<Badge variant="outline" className={nativePrinterAvailable ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-red-200 bg-red-500/10 text-red-700'}>
+                                        {nativePrinterAvailable ? 'Support natif détecté' : 'Support natif absent'}
                                     </Badge>}/>
                             <div className="flex flex-wrap gap-2">
                                 <Badge variant="outline" className={selectedPrinter ? (printerConnected ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-amber-200 bg-amber-500/10 text-amber-700') : 'border-slate-200 bg-slate-500/10 text-slate-700'}>{printerStatusLabel}</Badge>
@@ -1682,14 +1710,19 @@ export default function Settings() {
                   <Button onClick={async () => {
             // Open native paired devices list / test print flow
             try {
+                                if (isWebPrinterDialogMode) {
+                                    setPaired([]);
+                                    toast.info('Sur la version web, la liste des imprimantes Windows n’est pas accessible. Utilisez Imprimer pour choisir POS-58 dans la boîte de dialogue.');
+                                    return;
+                                }
                                 setScanning(true);
                 const devices = await NativePrinter.listPaired();
                 setPaired(devices || []);
                 if (!devices || devices.length === 0)
-                    toast.info('Aucune imprimante appairée trouvée');
+                    toast.info('Aucune imprimante trouvée');
             }
             catch (e) {
-                toast.error('Impossible de lister les appareils appairés');
+                toast.error('Impossible de lister les imprimantes');
             }
                         finally {
                                 setScanning(false);
@@ -1705,7 +1738,7 @@ export default function Settings() {
 
                 {/* Afficher l'avertissement et la liste des imprimantes directement
             sous le bouton Rechercher imprimantes pour une meilleure UX */}
-                                {paired.length === 0 ? (<div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground mt-2">Aucune imprimante appairée trouvée. Assurez-vous que l'imprimante est appairée au téléphone via les paramètres Android.</div>) : (<div className="space-y-2 mt-2">
+                                {paired.length === 0 ? (<div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground mt-2">Aucune imprimante trouvée. Sur Android, appairez-la d'abord en Bluetooth. Sur PC, vérifiez qu'elle est installée dans Windows.</div>) : (<div className="space-y-2 mt-2">
                     {paired.map(d => (<div key={d.id} className={`p-2 border rounded flex items-center justify-between ${selectedPrinter === d.id ? 'bg-muted' : ''}`}>
                         <div>
                           <div className="font-medium">{d.name}</div>
@@ -1758,7 +1791,7 @@ export default function Settings() {
 
                 {/* Affichage synthétique de l'imprimante sélectionnée / connexion */}
                                 <div className="mt-3 rounded-2xl border border-border/60 bg-muted/25 p-4">
-                  {selectedPrinter ? (<div className="flex items-center justify-between">
+                  {selectedPrinter || isWebPrinterDialogMode ? (<div className="flex items-center justify-between">
                       <div className="text-sm">
                                                 <div className="font-medium">Imprimante sélectionnée</div>
                                                 <div className="text-xs text-muted-foreground">{selectedPrinterName}</div>
@@ -1798,6 +1831,10 @@ export default function Settings() {
                                                 <span>{isTesting ? 'Test en cours...' : 'Imprimer un reçu de test'}</span>
                       </Button>
                                             <Button className="w-full justify-start gap-3 whitespace-nowrap rounded-xl border-sky-700 bg-sky-600 px-4 py-3 text-left text-white shadow-sm hover:bg-sky-700 sm:w-auto sm:justify-center" variant="outline" onClick={async () => {
+            if (isWebPrinterDialogMode) {
+                toast.info('Sur la version web, il n’y a pas de connexion native persistante. L’impression passe par la boîte de dialogue du navigateur.');
+                return;
+            }
             const ok = NativePrinter.isConnected();
             setPrinterConnected(ok);
             toast.info(ok ? 'Imprimante native connectée' : 'Aucune connexion native');

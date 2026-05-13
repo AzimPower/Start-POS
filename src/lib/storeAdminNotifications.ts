@@ -1,6 +1,7 @@
 import { BACKEND_BASE } from '@/lib/backend';
 import { getDB, performSyncOp } from '@/lib/db';
 import { getEmailSettings, type StoreAlertSettings } from '@/lib/emailSettingsCache';
+import { generateId } from '@/lib/id';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 
 type NotificationSeverity = 'info' | 'success' | 'warning' | 'critical';
@@ -63,7 +64,7 @@ function isInboxNotificationEnabled(settings: StoreAlertSettings, event: Automat
 }
 
 function buildAutomatedNotificationId() {
-    return `auton_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
+    return `auton_${generateId().replace(/-/g, '').slice(0, 30)}`;
 }
 
 function formatQuantity(value: number, unit?: string) {

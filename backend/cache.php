@@ -175,6 +175,31 @@ function generateCacheKey($endpoint, $params = []) {
     return 'api_' . $endpoint . '_' . md5(json_encode($params));
 }
 
+function getCacheNamespaceVersion($namespace) {
+    global $cache;
+    $key = 'cache_ns_version_' . md5((string)$namespace);
+    $version = $cache->get($key);
+    if ($version === false) {
+        $version = 1;
+        $cache->set($key, $version, 0);
+    }
+
+    return (int)$version;
+}
+
+function generateNamespacedCacheKey($namespace, $params = []) {
+    ksort($params);
+    $version = getCacheNamespaceVersion($namespace);
+    $safeNamespace = preg_replace('/[^a-zA-Z0-9_\-]/', '_', (string)$namespace);
+    return 'ns_' . $safeNamespace . '_v' . $version . '_' . md5(json_encode($params));
+}
+
+function invalidateCacheNamespace($namespace) {
+    global $cache;
+    $key = 'cache_ns_version_' . md5((string)$namespace);
+    $cache->set($key, getCacheNamespaceVersion($namespace) + 1, 0);
+}
+
 /**
  * Invalider le cache pour un endpoint
  * @param string $endpoint Nom de l'endpoint

@@ -3,6 +3,183 @@
 // Bluetooth thermal printers (58mm/80mm). It detects common plugins and
 // attempts to send raw ESC/POS bytes. If no native plugin is present, the
 // functions will indicate unavailability.
+import { getReceiptPaperLayout, getStoredReceiptPaper } from './receiptPaper';
+type DesktopPrinterInfo = {
+    id: string;
+    name: string;
+    isDefault?: boolean;
+    status?: number | null;
+};
+type PrintTextOptions = {
+    logoSource?: string | null;
+    paper?: '58' | '80';
+    title?: string;
+};
+const STORE_LOGO_KEY = 'storeLogo';
+const STORE_LOGO_PRINT_DATA_KEY = 'storeLogo_print_data';
+const STORE_LOGO_PRINT_SOURCE_KEY = 'storeLogo_print_source';
+function safeLocalStorageGet(key: string): string | null {
+    try {
+        return localStorage.getItem(key);
+    }
+    catch (err) {
+        return null;
+    }
+}
+function safeLocalStorageSet(key: string, value: string) {
+    try {
+        localStorage.setItem(key, value);
+    }
+    catch (err) {
+    }
+}
+function safeLocalStorageRemove(key: string) {
+    try {
+        localStorage.removeItem(key);
+    }
+    catch (err) {
+    }
+}
+function getDesktopPrinterBridge() {
+    try {
+        return window.__START_POS_DESKTOP__?.printers;
+    }
+    catch (err) {
+        return undefined;
+    }
+}
+function isDesktopPrinterRuntimeAvailable() {
+    const bridge = getDesktopPrinterBridge();
+    return !!(bridge && typeof bridge.list === 'function' && typeof bridge.printHtml === 'function');
+}
+async function normalizePrintableLogoDataUrl(dataUrl: string, maxWidth = 576): Promise<string> {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+        return dataUrl;
+    }
+    return await new Promise<string>((resolve) => {
+        try {
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const width = img.naturalWidth || img.width || 0;
+                    const height = img.naturalHeight || img.height || 0;
+                    if (!width || !height) {
+                        resolve(dataUrl);
+                        return;
+                    }
+                    const scale = width > maxWidth ? (maxWidth / width) : 1;
+                    const targetWidth = Math.max(1, Math.round(width * scale));
+                    const targetHeight = Math.max(1, Math.round(height * scale));
+                    const canvas = document.createElement('canvas');
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        resolve(dataUrl);
+                        return;
+                    }
+                    ctx.clearRect(0, 0, targetWidth, targetHeight);
+                    ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+                    resolve(canvas.toDataURL('image/png'));
+                }
+                catch (err) {
+                    resolve(dataUrl);
+                }
+            };
+            img.onerror = () => resolve(dataUrl);
+            img.src = dataUrl;
+        }
+        catch (err) {
+            resolve(dataUrl);
+        }
+    });
+}
+async function fetchImageSourceToDataUrl(source: string): Promise<string> {
+    if (!source) {
+        throw new Error('empty_image_source');
+    }
+    if (source.startsWith('data:')) {
+        return source;
+    }
+    const response = await fetch(source, { cache: 'no-store' });
+    if (!response.ok) {
+        throw new Error(`image_fetch_failed_${response.status}`);
+    }
+    const blob = await response.blob();
+    return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            if (typeof reader.result === 'string') {
+                resolve(reader.result);
+                return;
+            }
+            reject(new Error('image_read_failed'));
+        };
+        reader.onerror = () => reject(new Error('image_read_failed'));
+        reader.readAsDataURL(blob);
+    });
+}
+export function getStoredPrintableLogo(preferredSource?: string | null): string | null {
+    const cachedData = safeLocalStorageGet(STORE_LOGO_PRINT_DATA_KEY);
+    const cachedSource = safeLocalStorageGet(STORE_LOGO_PRINT_SOURCE_KEY);
+    const storedLogo = safeLocalStorageGet(STORE_LOGO_KEY);
+    if (cachedData && cachedData.startsWith('data:')) {
+        if (!preferredSource || !cachedSource || cachedSource === preferredSource || storedLogo === preferredSource) {
+            return cachedData;
+        }
+    }
+    return preferredSource || storedLogo;
+}
+export function clearPrintableLogoCache() {
+    safeLocalStorageRemove(STORE_LOGO_PRINT_DATA_KEY);
+    safeLocalStorageRemove(STORE_LOGO_PRINT_SOURCE_KEY);
+}
+export async function cachePrintableLogo(source: string, rawDataUrl?: string): Promise<string | null> {
+    const cacheSource = source || rawDataUrl || '';
+    if (!cacheSource) {
+        return null;
+    }
+    const cachedData = safeLocalStorageGet(STORE_LOGO_PRINT_DATA_KEY);
+    const cachedSource = safeLocalStorageGet(STORE_LOGO_PRINT_SOURCE_KEY);
+    if (cachedData && cachedData.startsWith('data:') && cachedSource === cacheSource) {
+        return cachedData;
+    }
+    const dataUrl = rawDataUrl || await fetchImageSourceToDataUrl(source);
+    const normalizedDataUrl = await normalizePrintableLogoDataUrl(dataUrl);
+    safeLocalStorageSet(STORE_LOGO_PRINT_DATA_KEY, normalizedDataUrl);
+    safeLocalStorageSet(STORE_LOGO_PRINT_SOURCE_KEY, cacheSource);
+    return normalizedDataUrl;
+}
+async function imageSourceToDataUrl(source: string): Promise<string> {
+    if (!source) {
+        throw new Error('empty_image_source');
+    }
+    if (source.startsWith('data:')) {
+        return await cachePrintableLogo(source, source) || source;
+    }
+    const cachedLogo = getStoredPrintableLogo(source);
+    if (cachedLogo && cachedLogo.startsWith('data:')) {
+        return cachedLogo;
+    }
+    return await cachePrintableLogo(source) || await fetchImageSourceToDataUrl(source);
+}
+async function sendToDesktopRaw(dataBase64: string, title?: string): Promise<boolean> {
+    try {
+        const bridge = getDesktopPrinterBridge();
+        if (!bridge || typeof bridge.printRaw !== 'function') {
+            return false;
+        }
+        const result = await bridge.printRaw({
+            dataBase64,
+            deviceName: _connectedMac || undefined,
+            title
+        });
+        return !!result?.ok;
+    }
+    catch (err) {
+        return false;
+    }
+}
 function toBase64(bytes: number[]) {
     const chunkSize = 0x8000;
     let index = 0;
@@ -15,6 +192,22 @@ function toBase64(bytes: number[]) {
         index += chunkSize;
     }
     return btoa(result);
+}
+async function buildLogoPayload(dataUrl: string, paper: '58' | '80'): Promise<number[]> {
+    const resolvedDataUrl = await imageSourceToDataUrl(dataUrl);
+    const targetWidth = paper === '58' ? 384 : 576;
+    const raster = await imageDataUrlToRaster(resolvedDataUrl, targetWidth);
+    const w = raster[0] | (raster[1] << 8);
+    const h = raster[2] | (raster[3] << 8);
+    const bitmap = raster.slice(4);
+    const payload: number[] = [];
+    payload.push(0x1b, 0x61, 0x01);
+    payload.push(0x1d, 0x76, 0x30, 0x00, w & 0xff, (w >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff);
+    payload.push(...bitmap);
+    payload.push(0x1b, 0x61, 0x00);
+    payload.push(0x0a);
+    payload.push(0x0a);
+    return payload;
 }
 export function textToEscPos(text: string) {
     // Try to encode to Windows-1252 (CP1252) which covers Western Europe
@@ -97,6 +290,9 @@ export function textToEscPos(text: string) {
 export async function isNativePrinterAvailable(): Promise<boolean> {
     try {
         const win = window as any;
+        if (isDesktopPrinterRuntimeAvailable()) {
+            return true;
+        }
         // Check for common Cordova/Capacitor bluetooth serial plugin (no printer plugin fallback)
         if (win.bluetoothSerial || (win.cordova && win.cordova.plugins && win.cordova.plugins.BluetoothSerial)) {
             return true;
@@ -115,6 +311,14 @@ export async function listPaired(): Promise<Array<{
     id: string;
 }>> {
     try {
+        const desktopBridge = getDesktopPrinterBridge();
+        if (desktopBridge && typeof desktopBridge.list === 'function') {
+            const printers = await desktopBridge.list();
+            return (printers || []).map((printer: DesktopPrinterInfo) => ({
+                name: printer.isDefault ? `${printer.name} (par défaut)` : printer.name,
+                id: printer.id
+            }));
+        }
         const win = window as any;
         if (win.bluetoothSerial && typeof win.bluetoothSerial.list === 'function') {
             return await new Promise((resolve, reject) => {
@@ -142,6 +346,16 @@ export async function connect(deviceId: string): Promise<{
     error?: string;
 }> {
     try {
+        const desktopBridge = getDesktopPrinterBridge();
+        if (desktopBridge && typeof desktopBridge.list === 'function') {
+            const printers = await desktopBridge.list();
+            const match = (printers || []).find((printer: DesktopPrinterInfo) => printer.id === deviceId || printer.name === deviceId);
+            if (!match) {
+                return { ok: false, error: 'printer_not_found' };
+            }
+            _connectedMac = match.id;
+            return { ok: true };
+        }
         const win = window as any;
         // If already connected to this device, resolve
         if (_connectedMac === deviceId)
@@ -235,6 +449,10 @@ export async function connect(deviceId: string): Promise<{
 }
 export async function disconnect(): Promise<boolean> {
     try {
+        if (isDesktopPrinterRuntimeAvailable()) {
+            _connectedMac = null;
+            return true;
+        }
         const win = window as any;
         if (win.bluetoothSerial && typeof win.bluetoothSerial.disconnect === 'function') {
             return await new Promise((resolve) => {
@@ -346,6 +564,15 @@ async function sendToBluetoothSerial(deviceId: string | null, base64Data: string
 export async function nativePrint(html: string, fileName?: string): Promise<boolean> {
     try {
         const win = window as any;
+        const desktopBridge = getDesktopPrinterBridge();
+        if (desktopBridge && typeof desktopBridge.printHtml === 'function') {
+            const result = await desktopBridge.printHtml({
+                html,
+                deviceName: _connectedMac || undefined,
+                title: fileName
+            });
+            return !!result?.ok;
+        }
         // Build a simple ESC/POS document: initialize, print text lines, feed and cut
         const INIT = [0x1b, 0x40]; // ESC @
         const FEED_AND_CUT = [0x1d, 0x56, 0x41, 0x10]; // GS V A n (partial cut)
@@ -414,8 +641,39 @@ export async function printHtml(html: string, deviceId?: string): Promise<boolea
  * to the printer which can appear as literal CSS text. The function builds a
  * simple ESC/POS payload with columns for item and price and sends it.
  */
-export async function printText(lines: string[], deviceId?: string): Promise<boolean> {
+export async function printText(lines: string[], deviceId?: string, options: PrintTextOptions = {}): Promise<boolean> {
     try {
+        const selectedPaper = options.paper || getStoredReceiptPaper();
+        const selectedLogo = options.logoSource || null;
+        if (isDesktopPrinterRuntimeAvailable()) {
+            if (deviceId) {
+                const res = await connect(deviceId);
+                if (!res.ok) {
+                    return false;
+                }
+            }
+            const INIT = [0x1b, 0x40];
+            const SELECT_CP1252 = [0x1b, 0x74, 0x10];
+            const FEED_AND_CUT = [0x1d, 0x56, 0x41, 0x10];
+            const LINE_FEED = [0x0a];
+            const sanitize = (s: string) => String(s || '').replace(/\u00a0/g, ' ').replace(/\t/g, '    ');
+            const payload: number[] = [];
+            payload.push(...INIT);
+            payload.push(...SELECT_CP1252);
+            if (selectedLogo) {
+                try {
+                    payload.push(...await buildLogoPayload(selectedLogo, selectedPaper));
+                }
+                catch (err) {
+                }
+            }
+            for (const l of lines) {
+                payload.push(...textToEscPos(sanitize(l) + '\n'));
+            }
+            payload.push(...LINE_FEED);
+            payload.push(...FEED_AND_CUT);
+            return await sendToDesktopRaw(toBase64(payload), options.title || 'Ticket');
+        }
         const INIT = [0x1b, 0x40]; // ESC @
         // Select codepage WPC1252 (ESC t 16)
         const SELECT_CP1252 = [0x1b, 0x74, 0x10];
@@ -426,6 +684,13 @@ export async function printText(lines: string[], deviceId?: string): Promise<boo
         const payload: number[] = [];
         payload.push(...INIT);
         payload.push(...SELECT_CP1252);
+        if (selectedLogo) {
+            try {
+                payload.push(...await buildLogoPayload(selectedLogo, selectedPaper));
+            }
+            catch (err) {
+            }
+        }
         for (const l of lines) {
             const t = sanitize(l) + '\n';
             payload.push(...textToEscPos(t));
@@ -474,6 +739,7 @@ export function formatColumns(left: string, right: string, width = 42): string {
 /**
  * Convert a dataURL (base64 image) into ESC/POS raster bytes using GS v 0.
  * targetWidthPx: desired output width in pixels (printer dots)
+ * Returns [xL, xH, yL, yH, ...bitmap] where x = width in bytes.
  */
 async function imageDataUrlToRaster(dataUrl: string, targetWidthPx: number): Promise<number[]> {
     return new Promise((resolve, reject) => {
@@ -490,7 +756,10 @@ async function imageDataUrlToRaster(dataUrl: string, targetWidthPx: number): Pro
                     const ctx = canvas.getContext('2d');
                     if (!ctx)
                         return reject(new Error('canvas not supported'));
-                    // draw and convert to grayscale
+                    // Thermal printers need an opaque image. Transparent backgrounds
+                    // are normalized to white before monochrome conversion.
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, w, h);
                     ctx.drawImage(img, 0, 0, w, h);
                     const imgd = ctx.getImageData(0, 0, w, h);
                     const pixels = imgd.data;
@@ -522,7 +791,7 @@ async function imageDataUrlToRaster(dataUrl: string, targetWidthPx: number): Pro
                             data.push(byte);
                         }
                     }
-                    resolve([w & 0xff, (w >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff, ...data]);
+                    resolve([widthBytes & 0xff, (widthBytes >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff, ...data]);
                 }
                 catch (e) {
                     reject(e);
@@ -544,11 +813,36 @@ async function imageDataUrlToRaster(dataUrl: string, targetWidthPx: number): Pro
 export async function printImage(dataUrl: string, deviceId?: string, paper: '58' | '80' = '80'): Promise<boolean> {
     try {
         const win = window as any;
+        const resolvedDataUrl = await imageSourceToDataUrl(dataUrl);
+        if (isDesktopPrinterRuntimeAvailable()) {
+            if (deviceId) {
+                const res = await connect(deviceId);
+                if (!res.ok) {
+                    return false;
+                }
+            }
+            const INIT = [0x1b, 0x40];
+            const LINE_FEED = [0x0a];
+            const targetWidth = (paper || getStoredReceiptPaper()) === '58' ? 384 : 576;
+            const raster = await imageDataUrlToRaster(resolvedDataUrl, targetWidth);
+            const w = raster[0] | (raster[1] << 8);
+            const h = raster[2] | (raster[3] << 8);
+            const bitmap = raster.slice(4);
+            const payload: number[] = [];
+            payload.push(...INIT);
+            payload.push(0x1b, 0x61, 0x01);
+            payload.push(0x1d, 0x76, 0x30, 0x00, w & 0xff, (w >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff);
+            payload.push(...bitmap);
+            payload.push(0x1b, 0x61, 0x00);
+            payload.push(...LINE_FEED);
+            payload.push(...LINE_FEED);
+            return await sendToDesktopRaw(toBase64(payload), 'Logo');
+        }
         const INIT = [0x1b, 0x40]; // ESC @
         const LINE_FEED = [0x0a];
         // Set target width in pixels for typical printers
         const targetWidth = paper === '58' ? 384 : 576;
-        const raster = await imageDataUrlToRaster(dataUrl, targetWidth);
+        const raster = await imageDataUrlToRaster(resolvedDataUrl, targetWidth);
         // raster returned as [w_lo,w_hi,h_lo,h_hi, ...bitmap]
         const w = raster[0] | (raster[1] << 8);
         const h = raster[2] | (raster[3] << 8);
@@ -581,6 +875,8 @@ export function inspectPlugin() {
     try {
         const win = window as any;
         const info: any = { time: new Date().toISOString() };
+        info.desktopPrinterRuntime = isDesktopPrinterRuntimeAvailable();
+        info.desktopPrinterSelected = _connectedMac;
         info.bluetoothSerial = !!win.bluetoothSerial;
         if (win.bluetoothSerial) {
             info.bluetoothSerialMethods = Object.keys(win.bluetoothSerial).filter(k => typeof win.bluetoothSerial[k] === 'function');
@@ -607,6 +903,12 @@ export async function probeDevice(deviceId: string, timeout = 3000): Promise<{
     error?: string;
 }> {
     try {
+        const desktopBridge = getDesktopPrinterBridge();
+        if (desktopBridge && typeof desktopBridge.list === 'function') {
+            const printers = await desktopBridge.list();
+            const found = (printers || []).some((printer: DesktopPrinterInfo) => printer.id === deviceId || printer.name === deviceId);
+            return found ? { available: true } : { available: false, error: 'printer_not_found' };
+        }
         // If already connected to this device, report available
         if (_connectedMac === deviceId)
             return { available: true };

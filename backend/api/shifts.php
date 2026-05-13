@@ -13,6 +13,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 try {
     require_once '../config.php';
+    require_once '../store_metrics.php';
     $method = $_SERVER['REQUEST_METHOD'];
     $authClaims = require_auth();
     $currentUserId = (string)($authClaims['sub'] ?? '');
@@ -88,11 +89,15 @@ try {
             $data['closedAt'] ?? null,
             $data['status']
         ]);
+        store_metrics_invalidate_cache($data['storeId'] ?? null);
         echo json_encode(['success' => true, 'id' => $id]);
         break;
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
+        $summaryStmt = $pdo->prepare('SELECT storeId FROM shifts WHERE id = ? LIMIT 1');
+        $summaryStmt->execute([$data['id'] ?? '']);
+        $existingShiftStoreId = $summaryStmt->fetchColumn() ?: null;
         if ($mustRestrictToOwnShifts) {
             $ownerStmt = $pdo->prepare('SELECT userId FROM shifts WHERE id = ? LIMIT 1');
             $ownerStmt->execute([$data['id'] ?? '']);
@@ -164,19 +169,29 @@ try {
                 ]);
             }
         }
+        store_metrics_refresh_sales_summaries_for_shift($pdo, (string)($data['id'] ?? ''), $data['storeId'] ?? $existingShiftStoreId);
+        store_metrics_invalidate_cache($data['storeId'] ?? $existingShiftStoreId);
         echo json_encode(['success' => true]);
         break;
     case 'DELETE':
         $id = $_GET['id'] ?? null;
         if ($id) {
+            $targetStoreId = null;
             if (!is_super_admin_claims($authClaims)) {
                 $checkStmt = $pdo->prepare('SELECT storeId FROM shifts WHERE id = ? LIMIT 1');
                 $checkStmt->execute([$id]);
                 $targetStoreId = $checkStmt->fetchColumn();
                 ensure_store_access($authClaims, $targetStoreId !== false ? (string)$targetStoreId : null);
             }
+            if ($targetStoreId === null) {
+                $summaryStmt = $pdo->prepare('SELECT storeId FROM shifts WHERE id = ? LIMIT 1');
+                $summaryStmt->execute([$id]);
+                $targetStoreId = $summaryStmt->fetchColumn() ?: null;
+            }
             $stmt = $pdo->prepare('DELETE FROM shifts WHERE id=?');
             $stmt->execute([$id]);
+            store_metrics_refresh_sales_summaries_for_shift($pdo, (string)$id, $targetStoreId);
+            store_metrics_invalidate_cache($targetStoreId);
             echo json_encode(['success' => true]);
         } else {
             echo json_encode(['error' => 'ID requis']);
