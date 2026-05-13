@@ -422,7 +422,7 @@ export default function Receipts() {
             const paper = localStorage.getItem('printer_paper') || '80';
             const dateText = date.toLocaleString('fr-FR');
             const footerLines = getReceiptFooterLines(receiptSettings.thankYouMessage);
-            const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const storedLogoSource = receiptSettings.printLogo ? await NativePrinter.resolvePrintableLogoSource(sale.storeId || '') : null;
             const printableLogo = storedLogoSource
                 ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                 : undefined;
@@ -442,7 +442,7 @@ export default function Receipts() {
                 total: sale.total || 0,
                 paymentMethod: sale.paymentMethod || '',
                 paymentDetails: sale.payments?.map((p) => ({
-                    label: p.method === 'cash' ? 'Especes' : p.method === 'mobile_money' ? 'Mobile Money' : p.method,
+                    label: p.method === 'cash' ? 'Espèces' : p.method === 'mobile_money' ? 'Mobile Money' : p.method,
                     amount: p.amount || 0,
                 })) || [],
                 footerLines,
@@ -459,7 +459,7 @@ export default function Receipts() {
                 const html = buildSaleReceiptHtml(receiptDocument, `Recu-${receiptNumber}`);
                 const usedNative = await tryNativePrint(html, `Reçu-${receiptNumber}`);
                 if (!usedNative) {
-                    toast.error('Imprimante native indisponible. Veuillez associer une imprimante Bluetooth.');
+                    toast.error("Impression disponible uniquement sur Android et l'application desktop avec une imprimante native.");
                 }
             }
         }

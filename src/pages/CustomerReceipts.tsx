@@ -14,7 +14,7 @@ import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { Badge } from '@/components/ui/badge';
 import Receipt from '@/components/Receipt';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
-import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { buildBypassUrl, buildProjectedLocalSales, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { buildSaleReceiptHtml, buildSaleReceiptLines } from '@/lib/saleReceiptDocument';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -150,13 +150,15 @@ export default function CustomerReceipts() {
                 try {
                     const response = await fetch(buildBypassUrl(`${BACKEND_BASE}/api/sales.php`, {
                         storeId: user?.storeId,
+                        customerId,
+                        all: 1,
                     }), { cache: 'no-store' });
 
                     if (response.ok) {
                         const salesPayload = await response.json();
                         const backendSales = Array.isArray(salesPayload) ? salesPayload : (salesPayload.data || []);
-                        const mergedBackendSales = await mergeBackendSalesIntoLocalDb(db, backendSales);
-                        await processSales(mergedBackendSales, db);
+                        await mergeBackendSalesIntoLocalDb(db, backendSales, { restrictToBackendIds: true });
+                        await loadFromLocal(db);
                     }
                     else {
                         await loadFromLocal(db);
@@ -183,7 +185,10 @@ export default function CustomerReceipts() {
     };
 
     const loadFromLocal = async (db: any) => {
-        const salesData = await db.getAll('sales');
+        const salesData = await buildProjectedLocalSales(db, {
+            storeId: user?.storeId,
+            customerId,
+        });
         await processSales(salesData, db);
     };
 
@@ -361,7 +366,7 @@ export default function CustomerReceipts() {
             const receiptSettings = await getStoreReceiptSettings(sale.storeId || '');
             const paper = localStorage.getItem('printer_paper') || '80';
             const footerLines = getReceiptFooterLines(receiptSettings.thankYouMessage);
-            const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const storedLogoSource = receiptSettings.printLogo ? await NativePrinter.resolvePrintableLogoSource(sale.storeId || '') : null;
             const printableLogo = storedLogoSource
                 ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                 : undefined;
@@ -381,7 +386,7 @@ export default function CustomerReceipts() {
                 total: sale.total || 0,
                 paymentMethod: sale.paymentMethod || '',
                 paymentDetails: sale.payments?.map((payment) => ({
-                    label: payment.method === 'cash' ? 'Especes' : payment.method === 'mobile_money' ? 'Mobile Money' : payment.method,
+                    label: payment.method === 'cash' ? 'Espèces' : payment.method === 'mobile_money' ? 'Mobile Money' : payment.method,
                     amount: payment.amount || 0,
                 })) || [],
                 footerLines,
@@ -401,7 +406,7 @@ export default function CustomerReceipts() {
                 const usedNative = await tryNativePrint(html, `Reçu-${receiptNumber}`);
 
                 if (!usedNative) {
-                    toast.error('Imprimante native indisponible. Veuillez associer une imprimante Bluetooth.');
+                    toast.error("Impression disponible uniquement sur Android et l'application desktop avec une imprimante native.");
                 }
             }
         }
@@ -824,15 +829,16 @@ export default function CustomerReceipts() {
                     tax={selectedSale.tax}
                     total={selectedSale.total}
                     paymentMethod={selectedSale.paymentMethod}
-                    cashReceived={selectedSale.payments.find((payment) => payment.method === 'cash')?.amount}
+                    cashReceived={(selectedSale.payments || []).find((payment) => payment.method === 'cash')?.amount}
                     change={(() => {
+                        const payments = selectedSale.payments || [];
                         if (selectedSale.paymentMethod === 'cash' || selectedSale.paymentMethod === 'mobile_money') {
-                            return (selectedSale.payments[0]?.amount || 0) - selectedSale.total;
+                            return (payments[0]?.amount || 0) - selectedSale.total;
                         }
 
                         if (selectedSale.paymentMethod === 'mixed') {
-                            const totalPaid = (selectedSale.payments.find((payment) => payment.method === 'cash')?.amount || 0)
-                                + (selectedSale.payments.find((payment) => payment.method === 'mobile_money')?.amount || 0);
+                            const totalPaid = (payments.find((payment) => payment.method === 'cash')?.amount || 0)
+                                + (payments.find((payment) => payment.method === 'mobile_money')?.amount || 0);
                             return totalPaid - selectedSale.total;
                         }
 

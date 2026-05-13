@@ -24,6 +24,7 @@ import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 import { calculateReceiptLineAmounts, getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
+import { buildSaleReceiptHeaderLines, buildSaleReceiptItemLines } from '@/lib/saleReceiptDocument';
 import * as secureStorage from '@/lib/secureStorage';
 interface Product {
     id: string;
@@ -870,13 +871,13 @@ export default function POS() {
             let paymentDetails = [];
             if (sale.paymentMethod === 'mixed') {
                 paymentDetails = [
-                    { label: 'Especes', amount: sale.payments.find((p: any) => p.method === 'cash')?.amount || 0 },
+                    { label: 'Espèces', amount: sale.payments.find((p: any) => p.method === 'cash')?.amount || 0 },
                     { label: 'Mobile Money', amount: sale.payments.find((p: any) => p.method === 'mobile_money')?.amount || 0 }
                 ];
             }
             else if (sale.paymentMethod === 'cash') {
                 paymentDetails = [
-                    { label: 'Especes', amount: sale.payments[0]?.amount || 0 }
+                    { label: 'Espèces', amount: sale.payments[0]?.amount || 0 }
                 ];
             }
             else if (sale.paymentMethod === 'mobile_money') {
@@ -954,30 +955,19 @@ export default function POS() {
                             }
                             lines.push('');
                             const dateText = receiptData.date ? new Date(receiptData.date).toLocaleString('fr-FR') : new Date(receiptData.createdAt).toLocaleString('fr-FR');
-                            lines.push(NativePrinter.formatColumns(dateText, 'Recu N°: ' + receiptData.receiptNumber, width));
+                            lines.push(...buildSaleReceiptHeaderLines({
+                                dateText,
+                                receiptNumber: receiptData.receiptNumber,
+                                paper: paper === '58' ? '58' : '80',
+                            }));
                             lines.push('--------------------------------');
                             for (const it of (receiptData.items || [])) {
-                                const name = it.name || '';
-                                const qty = it.quantity || 0;
-                                const price = isNaN(it.price) ? 0 : Math.round(it.price);
-                                const totalItem = Math.round(getReceiptItemDisplayTotal(it, receiptData));
-                                const qtyText = qty + ' x ' + price + ' FCFA';
-                                const totalText = totalItem + ' FCFA';
-                                const leftFull = (name + ' ' + qtyText).trim();
-                                if (leftFull.length + 1 + totalText.length <= width) {
-                                    lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
-                                }
-                                else {
-                                    const firstLineLeft = name;
-                                    if (firstLineLeft.length + 1 + totalText.length <= width) {
-                                        lines.push(NativePrinter.formatColumns(firstLineLeft, totalText, width));
-                                        lines.push(NativePrinter.formatColumns(qtyText, '', width));
-                                    }
-                                    else {
-                                        lines.push(NativePrinter.formatColumns(name, totalText, width));
-                                        lines.push(NativePrinter.formatColumns(qtyText, '', width));
-                                    }
-                                }
+                                lines.push(...buildSaleReceiptItemLines({
+                                    name: it.name || '',
+                                    quantity: it.quantity || 0,
+                                    unitPrice: isNaN(it.price) ? 0 : Math.round(it.price),
+                                    displayTotal: Math.round(getReceiptItemDisplayTotal(it, receiptData)),
+                                }, paper === '58' ? '58' : '80'));
                             }
                             lines.push('--------------------------------');
                             lines.push(NativePrinter.formatColumns('Sous-total:', Math.round(receiptData.subtotal || 0) + ' FCFA', width));
@@ -990,6 +980,9 @@ export default function POS() {
                             if (receiptData.paymentDetails && receiptData.paymentDetails.length > 0) {
                                 for (const p of receiptData.paymentDetails) {
                                     lines.push(NativePrinter.formatColumns(p.label + ':', Math.round(p.amount) + ' FCFA', width));
+                                }
+                                if (receiptData.change !== undefined && receiptData.change !== null && Number(receiptData.change) > 0) {
+                                    lines.push(NativePrinter.formatColumns('Rendu:', Math.round(receiptData.change) + ' FCFA', width));
                                 }
                             }
                             else {
@@ -1008,7 +1001,7 @@ export default function POS() {
                                 }
                             }
                             const mac = printerMacRef.current || localStorage.getItem('printer_mac') || undefined;
-                            const storedLogoSource = receiptData.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+                            const storedLogoSource = receiptData.printLogo ? await NativePrinter.resolvePrintableLogoSource(sale.storeId || user?.storeId || '') : null;
                             const printableLogo = storedLogoSource
                                 ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                                 : undefined;
@@ -1018,7 +1011,7 @@ export default function POS() {
                                 title: `Recu-${receiptData.receiptNumber || 'vente'}`
                             });
                             if (!ok) {
-                                toast.error('Impression native indisponible. Veuillez associer une imprimante Bluetooth.');
+                                toast.error("Impression disponible uniquement sur Android et l'application desktop avec une imprimante native.");
                             }
                         }
                         catch (e) {
@@ -1048,6 +1041,12 @@ export default function POS() {
             setLoading(false);
         }
     };
+    const paymentTotalEntered = paymentMethod === 'mixed'
+        ? (parseFloat(cashAmount) || 0) + (parseFloat(mobileAmount) || 0)
+        : paymentMethod === 'cash'
+            ? (parseFloat(cashAmount) || 0)
+            : (parseFloat(mobileAmount) || 0);
+    const paymentChange = Math.max(0, paymentTotalEntered - cartCalculations.total);
     // If we haven't finished checking shifts yet, don't render the "no shift"
     // card â€” return a neutral placeholder to avoid flashing the message. Once
     // shiftsChecked is true we can show the card if there's indeed no active shift.
@@ -1380,6 +1379,12 @@ export default function POS() {
                   <Label>Montant Mobile Money</Label>
                   <Input type="text" inputMode="numeric" placeholder="0" value={formatNumberWithSpaces(mobileAmount)} onChange={e => setMobileAmount(e.target.value.replace(/\s/g, ""))} required/>
                 </div>)}
+              {paymentChange > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="text-sm text-emerald-700">Monnaie à rendre</p>
+                  <p className="text-xl font-bold text-emerald-700">{formatMoneyDisplay(paymentChange)} FCFA</p>
+                </div>
+              )}
               </div>
             <div className="flex gap-2">
              <Button className="w-full" size="lg" variant="outline" onClick={() => setShowDraftCommentDialog(true)}>

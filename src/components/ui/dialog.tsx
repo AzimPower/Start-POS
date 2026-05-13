@@ -12,29 +12,25 @@ if (typeof window !== 'undefined' && !(window as any)[REGISTRY_KEY]) {
 }
 const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
     const { open: openProp, defaultOpen, onOpenChange, ...rest } = props as any;
-    const computeInitial = () => {
-        if (typeof openProp !== 'undefined')
-            return !!openProp;
+    const isControlled = typeof openProp !== 'undefined';
+    const [openState, setOpenState] = React.useState<boolean>(() => {
         if (typeof defaultOpen !== 'undefined')
             return !!defaultOpen;
         return false;
-    };
-    const [openState, setOpenState] = React.useState<boolean>(computeInitial);
+    });
     const onOpenChangeRef = React.useRef(onOpenChange);
 
     React.useEffect(() => {
         onOpenChangeRef.current = onOpenChange;
     }, [onOpenChange]);
 
-    React.useEffect(() => {
-        if (typeof openProp === 'undefined')
-            return;
-        setOpenState(!!openProp);
-    }, [openProp]);
+    const resolvedOpen = isControlled ? !!openProp : openState;
 
     React.useEffect(() => {
         const entry = { forceClose: () => {
-                setOpenState(false);
+                if (!isControlled) {
+                    setOpenState(false);
+                }
                 try {
                     if (typeof onOpenChangeRef.current === 'function')
                         onOpenChangeRef.current(false);
@@ -53,15 +49,17 @@ const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
             }
             catch (e) { }
         };
-    }, []);
+    }, [isControlled]);
 
     const handleOpenChange = (nextOpen: boolean) => {
-        setOpenState(nextOpen);
+        if (!isControlled) {
+            setOpenState(nextOpen);
+        }
         if (typeof onOpenChange === 'function')
             onOpenChange(nextOpen);
     };
 
-    return <DialogPrimitive.Root open={openState} onOpenChange={handleOpenChange} {...(rest as any)}/>;
+    return <DialogPrimitive.Root open={resolvedOpen} defaultOpen={defaultOpen} onOpenChange={handleOpenChange} {...(rest as any)}/>;
 };
 const DialogTrigger = DialogPrimitive.Trigger;
 const DialogPortal = DialogPrimitive.Portal;

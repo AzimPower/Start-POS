@@ -137,22 +137,41 @@ function getQueueEntryMethod(entry: any) {
     return 'POST';
 }
 
-function shouldIncludeSaleForStore(sale: any, storeId?: string) {
+function shouldIncludeSaleForFilters(sale: any, options?: { storeId?: string; customerId?: string; }) {
     if (!sale?.id) {
         return false;
     }
 
-    if (!storeId) {
-        return true;
+    if (options?.storeId && String(sale.storeId || '') !== String(options.storeId)) {
+        return false;
     }
 
-    return String(sale.storeId || '') === String(storeId);
+    if (options?.customerId && String(sale.customerId || '') !== String(options.customerId)) {
+        return false;
+    }
+
+    return true;
 }
 
-export async function buildProjectedLocalSales(db: any, options?: { storeId?: string; }) {
-    const localSales = await db.getAll('sales');
+async function getBaseLocalSales(db: any, options?: { storeId?: string; customerId?: string; }) {
+    if (options?.customerId) {
+        const customerSales = await db.getAllFromIndex('sales', 'by-customer', options.customerId);
+        return options.storeId
+            ? customerSales.filter((sale: any) => String(sale.storeId || '') === String(options.storeId))
+            : customerSales;
+    }
+
+    if (options?.storeId) {
+        return db.getAllFromIndex('sales', 'by-store', options.storeId);
+    }
+
+    return db.getAll('sales');
+}
+
+export async function buildProjectedLocalSales(db: any, options?: { storeId?: string; customerId?: string; }) {
+    const localSales = await getBaseLocalSales(db, options);
     const salesById = new Map<string, any>(localSales
-        .filter((sale: any) => shouldIncludeSaleForStore(sale, options?.storeId))
+        .filter((sale: any) => shouldIncludeSaleForFilters(sale, options))
         .map((sale: any) => [String(sale.id), sale]));
 
     const queueEntries: any[] = [];
@@ -175,10 +194,6 @@ export async function buildProjectedLocalSales(db: any, options?: { storeId?: st
         }
 
         const sale = entry?.data;
-        if (!shouldIncludeSaleForStore(sale, options?.storeId)) {
-            continue;
-        }
-
         const saleId = String(sale.id || '');
         if (!saleId) {
             continue;
@@ -187,6 +202,10 @@ export async function buildProjectedLocalSales(db: any, options?: { storeId?: st
         const method = getQueueEntryMethod(entry);
         if (method === 'DELETE') {
             salesById.delete(saleId);
+            continue;
+        }
+
+        if (!shouldIncludeSaleForFilters(sale, options)) {
             continue;
         }
 

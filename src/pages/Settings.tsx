@@ -62,7 +62,6 @@ import { getDB, performSyncOp } from '@/lib/db';
 import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
 import { DEFAULT_STORE_RECEIPT_SETTINGS, saveStoreReceiptSettings, getStoreReceiptSettings, invalidateStoreReceiptSettingsCache, type StoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { tryNativePrint } from '@/lib/print';
-import { getRuntimeLabel } from '@/lib/runtime';
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
 const elevatedCardClassName = 'overflow-hidden rounded-[1.75rem] border border-border/60 bg-card/95 shadow-sm shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90';
 function SettingsSectionHeading({ icon: Icon, title, description, action }: {
@@ -95,8 +94,7 @@ function SectionToggleButton({ open, onClick }: {
 }
 export default function Settings() {
     const { user } = useAuth();
-    const runtimeLabel = getRuntimeLabel();
-    const isWebPrinterDialogMode = runtimeLabel === 'web';
+    const isWebPrinterDialogMode = false;
     const [isWideDesktop, setIsWideDesktop] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
     // Store balance admin section state
     const [store, setStore] = useState<any | null>(null);
@@ -868,6 +866,16 @@ export default function Settings() {
                                 localStorage.removeItem('storeLogo_ts');
                             }
                             catch (e) { /* ignore */ }
+                            try {
+                                const db = await getDB();
+                                const rec = await db.get('stores', storeId);
+                                const updated = rec ? { ...rec } as any : { id: storeId } as any;
+                                updated.logo = logoUrl;
+                                updated.updatedAt = Date.now();
+                                await db.put('stores', updated);
+                            }
+                            catch (err) {
+                            }
                             void NativePrinter.cachePrintableLogo(logoUrl).catch(() => {
                             });
                         }
@@ -880,6 +888,16 @@ export default function Settings() {
                             localStorage.setItem('storeLogo', logoUrl);
                         }
                         catch (e) { /* ignore */ }
+                        try {
+                            const db = await getDB();
+                            const rec = await db.get('stores', storeId);
+                            const updated = rec ? { ...rec } as any : { id: storeId } as any;
+                            updated.logo = logoUrl;
+                            updated.updatedAt = Date.now();
+                            await db.put('stores', updated);
+                        }
+                        catch (err) {
+                        }
                         void NativePrinter.cachePrintableLogo(logoUrl).catch(() => {
                         });
                     }
@@ -1311,8 +1329,13 @@ export default function Settings() {
     const canManageStoreBalance = user.role === 'admin' || user.role === 'super_admin';
     const canEditEmailSettings = user.role === 'admin';
     const canManageReceiptSettings = (user.role === 'admin' || user.role === 'super_admin') && !!user.storeId;
-    const selectedPrinterName = isWebPrinterDialogMode ? 'Impression via navigateur' : (paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante');
+    const selectedPrinterName = paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante';
     const handleSearchPrinters = async () => {
+        if (!nativePrinterAvailable) {
+            setPaired([]);
+            toast.info("L'impression est disponible uniquement sur Android et dans l'application desktop.");
+            return;
+        }
         try {
             if (isWebPrinterDialogMode) {
                 setPaired([]);
@@ -1339,6 +1362,12 @@ export default function Settings() {
         setIsTesting(true);
         setLastTest(null);
         try {
+            if (!nativePrinterAvailable) {
+                const at = new Date().toLocaleString();
+                setLastTest({ ok: false, at, message: 'Impression native indisponible sur cette version' });
+                toast.error("Impression disponible uniquement sur Android et l'application desktop.");
+                return;
+            }
             const html = `<div style="font-family:monospace; white-space:pre">TEST IMPRESSION\nPOS App\n${new Date().toLocaleString()}\n\nMerci</div>`;
             if (isWebPrinterDialogMode) {
                 const ok = await tryNativePrint(html, 'Test impression');
@@ -1774,7 +1803,7 @@ export default function Settings() {
                     <Card className={`${elevatedCardClassName} 2xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
                             <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<div className="flex items-center gap-2">
-                                        {printerOpen ? <Button onClick={() => void handleSearchPrinters()} className="hidden lg:inline-flex" disabled={scanning}>
+                                        {printerOpen && nativePrinterAvailable ? <Button onClick={() => void handleSearchPrinters()} className="hidden lg:inline-flex" disabled={scanning}>
                                                 {scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}
                                             </Button> : null}
                                         <SectionToggleButton open={printerOpen} onClick={() => setPrinterOpen((current) => !current)}/>
@@ -1784,8 +1813,11 @@ export default function Settings() {
               <CollapsibleContent>
             <CardContent>
               <div className="space-y-3">
+                {!nativePrinterAvailable ? (<div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
+                    L'impression est disponible uniquement sur Android et dans l'application desktop.
+                  </div>) : null}
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <Button onClick={() => void handleSearchPrinters()} className="w-full sm:w-auto lg:hidden" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button>
+                  {nativePrinterAvailable ? <Button onClick={() => void handleSearchPrinters()} className="w-full sm:w-auto lg:hidden" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button> : null}
                   <div className="flex-1"/>
                   {/* Test d'impression disponible ci-dessous — un seul bouton centralisé */}
                 </div>
@@ -1847,7 +1879,7 @@ export default function Settings() {
 
                 {/* Affichage synthétique de l'imprimante sélectionnée / connexion */}
                                 <div className="mt-3 rounded-2xl border border-border/60 bg-muted/25 p-4">
-                  {selectedPrinter || isWebPrinterDialogMode ? (<div className="flex items-center justify-between">
+                  {nativePrinterAvailable && selectedPrinter ? (<div className="flex items-center justify-between">
                       <div className="text-sm">
                                                 <div className="font-medium">Imprimante sélectionnée</div>
                                                 <div className="text-xs text-muted-foreground">{selectedPrinterName}</div>
@@ -1912,7 +1944,7 @@ export default function Settings() {
                             Apercu: {(receiptSettings.thankYouMessage || '').trim() || 'Aucun message'}
                           </div>
                           <div className="flex flex-col gap-3 md:flex-row md:items-center lg:justify-end">
-                            <div className="grid grid-cols-2 gap-3 md:flex md:flex-wrap">
+                            {nativePrinterAvailable ? <div className="grid grid-cols-2 gap-3 md:flex md:flex-wrap">
                               <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="h-11 w-full justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-center md:w-auto" disabled={isTesting}>
                                 <Printer className="h-4 w-4 shrink-0"/>
                                 <span>{isTesting ? 'Test en cours...' : 'Imprimer Test'}</span>
@@ -1957,7 +1989,7 @@ export default function Settings() {
                                 <LogOut className="h-4 w-4 shrink-0"/>
                                 <span>Dissocier</span>
                               </Button>
-                            </div>
+                            </div> : null}
                             <Button onClick={() => void saveReceiptPreferences(receiptSettings)} disabled={loadingReceiptSettings} className="h-11 rounded-xl px-4">
                               {loadingReceiptSettings ? 'Enregistrement...' : 'Enregistrer les reglages du recu'}
                             </Button>

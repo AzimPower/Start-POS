@@ -4,6 +4,8 @@
 // attempts to send raw ESC/POS bytes. If no native plugin is present, the
 // functions will indicate unavailability.
 import { getReceiptPaperLayout, getStoredReceiptPaper } from './receiptPaper';
+import { getDB } from './db';
+import { BACKEND_BASE } from './backend';
 type DesktopPrinterInfo = {
     id: string;
     name: string;
@@ -119,6 +121,33 @@ async function fetchImageSourceToDataUrl(source: string): Promise<string> {
         reader.readAsDataURL(blob);
     });
 }
+async function fetchPrintableLogoDataFromApi(storeId: string): Promise<{ dataUrl: string; source?: string | null; } | null> {
+    if (!storeId) {
+        return null;
+    }
+
+    try {
+        const url = new URL(`${BACKEND_BASE}/api/store_logo.php`);
+        url.searchParams.set('storeId', storeId);
+        url.searchParams.set('_ts', String(Date.now()));
+        const response = await fetch(url.toString(), { cache: 'no-store' });
+        if (!response.ok) {
+            return null;
+        }
+
+        const payload = await response.json();
+        const dataUrl = String(payload?.dataUrl || '').trim();
+        const source = payload?.source ? String(payload.source).trim() : null;
+        if (!dataUrl.startsWith('data:')) {
+            return null;
+        }
+
+        return { dataUrl, source };
+    }
+    catch (err) {
+        return null;
+    }
+}
 export function getStoredPrintableLogo(preferredSource?: string | null): string | null {
     const cachedData = safeLocalStorageGet(STORE_LOGO_PRINT_DATA_KEY);
     const cachedSource = safeLocalStorageGet(STORE_LOGO_PRINT_SOURCE_KEY);
@@ -129,6 +158,71 @@ export function getStoredPrintableLogo(preferredSource?: string | null): string 
         }
     }
     return preferredSource || storedLogo;
+}
+
+function normalizeLogoSource(source?: string | null): string | null {
+    if (!source) {
+        return null;
+    }
+
+    const trimmed = String(source).trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('data:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        return trimmed;
+    }
+
+    return trimmed.startsWith('/')
+        ? `${BACKEND_BASE}${trimmed}`
+        : `${BACKEND_BASE}/${trimmed}`;
+}
+
+export async function resolvePrintableLogoSource(storeId?: string | null): Promise<string | null> {
+    const cachedLogo = getStoredPrintableLogo();
+    if (cachedLogo && cachedLogo.startsWith('data:')) {
+        return cachedLogo;
+    }
+
+    let candidateSource = normalizeLogoSource(cachedLogo);
+
+    if (!candidateSource && storeId) {
+        try {
+            const db = await getDB();
+            const storeRecord = await db.get('stores', storeId);
+            candidateSource = normalizeLogoSource((storeRecord as any)?.logo || null);
+        }
+        catch (err) {
+        }
+    }
+
+    if (candidateSource) {
+        safeLocalStorageSet(STORE_LOGO_KEY, candidateSource);
+        try {
+            if (candidateSource.startsWith('data:')) {
+                await cachePrintableLogo(candidateSource, candidateSource);
+            } else {
+                await cachePrintableLogo(candidateSource);
+            }
+            return getStoredPrintableLogo(candidateSource) || candidateSource;
+        }
+        catch (err) {
+        }
+    }
+
+    if (storeId) {
+        const apiLogo = await fetchPrintableLogoDataFromApi(storeId);
+        if (apiLogo?.dataUrl) {
+            const normalizedSource = normalizeLogoSource(apiLogo.source) || candidateSource || apiLogo.dataUrl;
+            safeLocalStorageSet(STORE_LOGO_KEY, normalizedSource);
+            await cachePrintableLogo(normalizedSource, apiLogo.dataUrl).catch(() => {
+            });
+            return getStoredPrintableLogo(normalizedSource) || apiLogo.dataUrl;
+        }
+    }
+
+    return candidateSource || null;
 }
 export function clearPrintableLogoCache() {
     safeLocalStorageRemove(STORE_LOGO_PRINT_DATA_KEY);

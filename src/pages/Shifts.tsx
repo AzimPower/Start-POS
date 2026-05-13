@@ -1124,7 +1124,7 @@ export default function Shifts() {
                 lines.push('');
                 lines.push(NativePrinter.formatColumns('Remboursements :', '', width));
                 if (refundsCash > 0) {
-                    lines.push(NativePrinter.formatColumns('  Especes :', `${formatMoney(refundsCash)} FCFA`, width));
+                    lines.push(NativePrinter.formatColumns('  Espèces :', `${formatMoney(refundsCash)} FCFA`, width));
                 }
                 if (refundsMobile > 0) {
                     lines.push(NativePrinter.formatColumns('  Mobile Money :', `${formatMoney(refundsMobile)} FCFA`, width));
@@ -1144,11 +1144,11 @@ export default function Shifts() {
             lines.push(NativePrinter.formatColumns('Duree :', `${h}h ${m}min`, width));
             lines.push('--------------------------------');
             lines.push(NativePrinter.formatColumns('Montant encaisse :', '', width));
-            lines.push(NativePrinter.formatColumns('Especes :', `${formatMoney(cash)} FCFA`, width));
+            lines.push(NativePrinter.formatColumns('Espèces :', `${formatMoney(cash)} FCFA`, width));
             lines.push(NativePrinter.formatColumns('Mobile Money :', `${formatMoney(mobile)} FCFA`, width));
             lines.push(NativePrinter.formatColumns('Total encaisse :', `${formatMoney(totalPaid)} FCFA`, width));
             lines.push('');
-            const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const storedLogoSource = receiptSettings.printLogo ? await NativePrinter.resolvePrintableLogoSource(shift.storeId || '') : null;
             const printableLogo = storedLogoSource
                 ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                 : undefined;
@@ -1166,6 +1166,7 @@ export default function Shifts() {
                 });
                 const used = await tryNativePrint(html, `Rapport-${shift.id}`);
                 if (!used) {
+                    toast.error("Impression disponible uniquement sur Android et l'application desktop avec une imprimante native.");
                 }
             }
         }
@@ -1372,7 +1373,9 @@ export default function Shifts() {
                 }
             }
             // Inclure aussi les ventes locales sans shiftId rattachable pour Ã©viter les faux surplus.
-            const allSalesDb = await db.getAll('sales');
+            const allSalesDb = activeShift.storeId
+                ? await db.getAllFromIndex('sales', 'by-store', activeShift.storeId)
+                : await db.getAll('sales');
             for (const sale of allSalesDb) {
                 if (sale.draft || sale.shiftId)
                     continue;
@@ -1469,8 +1472,9 @@ export default function Shifts() {
                 setMobileMoneyAmount('');
                 setOtherAmount('');
                 shiftsCache.current.clear();
-                await loadShiftsPage(db, 0, pageSize, true);
                 setLoading(false);
+                void loadShiftsPage(db, 0, pageSize, true).catch(() => {
+                });
                 toast.success('Shift sans vente supprimé automatiquement');
                 return;
             }
@@ -1484,8 +1488,9 @@ export default function Shifts() {
             setCashAmount('');
             setMobileMoneyAmount('');
             setOtherAmount('');
-            await loadShiftsPage(db, 0, pageSize, true);
             setLoading(false);
+            void loadShiftsPage(db, 0, pageSize, true).catch(() => {
+            });
             toast.success('Shift fermé avec succès');
             // Notifier les autres onglets (POS, etc.) que le shift est fermé
             try {

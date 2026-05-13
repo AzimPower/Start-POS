@@ -48,7 +48,7 @@ function toRoundedAmount(value: unknown) {
 export function getSaleReceiptPaymentMethodText(method: string) {
     switch (method) {
         case 'cash':
-            return 'Especes';
+            return 'Espèces';
         case 'mobile_money':
             return 'Mobile Money';
         case 'mixed':
@@ -56,6 +56,75 @@ export function getSaleReceiptPaymentMethodText(method: string) {
         default:
             return method || '';
     }
+}
+
+function splitReceiptDateTimeText(dateText: string) {
+    const normalized = String(dateText || '')
+        .replace(/\u00A0|\u202F/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!normalized) {
+        return { datePart: '', timePart: '' };
+    }
+
+    const match = normalized.match(/^(.*?)(\d{1,2}:\d{2}(?::\d{2})?)$/);
+    if (!match) {
+        return { datePart: normalized, timePart: '' };
+    }
+
+    return {
+        datePart: match[1].replace(/[,\-:]\s*$/, '').trim(),
+        timePart: match[2].trim(),
+    };
+}
+
+export function buildSaleReceiptHeaderLines(data: Pick<SaleReceiptDocumentData, 'receiptNumber' | 'dateText' | 'paper'>) {
+    const paper = data.paper || getStoredReceiptPaper();
+    const width = paper === '58' ? 32 : 48;
+
+    if (paper === '58') {
+        const { datePart, timePart } = splitReceiptDateTimeText(data.dateText);
+        const lines = [
+            NativePrinter.formatColumns(datePart || data.dateText || '', `N° : ${data.receiptNumber}`, width),
+        ];
+
+        if (timePart) {
+            lines.push(timePart);
+        }
+
+        return lines;
+    }
+
+    return [
+        NativePrinter.formatColumns(data.dateText, `Recu N°: ${data.receiptNumber}`, width),
+    ];
+}
+
+export function buildSaleReceiptItemLines(item: SaleReceiptLineItem, paper?: ReceiptPaper) {
+    const resolvedPaper = paper || getStoredReceiptPaper();
+    const width = resolvedPaper === '58' ? 32 : 48;
+    const itemName = String(item.name || '');
+    const quantityText = `${toRoundedAmount(item.quantity)} x ${toRoundedAmount(item.unitPrice)} FCFA`;
+    const totalText = `${toRoundedAmount(item.displayTotal)} FCFA`;
+
+    if (resolvedPaper === '58') {
+        return [
+            NativePrinter.formatColumns(itemName, '', width),
+            NativePrinter.formatColumns(quantityText, totalText, width),
+        ];
+    }
+
+    const leftFull = `${itemName} ${quantityText}`.trim();
+
+    if (leftFull.length + 1 + totalText.length <= width) {
+        return [NativePrinter.formatColumns(leftFull, totalText, width)];
+    }
+
+    return [
+        NativePrinter.formatColumns(itemName, totalText, width),
+        NativePrinter.formatColumns(quantityText, '', width),
+    ];
 }
 
 export function buildSaleReceiptLines(data: SaleReceiptDocumentData) {
@@ -81,22 +150,16 @@ export function buildSaleReceiptLines(data: SaleReceiptDocumentData) {
     }
 
     lines.push('');
+    const compactHeaderLines = paper === '58' ? buildSaleReceiptHeaderLines(data) : null;
     lines.push(NativePrinter.formatColumns(data.dateText, `Recu N°: ${data.receiptNumber}`, width));
+    if (compactHeaderLines) {
+        lines.pop();
+        lines.push(...compactHeaderLines);
+    }
     lines.push(separator);
 
     for (const item of data.items) {
-        const itemName = String(item.name || '');
-        const quantityText = `${toRoundedAmount(item.quantity)} x ${toRoundedAmount(item.unitPrice)} FCFA`;
-        const totalText = `${toRoundedAmount(item.displayTotal)} FCFA`;
-        const leftFull = `${itemName} ${quantityText}`.trim();
-
-        if (leftFull.length + 1 + totalText.length <= width) {
-            lines.push(NativePrinter.formatColumns(leftFull, totalText, width));
-            continue;
-        }
-
-        lines.push(NativePrinter.formatColumns(itemName, totalText, width));
-        lines.push(NativePrinter.formatColumns(quantityText, '', width));
+        lines.push(...buildSaleReceiptItemLines(item, paper));
     }
 
     lines.push(separator);
@@ -110,10 +173,13 @@ export function buildSaleReceiptLines(data: SaleReceiptDocumentData) {
         for (const payment of data.paymentDetails) {
             lines.push(NativePrinter.formatColumns(`${payment.label}:`, `${toRoundedAmount(payment.amount)} FCFA`, width));
         }
+        if (data.change !== undefined && data.change !== null && Number(data.change) > 0) {
+            lines.push(NativePrinter.formatColumns('Rendu:', `${toRoundedAmount(data.change)} FCFA`, width));
+        }
     }
     else {
         if (data.cashReceived !== undefined && data.cashReceived !== null) {
-            lines.push(NativePrinter.formatColumns('Especes:', `${toRoundedAmount(data.cashReceived)} FCFA`, width));
+            lines.push(NativePrinter.formatColumns('Espèces:', `${toRoundedAmount(data.cashReceived)} FCFA`, width));
         }
         if (data.change !== undefined && data.change !== null && Number(data.change) > 0) {
             lines.push(NativePrinter.formatColumns('Rendu:', `${toRoundedAmount(data.change)} FCFA`, width));

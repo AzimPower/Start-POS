@@ -119,7 +119,7 @@ export default function Receipt({
         let html = '';
         try {
             const paper = getStoredReceiptPaper();
-            const storedLogoSource = effectivePrintLogo ? NativePrinter.getStoredPrintableLogo() : null;
+            const storedLogoSource = effectivePrintLogo ? await NativePrinter.resolvePrintableLogoSource(storeId) : null;
             const printableLogo = storedLogoSource
                 ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                 : undefined;
@@ -157,14 +157,14 @@ export default function Receipt({
             if (!printed) {
                 const usedNative = await tryNativePrint(html, `Recu-${receiptNumber}`);
                 if (!usedNative) {
-                    alert('Impossible d\'imprimer: imprimante thermique native non disponible. Veuillez associer une imprimante Bluetooth.');
+                    alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
                 }
             }
         }
         catch (error) {
             const usedNative = await tryNativePrint(html, `Recu-${receiptNumber}`);
             if (!usedNative) {
-                alert('Impossible d\'imprimer: imprimante thermique native non disponible. Veuillez associer une imprimante Bluetooth.');
+                alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
             }
         }
     };
@@ -227,7 +227,7 @@ export default function Receipt({
                         )) : null}
                         {!paymentDetails?.length && cashReceived !== undefined && cashReceived !== null ? (
                             <div className="flex justify-between mb-2">
-                                <span>Especes:</span>
+                                <span>Espèces:</span>
                                 <span>{cashReceived.toFixed(0)} FCFA</span>
                             </div>
                         ) : null}

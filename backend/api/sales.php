@@ -216,6 +216,10 @@ function backfill_missing_receipt_metadata($pdo, $sales) {
 switch ($method) {
     case 'GET':
         $storeId = ensure_store_access($authClaims, $_GET['storeId'] ?? null);
+        $customerId = isset($_GET['customerId']) ? trim((string) $_GET['customerId']) : null;
+        if ($customerId === '') {
+            $customerId = null;
+        }
         $startDate = isset($_GET['startDate']) ? intval($_GET['startDate']) : null;
         $endDate = isset($_GET['endDate']) ? intval($_GET['endDate']) : null;
         $all = isset($_GET['all']) && $_GET['all'] === '1'; // Désactiver la pagination si all=1
@@ -227,6 +231,10 @@ switch ($method) {
         if ($storeId) {
             $conditions[] = 'storeId = ?';
             $params[] = $storeId;
+        }
+        if ($customerId !== null) {
+            $conditions[] = 'customerId = ?';
+            $params[] = $customerId;
         }
         if ($startDate !== null && $startDate > 0) {
             $conditions[] = 'createdAt >= ?';

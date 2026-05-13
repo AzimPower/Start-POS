@@ -464,7 +464,7 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const encaisseNetTotal = formatMoney(cash + mobile_money);
                 const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(encaisseNetTotal + ' FCFA'), width);
                 lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
-                const storedLogoSource = receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : null;
+                const storedLogoSource = receiptSettings.printLogo ? await NativePrinter.resolvePrintableLogoSource(selectedShift?.storeId || '') : null;
                 const printableLogo = storedLogoSource
                     ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                     : undefined;
@@ -482,13 +482,13 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 if (!printed) {
                     const used = await tryNativePrint(html, 'Rapport-shift');
                     if (!used)
-                        alert('Impossible d\'imprimer: imprimante thermique native non disponible. Veuillez associer une imprimante Bluetooth.');
+                        alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
                 }
             }
             catch (e) {
                 const used = await tryNativePrint(html, 'Rapport-shift');
                 if (!used)
-                    alert('Impossible d\'imprimer: imprimante thermique native non disponible. Veuillez associer une imprimante Bluetooth.');
+                    alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
             }
         }}>Imprimer le reçu</Button>
       </div>
