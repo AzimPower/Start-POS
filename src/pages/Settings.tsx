@@ -538,7 +538,6 @@ export default function Settings() {
         const p = localStorage.getItem('printer_paper');
         return p || '80';
     });
-    const [lastPrinterDiagAt, setLastPrinterDiagAt] = useState<string | null>(null);
     // Verify that a remote logo URL actually exists on the server. If the server
     // returns 404 or not-ok, clear local copies (localStorage + IndexedDB) so the
     // removed file is not displayed from cache.
@@ -918,21 +917,6 @@ export default function Settings() {
             toast.success(size === '58' ? 'Papier 58mm sélectionné' : 'Papier 80mm sélectionné');
         }
         catch (e) {
-        }
-    };
-    const handlePrinterDiagnostics = () => {
-        try {
-            if (isWebPrinterDialogMode) {
-                setLastPrinterDiagAt(new Date().toLocaleString());
-                toast.info('Sur la version web, Edge ne peut pas lister directement les imprimantes Windows. Utilisez Imprimer pour choisir POS-58 dans la boîte de dialogue.');
-                return;
-            }
-            const info = NativePrinter.inspectPlugin();
-            setLastPrinterDiagAt(new Date().toLocaleString());
-            toast.info('Diagnostic imprimante envoyé au journal');
-        }
-        catch (e) {
-            toast.error('Impossible de générer le diagnostic imprimante');
         }
     };
     const handleRemoveLogo = () => {
@@ -1780,11 +1764,9 @@ export default function Settings() {
                                 setScanning(false);
                         }
                 }} className="w-full sm:w-auto" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button>
-                  <Button variant="outline" onClick={handlePrinterDiagnostics} className="w-full sm:w-auto">Diagnostic</Button>
                   <div className="flex-1"/>
                   {/* Test d'impression disponible ci-dessous — un seul bouton centralisé */}
                 </div>
-                {lastPrinterDiagAt && (<p className="text-xs text-muted-foreground">Dernier diagnostic: {lastPrinterDiagAt}</p>)}
 
                                 <Separator/>
 
@@ -1903,25 +1885,17 @@ export default function Settings() {
                           <p className="text-xs text-muted-foreground">Utilisez plusieurs lignes si vous voulez afficher un petit message en bas du reçu.</p>
                         </div>
 
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-4 py-3 text-xs text-muted-foreground">
-                            Aperçu: {(receiptSettings.thankYouMessage || '').trim() || 'Aucun message'}
+                            Apercu: {(receiptSettings.thankYouMessage || '').trim() || 'Aucun message'}
                           </div>
-                          <Button onClick={() => void saveReceiptPreferences(receiptSettings)} disabled={loadingReceiptSettings}>
-                            {loadingReceiptSettings ? 'Enregistrement...' : 'Enregistrer les reglages du recu'}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </>) : null}
-
-                                <div className="rounded-2xl border border-border/60 text-white">
-                                    <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
-                                            <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="w-full justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-3 text-center sm:w-auto sm:justify-center" disabled={isTesting}>
-                        <Printer className="h-4 w-4 shrink-0"/>
-                                                <span>{isTesting ? 'Test en cours...' : 'Imprimer Test'}</span>
-                      </Button>
-                                            <Button size="sm" variant="outline" className="w-full justify-center gap-2 whitespace-nowrap rounded-xl border-rose-700 bg-rose-600 px-3 py-3 text-center text-white shadow-sm hover:bg-rose-700 sm:w-auto sm:justify-center" onClick={async () => {
+                          <div className="flex flex-col gap-3 md:flex-row md:items-center lg:justify-end">
+                            <div className="grid grid-cols-2 gap-3 md:flex md:flex-wrap">
+                              <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="h-11 w-full justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-center md:w-auto" disabled={isTesting}>
+                                <Printer className="h-4 w-4 shrink-0"/>
+                                <span>{isTesting ? 'Test en cours...' : 'Imprimer Test'}</span>
+                              </Button>
+                              <Button variant="outline" className="h-11 w-full justify-center gap-2 whitespace-nowrap rounded-xl border-rose-700 bg-rose-600 px-4 text-center text-white shadow-sm hover:bg-rose-700 md:w-auto" onClick={async () => {
             try {
                 await NativePrinter.disconnect();
             }
@@ -1956,13 +1930,20 @@ export default function Settings() {
             setPrinterAutoConnect(false);
             setSelectedPrinter(null);
             setPrinterConnected(false);
-            toast.success('Imprimante dissociée et déconnectée (auto-connexion désactivée)');
+            toast.success('Imprimante dissociee et deconnectee (auto-connexion desactivee)');
                 }}>
-                                                <LogOut className="h-4 w-4 shrink-0"/>
-                                                <span>Dissocier</span>
-                                            </Button>
+                                <LogOut className="h-4 w-4 shrink-0"/>
+                                <span>Dissocier</span>
+                              </Button>
+                            </div>
+                            <Button onClick={() => void saveReceiptPreferences(receiptSettings)} disabled={loadingReceiptSettings} className="h-11 rounded-xl px-4">
+                              {loadingReceiptSettings ? 'Enregistrement...' : 'Enregistrer les reglages du recu'}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                </div>
+                  </>) : null}
               </div>
             </CardContent>
           </Card>
