@@ -54,10 +54,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { Printer, ImageIcon, Trash, Check, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
 import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
+import { DEFAULT_STORE_RECEIPT_SETTINGS, saveStoreReceiptSettings, getStoreReceiptSettings, invalidateStoreReceiptSettingsCache, type StoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { tryNativePrint } from '@/lib/print';
 import { getRuntimeLabel } from '@/lib/runtime';
 // BluetoothSerialPlugin type removed — native printing handled via NativePrinter helper
@@ -95,6 +97,8 @@ export default function Settings() {
     // Email notification settings
     const [emailSettings, setEmailSettings] = useState<StoreAlertSettings>(DEFAULT_STORE_ALERT_SETTINGS);
     const [loadingEmailSettings, setLoadingEmailSettings] = useState(false);
+    const [receiptSettings, setReceiptSettings] = useState<StoreReceiptSettings>(DEFAULT_STORE_RECEIPT_SETTINGS);
+    const [loadingReceiptSettings, setLoadingReceiptSettings] = useState(false);
     // Fond de roulement dialog state
     const [fondDialogOpen, setFondDialogOpen] = useState(false);
     const [fondValue, setFondValue] = useState<string>('');
@@ -128,6 +132,23 @@ export default function Settings() {
         }
         finally {
             setLoadingEmailSettings(false);
+        }
+    };
+    const loadReceiptSettings = async () => {
+        if (!user?.storeId) {
+            setReceiptSettings(DEFAULT_STORE_RECEIPT_SETTINGS);
+            return;
+        }
+
+        try {
+            setLoadingReceiptSettings(true);
+            const settings = await getStoreReceiptSettings(user.storeId);
+            setReceiptSettings(settings);
+        }
+        catch (e) {
+        }
+        finally {
+            setLoadingReceiptSettings(false);
         }
     };
     // Save email notification settings
@@ -166,8 +187,37 @@ export default function Settings() {
             setLoadingEmailSettings(false);
         }
     };
+    const saveReceiptPreferences = async (newSettings: StoreReceiptSettings, successMessage = 'Parametres de recu sauvegardes') => {
+        if (!user?.storeId) {
+            return;
+        }
+
+        try {
+            setLoadingReceiptSettings(true);
+            const result = await saveStoreReceiptSettings(user.storeId, newSettings);
+            setReceiptSettings(result.settings);
+            invalidateStoreReceiptSettingsCache(user.storeId);
+            if (result.syncResult.queued) {
+                toast.info('Parametres de recu enregistres localement. Synchronisation en attente.');
+            }
+            else {
+                toast.success(successMessage);
+            }
+        }
+        catch (e) {
+            toast.error('Erreur lors de la sauvegarde des parametres de recu');
+        }
+        finally {
+            setLoadingReceiptSettings(false);
+        }
+    };
     const toggleStoreAlertSetting = (key: keyof StoreAlertSettings, checked: boolean) => {
         void saveEmailSettings({ ...emailSettings, [key]: checked });
+    };
+    const toggleReceiptPrintLogo = (checked: boolean) => {
+        void saveReceiptPreferences({ ...receiptSettings, printLogo: checked }, checked
+            ? 'Logo active sur les impressions'
+            : 'Logo desactive sur les impressions');
     };
     const mergeStoreSnapshot = (incoming: any, fallback?: any) => {
         if (!incoming)
@@ -376,6 +426,7 @@ export default function Settings() {
         if (user && (user.role === 'admin' || user.role === 'super_admin')) {
             fetchStore();
             loadEmailSettings();
+            loadReceiptSettings();
         }
         // eslint-disable-next-line
     }, [user]);
@@ -1252,6 +1303,7 @@ export default function Settings() {
     }
     const canManageStoreBalance = user.role === 'admin' || user.role === 'super_admin';
     const canEditEmailSettings = user.role === 'admin';
+    const canManageReceiptSettings = (user.role === 'admin' || user.role === 'super_admin') && !!user.storeId;
     const selectedPrinterName = isWebPrinterDialogMode ? 'Choix dans Edge/Chrome' : (paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante');
     const printerStatusLabel = isWebPrinterDialogMode ? 'Boîte navigateur' : (selectedPrinter ? (printerConnected ? 'Connectée' : 'À reconnecter') : 'Non configurée');
     // Unified test-print function: prefer using NativePrinter.printHtml which handles
@@ -1823,6 +1875,45 @@ export default function Settings() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">Sélectionnez la largeur du papier pour aligner correctement les colonnes.</p>
                 </div>
+                {canManageReceiptSettings ? (<>
+                    <Separator />
+                    <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-medium">Personnalisation du reçu</p>
+                            <p className="text-xs text-muted-foreground">Choisissez si le logo doit s'imprimer et définissez la phrase de remerciement du ticket. Ces réglages sont synchronisés en ligne.</p>
+                          </div>
+                          <Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">
+                            {loadingReceiptSettings ? 'Synchronisation...' : 'Synchronise'}
+                          </Badge>
+                        </div>
+
+                        <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-background/80 px-4 py-3">
+                          <div className="pr-4">
+                            <p className="text-sm font-medium">Imprimer le logo</p>
+                            <p className="text-xs text-muted-foreground">Si désactivé, les reçus et rapports sortent sans logo même si un logo magasin existe.</p>
+                          </div>
+                          <Switch checked={receiptSettings.printLogo} onCheckedChange={toggleReceiptPrintLogo} disabled={loadingReceiptSettings}/>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="receipt-thank-you-message">Phrase de remerciement</Label>
+                          <Textarea id="receipt-thank-you-message" value={receiptSettings.thankYouMessage} onChange={(event) => setReceiptSettings((current) => ({ ...current, thankYouMessage: event.target.value }))} placeholder={'Merci pour votre visite !\nA bientot'} rows={4} disabled={loadingReceiptSettings}/>
+                          <p className="text-xs text-muted-foreground">Utilisez plusieurs lignes si vous voulez afficher un petit message en bas du reçu.</p>
+                        </div>
+
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-4 py-3 text-xs text-muted-foreground">
+                            Aperçu: {(receiptSettings.thankYouMessage || '').trim() || 'Aucun message'}
+                          </div>
+                          <Button onClick={() => void saveReceiptPreferences(receiptSettings)} disabled={loadingReceiptSettings}>
+                            {loadingReceiptSettings ? 'Enregistrement...' : 'Enregistrer les reglages du recu'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </>) : null}
 
                                 <div className="rounded-2xl border border-border/60 text-white">
                                     <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">

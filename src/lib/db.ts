@@ -201,6 +201,19 @@ interface POSDB extends DBSchema {
             'by-store': string;
         };
     };
+    receiptSettings: {
+        key: string;
+        value: {
+            id: string;
+            storeId: string;
+            printLogo: boolean;
+            thankYouMessage: string;
+            updatedAt: number;
+        };
+        indexes: {
+            'by-store': string;
+        };
+    };
     products: {
         key: string;
         value: {
@@ -477,7 +490,7 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
     if (dbInstance)
         return dbInstance;
-    dbInstance = await openDB<POSDB>('pos-db', 18, {
+    dbInstance = await openDB<POSDB>('pos-db', 19, {
         upgrade(db, oldVersion, newVersion, transaction) {
             if (!db.objectStoreNames.contains('notificationInbox')) {
                 const notificationInboxStore = db.createObjectStore('notificationInbox', { keyPath: 'cacheKey' });
@@ -633,6 +646,11 @@ export async function getDB() {
             if (!db.objectStoreNames.contains('emailSettings')) {
                 const emailSettingsStore = db.createObjectStore('emailSettings', { keyPath: 'id' });
                 emailSettingsStore.createIndex('by-store', 'storeId');
+            }
+            // Receipt Settings (per store receipt configuration)
+            if (!db.objectStoreNames.contains('receiptSettings')) {
+                const receiptSettingsStore = db.createObjectStore('receiptSettings', { keyPath: 'id' });
+                receiptSettingsStore.createIndex('by-store', 'storeId');
             }
             // Pending Emails (emails en attente d'envoi)
             if (!db.objectStoreNames.contains('pendingEmails')) {

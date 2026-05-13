@@ -841,6 +841,12 @@ try {
                     } catch (Exception $e) {
                         // ignore if table/column not present
                     }
+                    try {
+                        $stmt = $pdo->prepare('DELETE FROM receipt_settings WHERE store_id=?');
+                        $stmt->execute([$id]);
+                    } catch (Exception $e) {
+                        // ignore if table/column not present
+                    }
                     // Supprimer les overrides/paramètres de solde liés
                     $stmt = $pdo->prepare('DELETE FROM store_balance_overrides WHERE storeId=?');
                     $stmt->execute([$id]);

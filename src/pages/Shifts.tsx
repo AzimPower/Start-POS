@@ -25,6 +25,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerT
 import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistActiveShiftCache, persistClosedShiftMarker, persistInactiveShiftCache, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
+import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 interface Shift {
     id: string;
     userId: string;
@@ -1106,6 +1107,7 @@ export default function Shifts() {
             const lines: string[] = [];
             const paper = localStorage.getItem('printer_paper') || '80';
             const width = paper === '58' ? 32 : 48;
+            const receiptSettings = await getStoreReceiptSettings(shift.storeId || '');
             lines.push(NativePrinter.formatColumns(storeName, '', width));
             const opened = new Date(shift.openedAt).toLocaleString('fr-FR');
             const closed = shift.closedAt ? new Date(shift.closedAt).toLocaleString('fr-FR') : '-';
@@ -1146,7 +1148,7 @@ export default function Shifts() {
             lines.push(NativePrinter.formatColumns('Total encaisse :', `${formatMoney(totalPaid)} FCFA`, width));
             lines.push('');
             const ok = await NativePrinter.printText(lines, undefined, {
-                logoSource: NativePrinter.getStoredPrintableLogo(),
+                logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
                 paper: paper === '58' ? '58' : '80',
                 title: `Rapport-${shift.id}`
             });

@@ -762,7 +762,7 @@ export default function Stores() {
             await db.delete('userStores', mapping.id);
           }
 
-          const storeScopedTables: Array<'customers' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals' | 'hiddenCategories' | 'emailSettings' | 'pendingEmails'> = [
+          const storeScopedTables: Array<'customers' | 'sales' | 'products' | 'categories' | 'expenses' | 'expensesAdvanced' | 'expenseCategories' | 'shifts' | 'stockSignals' | 'hiddenCategories' | 'emailSettings' | 'receiptSettings' | 'pendingEmails'> = [
             'customers',
             'sales',
             'products',
@@ -774,6 +774,7 @@ export default function Stores() {
             'stockSignals',
             'hiddenCategories',
             'emailSettings',
+            'receiptSettings',
             'pendingEmails',
           ];
           for (const table of storeScopedTables) {

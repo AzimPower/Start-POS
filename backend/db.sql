@@ -84,6 +84,20 @@ CREATE TABLE `email_settings` (
 -- --------------------------------------------------------
 
 --
+-- Structure de la table `receipt_settings`
+--
+
+CREATE TABLE `receipt_settings` (
+  `id` varchar(36) NOT NULL,
+  `store_id` varchar(36) NOT NULL,
+  `print_logo` tinyint(1) DEFAULT 1,
+  `thank_you_message` text DEFAULT NULL,
+  `updated_at` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Structure de la table `expenses`
 --
 
@@ -524,6 +538,14 @@ ALTER TABLE `email_settings`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `unique_store_id` (`store_id`),
   ADD KEY `idx_store_id` (`store_id`);
+
+--
+-- Index pour la table `receipt_settings`
+--
+ALTER TABLE `receipt_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_receipt_store_id` (`store_id`),
+  ADD KEY `idx_receipt_store_id` (`store_id`);
 
 --
 -- Index pour la table `expenses`

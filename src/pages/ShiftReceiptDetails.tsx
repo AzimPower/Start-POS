@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { buildReceiptHtml, tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
+import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
     selectedShift: any;
     cashiers: any[];
@@ -406,6 +407,7 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const lines: string[] = [];
                 const paper = localStorage.getItem('printer_paper') || '80';
                 const width = paper === '58' ? 32 : 48;
+                const receiptSettings = await getStoreReceiptSettings(selectedShift?.storeId || '');
                 const sanitizeForPrinter = (input: any) => {
                     if (input === null || input === undefined)
                         return '';
@@ -464,9 +466,9 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const totalLine = NativePrinter.formatColumns(sanitizeForPrinter('Total encaissé'), sanitizeForPrinter(encaisseNetTotal + ' FCFA'), width);
                 lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
                 const printed = await NativePrinter.printText(lines, undefined, {
-                    logoSource: NativePrinter.getStoredPrintableLogo(),
+                    logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
                     paper: paper === '58' ? '58' : '80',
-                    title: `Rapport-${shift?.id || 'service'}`
+                    title: `Rapport-${selectedShift?.id || 'service'}`
                 });
                 if (!printed) {
                     const used = await tryNativePrint(html, 'Rapport-shift');

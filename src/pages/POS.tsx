@@ -23,6 +23,7 @@ import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } f
 import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 import { calculateReceiptLineAmounts, getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
+import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import * as secureStorage from '@/lib/secureStorage';
 interface Product {
     id: string;
@@ -883,8 +884,10 @@ export default function POS() {
                     { label: 'Mobile Money', amount: sale.payments[0]?.amount || 0 }
                 ];
             }
+            const receiptSettings = await getStoreReceiptSettings(sale.storeId || user?.storeId || '');
             const receiptData = {
                 ...sale,
+                storeId: sale.storeId,
                 receiptNumber: formatReceiptNumber(sale),
                 storeName: currentStore?.name || 'Magasin',
                 storeAddress: currentStore?.address || '',
@@ -898,6 +901,8 @@ export default function POS() {
                 cashReceived: paidAmount,
                 change: paidAmount - total,
                 date: new Date(sale.createdAt),
+                printLogo: receiptSettings.printLogo,
+                thankYouMessage: receiptSettings.thankYouMessage,
             };
             setLastSale(receiptData);
             setCart([]);
@@ -995,11 +1000,16 @@ export default function POS() {
                                     lines.push(NativePrinter.formatColumns('Rendu:', Math.round(receiptData.change) + ' FCFA', width));
                                 }
                             }
-                            lines.push('');
-                            lines.push('Merci pour votre visite !');
+                            const footerLines = getReceiptFooterLines(receiptData.thankYouMessage);
+                            if (footerLines.length > 0) {
+                                lines.push('');
+                                for (const line of footerLines) {
+                                    lines.push(centerText(line, width));
+                                }
+                            }
                             const mac = printerMacRef.current || localStorage.getItem('printer_mac') || undefined;
                             const ok = await NativePrinter.printText(lines, mac as any, {
-                                logoSource: NativePrinter.getStoredPrintableLogo(),
+                                logoSource: receiptData.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
                                 paper: paper === '58' ? '58' : '80',
                                 title: `Recu-${receiptData.receiptNumber || 'vente'}`
                             });
@@ -1590,7 +1600,7 @@ export default function POS() {
         </DialogContent>
       </Dialog>
       {/* Receipt Dialog */}
-      {lastSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeName={lastSale.storeName} storeAddress={lastSale.storeAddress} items={lastSale.items} subtotal={lastSale.subtotal} tax={lastSale.tax} total={lastSale.total} paymentMethod={lastSale.paymentMethod} cashReceived={lastSale.cashReceived} change={lastSale.change} receiptNumber={lastSale.receiptNumber} date={lastSale.date} paymentDetails={lastSale.paymentDetails}/>)}
+      {lastSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeId={lastSale.storeId} storeName={lastSale.storeName} storeAddress={lastSale.storeAddress} items={lastSale.items} subtotal={lastSale.subtotal} tax={lastSale.tax} total={lastSale.total} paymentMethod={lastSale.paymentMethod} cashReceived={lastSale.cashReceived} change={lastSale.change} receiptNumber={lastSale.receiptNumber} date={lastSale.date} paymentDetails={lastSale.paymentDetails} printLogo={lastSale.printLogo} thankYouMessage={lastSale.thankYouMessage}/>)}
       {/* Stock Warning Dialog */}
       <Dialog open={stockWarning.open} onOpenChange={open => setStockWarning({ ...stockWarning, open })}>
         <DialogContent>

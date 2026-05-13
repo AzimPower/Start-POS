@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import Receipt from '@/components/Receipt';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { BACKEND_BASE } from '@/lib/backend';
@@ -356,6 +357,7 @@ export default function CustomerReceipts() {
 
             const receiptNumber = formatReceiptNumber(sale, sales);
             const date = new Date(sale.createdAt);
+            const receiptSettings = await getStoreReceiptSettings(sale.storeId || '');
             const lines: string[] = [];
 
             const centerText = (value: string, width: number) => {
@@ -416,12 +418,16 @@ export default function CustomerReceipts() {
                     lines.push(NativePrinter.formatColumns(`${label}:`, formatCurrency(payment.amount || 0), width));
                 }
             }
-
-            lines.push('');
-            lines.push('Merci pour votre visite !');
+            const footerLines = getReceiptFooterLines(receiptSettings.thankYouMessage);
+            if (footerLines.length > 0) {
+                lines.push('');
+                for (const line of footerLines) {
+                    lines.push(centerText(line, width));
+                }
+            }
 
             const printed = await NativePrinter.printText(lines, undefined, {
-                logoSource: NativePrinter.getStoredPrintableLogo(),
+                logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
                 paper: paper === '58' ? '58' : '80',
                 title: `Recu-${receiptNumber}`
             });
@@ -440,6 +446,7 @@ export default function CustomerReceipts() {
             <div>Sous-total: ${Math.round(sale.subtotal || 0)} FCFA</div>
             <div>TVA: ${Math.round(sale.tax || 0)} FCFA</div>
             <div><strong>TOTAL: ${Math.round(sale.total || 0)} FCFA</strong></div>
+            ${footerLines.length > 0 ? `<hr/><div>${footerLines.join('<br/>')}</div>` : ''}
           </div>
         `;
 
@@ -857,6 +864,7 @@ export default function CustomerReceipts() {
                 <Receipt
                     open={showReceipt}
                     onOpenChange={setShowReceipt}
+                    storeId={selectedSale.storeId}
                     storeName={stores.find((entry) => entry.id === selectedSale.storeId)?.name || ''}
                     storeAddress={stores.find((entry) => entry.id === selectedSale.storeId)?.address || ''}
                     items={(selectedSale.items || []).map((item) => ({

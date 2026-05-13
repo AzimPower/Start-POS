@@ -16,6 +16,7 @@ import * as NativePrinter from '@/lib/nativePrinter';
 import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, buildProjectedLocalSales, isSaleRefunded, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
+import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { resolveUserOpenShift } from '@/lib/sync';
@@ -416,6 +417,7 @@ export default function Receipts() {
             }
             const receiptNumber = formatReceiptNumber(sale, sales);
             const date = new Date(sale.createdAt);
+            const receiptSettings = await getStoreReceiptSettings(sale.storeId || '');
             // Build plain-text lines for ESC/POS
             const lines: string[] = [];
             const centerText = (s: string, w: number) => {
@@ -469,10 +471,15 @@ export default function Receipts() {
                     lines.push(NativePrinter.formatColumns(label + ':', `${Math.round(p.amount || 0)} FCFA`, width));
                 }
             }
-            lines.push('');
-            lines.push('Merci pour votre visite !');
+            const footerLines = getReceiptFooterLines(receiptSettings.thankYouMessage);
+            if (footerLines.length > 0) {
+                lines.push('');
+                for (const line of footerLines) {
+                    lines.push(centerText(line, width));
+                }
+            }
             const printed = await NativePrinter.printText(lines, undefined, {
-                logoSource: NativePrinter.getStoredPrintableLogo(),
+                logoSource: receiptSettings.printLogo ? NativePrinter.getStoredPrintableLogo() : undefined,
                 paper: paper === '58' ? '58' : '80',
                 title: `Recu-${receiptNumber}`
             });
@@ -491,6 +498,7 @@ export default function Receipts() {
             <div>Sous-total: ${Math.round(sale.subtotal || 0)} FCFA</div>
             <div>TVA: ${Math.round(sale.tax || 0)} FCFA</div>
             <div><strong>TOTAL: ${Math.round(sale.total || 0)} FCFA</strong></div>
+            ${footerLines.length > 0 ? `<hr/><div>${footerLines.join('<br/>')}</div>` : ''}
           </div>
         `;
                 const html = buildReceiptHtml(tmp, `Reçu-${receiptNumber}`);
@@ -859,7 +867,7 @@ export default function Receipts() {
         </CardContent>
       </Card>
 
-      {selectedSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeName={stores.find(s => s.id === selectedSale.storeId)?.name || ''} storeAddress={stores.find(s => s.id === selectedSale.storeId)?.address || ''} items={(selectedSale.items || []).map(item => ({
+      {selectedSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeId={selectedSale.storeId} storeName={stores.find(s => s.id === selectedSale.storeId)?.name || ''} storeAddress={stores.find(s => s.id === selectedSale.storeId)?.address || ''} items={(selectedSale.items || []).map(item => ({
                 name: item.name,
                 quantity: item.quantity,
                 price: item.price,
