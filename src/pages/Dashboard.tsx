@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { DollarSign, ShoppingCart, TrendingUp, Wallet } from 'lucide-react';
 
 type DashboardViewSnapshot = {
+    storeId: string;
     chartData: any[];
     salesByProduct: any[];
     recapStats: any;
@@ -55,6 +56,9 @@ function percentChange(delta: number, previous: number) {
     return (delta / previous) * 100;
 }
 export default function Dashboard() {
+    const { user } = useAuth();
+    const { isBackendReachable } = useNetwork();
+    const hasSnapshotForCurrentStore = Boolean(lastDashboardViewSnapshot && String(lastDashboardViewSnapshot.storeId || '') === String(user?.storeId || ''));
     const [calendarMonthCount, setCalendarMonthCount] = useState<number>(() => typeof window !== 'undefined' && window.innerWidth >= 1280 ? 2 : 1);
     // Sélection de période
     const [startDate, setStartDate] = useState<Date>(new Date());
@@ -66,9 +70,22 @@ export default function Dashboard() {
     const [productChartType, setProductChartType] = useState<'bar' | 'pie'>('bar');
     const [groupBy, setGroupBy] = useState<'minutes' | 'hours' | 'days' | 'weeks' | 'months'>('hours');
     // Données dynamiques filtrées par période
-    const [chartData, setChartData] = useState<any[]>(() => lastDashboardViewSnapshot?.chartData || []);
-    const [salesByProduct, setSalesByProduct] = useState<any[]>(() => lastDashboardViewSnapshot?.salesByProduct || []);
-    const [recapStats, setRecapStats] = useState<any>(() => lastDashboardViewSnapshot?.recapStats || {
+    const [chartData, setChartData] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.chartData || []) : []);
+    const [salesByProduct, setSalesByProduct] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.salesByProduct || []) : []);
+    const [recapStats, setRecapStats] = useState<any>(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.recapStats || {
+        ventesBrutes: 0,
+        remboursements: 0,
+        surplus: 0,
+        manque: 0,
+        ventesNettes: 0,
+        margeBrute: 0,
+        evolVentes: 0,
+        evolRemboursements: 0,
+        evolSurplus: 0,
+        evolManque: 0,
+        evolNettes: 0,
+        evolMarge: 0,
+    }) : {
         ventesBrutes: 0,
         remboursements: 0,
         surplus: 0,
@@ -477,21 +494,36 @@ export default function Dashboard() {
         }
         return { surplus, manque };
     }
-    const { user } = useAuth();
-    const [stats, setStats] = useState(() => lastDashboardViewSnapshot?.stats || {
+    const [stats, setStats] = useState(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.stats || {
+        todaySales: 0,
+        todayTransactions: 0,
+        balance: 0,
+        activeShift: null as any,
+    }) : {
         todaySales: 0,
         todayTransactions: 0,
         balance: 0,
         activeShift: null as any,
     });
-    const { isBackendReachable } = useNetwork();
-    const [cashierStats, setCashierStats] = useState(() => lastDashboardViewSnapshot?.cashierStats || {
+    const [cashierStats, setCashierStats] = useState(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.cashierStats || {
+        backendSales: 0,
+        pendingLocalSales: 0,
+        combinedSales: 0,
+        pendingOpsCount: 0,
+    }) : {
         backendSales: 0,
         pendingLocalSales: 0,
         combinedSales: 0,
         pendingOpsCount: 0,
     });
-    const [cashierLocalStats, setCashierLocalStats] = useState(() => lastDashboardViewSnapshot?.cashierLocalStats || {
+    const [cashierLocalStats, setCashierLocalStats] = useState(() => hasSnapshotForCurrentStore ? (lastDashboardViewSnapshot?.cashierLocalStats || {
+        totalSales: 0,
+        transactions: 0,
+        refunds: 0,
+        pendingLocalSales: 0,
+        pendingOpsCount: 0,
+        activeShift: null as any,
+    }) : {
         totalSales: 0,
         transactions: 0,
         refunds: 0,
@@ -704,6 +736,7 @@ export default function Dashboard() {
     }, [isBackendReachable]);
     useEffect(() => {
         lastDashboardViewSnapshot = {
+            storeId: String(user?.storeId || ''),
             chartData,
             salesByProduct,
             recapStats,
@@ -711,7 +744,7 @@ export default function Dashboard() {
             cashierStats,
             cashierLocalStats,
         };
-    }, [chartData, salesByProduct, recapStats, stats, cashierStats, cashierLocalStats]);
+    }, [user?.storeId, chartData, salesByProduct, recapStats, stats, cashierStats, cashierLocalStats]);
     const loadStats = async () => {
         const db = await getDB();
         // Get today's sales

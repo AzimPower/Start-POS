@@ -294,6 +294,7 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
             let salesTotal = 0;
             let cash = 0, mobile_money = 0;
             let refundsCash = 0, refundsMobile = 0;
+            let html = '';
             if (selectedShift) {
                 const db = await import('@/lib/db').then(m => m.getDB());
                 const sales = await db.getAllFromIndex('sales', 'by-shift', selectedShift.id);
@@ -468,7 +469,7 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 const printableLogo = storedLogoSource
                     ? (await NativePrinter.cachePrintableLogo(storedLogoSource).catch(() => storedLogoSource)) || storedLogoSource
                     : undefined;
-                const html = buildPlainTextReceiptHtml({
+                html = buildPlainTextReceiptHtml({
                     lines,
                     title: 'Rapport service',
                     paper: paper === '58' ? '58' : '80',
@@ -486,7 +487,7 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 }
             }
             catch (e) {
-                const used = await tryNativePrint(html, 'Rapport-shift');
+                const used = html ? await tryNativePrint(html, 'Rapport-shift') : false;
                 if (!used)
                     alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
             }

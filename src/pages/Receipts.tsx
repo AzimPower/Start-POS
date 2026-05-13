@@ -59,6 +59,7 @@ function sameId(a: unknown, b: unknown) {
     return String(a) === String(b);
 }
 type ReceiptsViewSnapshot = {
+    storeId: string;
     sales: Sale[];
     filteredSales: Sale[];
     shifts: any[];
@@ -69,24 +70,25 @@ type ReceiptsViewSnapshot = {
 };
 let lastReceiptsViewSnapshot: ReceiptsViewSnapshot | null = null;
 export default function Receipts() {
-    const [shifts, setShifts] = useState<any[]>(() => lastReceiptsViewSnapshot?.shifts || []);
+    const { user } = useAuth();
+    const hasSnapshotForCurrentStore = Boolean(lastReceiptsViewSnapshot && String(lastReceiptsViewSnapshot.storeId || '') === String(user?.storeId || ''));
+    const [shifts, setShifts] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.shifts || []) : []);
     const [activeShift, setActiveShift] = useState<any>(null);
     const [shiftsChecked, setShiftsChecked] = useState(false);
-    const { user } = useAuth();
     const navigate = useNavigate();
     const { isOnline, isBackendReachable } = useNetwork();
     const isMobile = useIsMobile();
-    const [loading, setLoading] = useState(() => !lastReceiptsViewSnapshot);
+    const [loading, setLoading] = useState(() => !hasSnapshotForCurrentStore);
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
-    const [sales, setSales] = useState<Sale[]>(() => lastReceiptsViewSnapshot?.sales || []);
-    const [loadedCount, setLoadedCount] = useState(() => lastReceiptsViewSnapshot?.loadedCount || 0);
+    const [sales, setSales] = useState<Sale[]>(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.sales || []) : []);
+    const [loadedCount, setLoadedCount] = useState(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.loadedCount || 0) : 0);
     const [pageSize] = useState(25);
-    const [hasMore, setHasMore] = useState(() => lastReceiptsViewSnapshot?.hasMore ?? true);
+    const [hasMore, setHasMore] = useState(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.hasMore ?? true) : true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [filteredSales, setFilteredSales] = useState<Sale[]>(() => lastReceiptsViewSnapshot?.filteredSales || []);
+    const [filteredSales, setFilteredSales] = useState<Sale[]>(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.filteredSales || []) : []);
     const [search, setSearch] = useState('');
-    const [stores, setStores] = useState<any[]>(() => lastReceiptsViewSnapshot?.stores || []);
-    const [users, setUsers] = useState<any[]>(() => lastReceiptsViewSnapshot?.users || []);
+    const [stores, setStores] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.stores || []) : []);
+    const [users, setUsers] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastReceiptsViewSnapshot?.users || []) : []);
     const [showReceipt, setShowReceipt] = useState(false);
     const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
     const [showRefundDialog, setShowRefundDialog] = useState(false);
@@ -103,6 +105,7 @@ export default function Receipts() {
             return;
         }
         lastReceiptsViewSnapshot = {
+            storeId: String(user?.storeId || ''),
             sales,
             filteredSales,
             shifts,
@@ -111,7 +114,7 @@ export default function Receipts() {
             loadedCount,
             hasMore,
         };
-    }, [sales, filteredSales, shifts, stores, users, loadedCount, hasMore]);
+    }, [user?.storeId, sales, filteredSales, shifts, stores, users, loadedCount, hasMore]);
     useEffect(() => {
         // Check if the user has an active (open) shift, but load data regardless
         let cancelled = false;
@@ -134,7 +137,7 @@ export default function Receipts() {
             // Load data regardless of shift status to show existing receipts
             try {
                 if (!cancelled) {
-                    await loadData(0, pageSize, true, !lastReceiptsViewSnapshot);
+                    await loadData(0, pageSize, true, !hasSnapshotForCurrentStore);
                 }
             }
             catch (e) {

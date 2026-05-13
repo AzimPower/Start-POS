@@ -60,7 +60,28 @@ interface CartItem {
     quantity: number;
     priceLabel?: string; // Pour identifier le prix variable sÃ©lectionnÃ©
 }
+type PosViewSnapshot = {
+    storeId: string;
+    products: Product[];
+    categories: Array<{
+        id: string;
+        name: string;
+        storeId: string;
+    }>;
+    customers: Customer[];
+    draftSales: any[];
+    activeShift: any;
+    currentStore: any;
+    productSalesCount: {
+        [productId: string]: number;
+    };
+    pendingSyncCount: number;
+    shiftsChecked: boolean;
+};
+let lastPosViewSnapshot: PosViewSnapshot | null = null;
 export default function POS() {
+    const { user } = useAuth();
+    const hasSnapshotForCurrentStore = Boolean(lastPosViewSnapshot && String(lastPosViewSnapshot.storeId || '') === String(user?.storeId || ''));
     const [showDraftCommentDialog, setShowDraftCommentDialog] = useState(false);
     const [draftComment, setDraftComment] = useState('');
     // Formatage pour affichage simple (sans dÃ©cimales)
@@ -80,13 +101,13 @@ export default function POS() {
     }
     const [showCartOnMobile, setShowCartOnMobile] = useState(false);
     const [showDraftPanel, setShowDraftPanel] = useState(false);
-    const [draftSales, setDraftSales] = useState<any[]>([]);
+    const [draftSales, setDraftSales] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.draftSales || []) : []);
     const [editingDraft, setEditingDraft] = useState<any>(null);
     const [categories, setCategories] = useState<{
         id: string;
         name: string;
         storeId: string;
-    }[]>([]);
+    }[]>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.categories || []) : []);
     const [selectedCategory, setSelectedCategory] = useState<string>('all');
     const [showClientList, setShowClientList] = useState(false);
     // Option admin : gestion monnaie client
@@ -94,7 +115,7 @@ export default function POS() {
         const saved = localStorage.getItem('trackCustomerChange');
         return saved === 'true';
     });
-    const [customers, setCustomers] = useState<any[]>([]);
+    const [customers, setCustomers] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.customers || []) : []);
     const [selectedCustomerId, setSelectedCustomerId] = useState<string>('none');
     const [showAddCustomer, setShowAddCustomer] = useState(false);
     const [newCustomerName, setNewCustomerName] = useState('');
@@ -116,16 +137,15 @@ export default function POS() {
         product: Product | null;
     }>({ open: false, product: null });
     const [customPrice, setCustomPrice] = useState('');
-    const { user } = useAuth();
     const canViewExactStock = user?.role === 'admin' || user?.role === 'super_admin';
     const navigate = useNavigate();
     const { isBackendReachable, manualSync } = useNetwork();
-    const [products, setProducts] = useState<Product[]>([]);
+    const [products, setProducts] = useState<Product[]>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.products || []) : []);
     const [cart, setCart] = useState<CartItem[]>([]);
     const [search, setSearch] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [clientSearch, setClientSearch] = useState('');
-    const [activeShift, setActiveShift] = useState<any>(null);
+    const [activeShift, setActiveShift] = useState<any>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.activeShift || null) : null);
     const [showPayment, setShowPayment] = useState(false);
     const clientInputRef = useRef<HTMLInputElement | null>(null);
     const [clientInputReadOnly, setClientInputReadOnly] = useState(true);
@@ -134,14 +154,14 @@ export default function POS() {
     const [mobileAmount, setMobileAmount] = useState('');
     const [showReceipt, setShowReceipt] = useState(false);
     const [lastSale, setLastSale] = useState<any>(null);
-    const [currentStore, setCurrentStore] = useState<any>(null);
+    const [currentStore, setCurrentStore] = useState<any>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.currentStore || null) : null);
     const [productSalesCount, setProductSalesCount] = useState<{
         [productId: string]: number;
-    }>({});
-    const [loading, setLoading] = useState(false);
-    const [shiftsChecked, setShiftsChecked] = useState(false);
-    const [pendingSyncCount, setPendingSyncCount] = useState(0);
-    const loadedOnceRef = useRef(false);
+    }>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.productSalesCount || {}) : {});
+    const [loading, setLoading] = useState(() => !hasSnapshotForCurrentStore);
+    const [shiftsChecked, setShiftsChecked] = useState(() => hasSnapshotForCurrentStore ? Boolean(lastPosViewSnapshot?.shiftsChecked) : false);
+    const [pendingSyncCount, setPendingSyncCount] = useState(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.pendingSyncCount || 0) : 0);
+    const loadedOnceRef = useRef(hasSnapshotForCurrentStore);
     const activeShiftIdRef = useRef<string | null>(null);
     const printerMacRef = useRef<string | null>(null);
     const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
@@ -163,6 +183,23 @@ export default function POS() {
             setFavorites({});
         }
     }, [user?.id]);
+    useEffect(() => {
+        if (!user?.storeId) {
+            return;
+        }
+        lastPosViewSnapshot = {
+            storeId: String(user.storeId),
+            products,
+            categories,
+            customers,
+            draftSales,
+            activeShift,
+            currentStore,
+            productSalesCount,
+            pendingSyncCount,
+            shiftsChecked,
+        };
+    }, [user?.storeId, products, categories, customers, draftSales, activeShift, currentStore, productSalesCount, pendingSyncCount, shiftsChecked]);
     // MÃ©moriser les calculs du panier pour optimiser les performances
     const cartCalculations = useMemo(() => {
         const subtotal = cart.reduce((sum, item) => {

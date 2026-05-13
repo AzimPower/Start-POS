@@ -43,6 +43,7 @@ interface Shift {
     status: 'open' | 'closed';
 }
 type ShiftsViewSnapshot = {
+    storeId: string;
     shifts: Shift[];
     cashiers: any[];
     activeShift: Shift | null;
@@ -265,19 +266,20 @@ export default function Shifts() {
     const [selectedShift, setSelectedShift] = useState<Shift | null>(null);
     const { user } = useAuth();
     const { isOnline, isBackendReachable, manualSync } = useNetwork();
-    const [shifts, setShifts] = useState<Shift[]>(() => lastShiftsViewSnapshot?.shifts || []);
-    const [loadedCount, setLoadedCount] = useState(() => lastShiftsViewSnapshot?.loadedCount || 0);
+    const hasSnapshotForCurrentStore = Boolean(lastShiftsViewSnapshot && String(lastShiftsViewSnapshot.storeId || '') === String(user?.storeId || ''));
+    const [shifts, setShifts] = useState<Shift[]>(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.shifts || []) : []);
+    const [loadedCount, setLoadedCount] = useState(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.loadedCount || 0) : 0);
     const [pageSize] = useState(25);
-    const [hasMore, setHasMore] = useState(() => lastShiftsViewSnapshot?.hasMore ?? true);
+    const [hasMore, setHasMore] = useState(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.hasMore ?? true) : true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [search, setSearch] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
-    const [cashiers, setCashiers] = useState<any[]>(() => lastShiftsViewSnapshot?.cashiers || []);
+    const [cashiers, setCashiers] = useState<any[]>(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.cashiers || []) : []);
     const [selectedCashier, setSelectedCashier] = useState('all');
     const [selectedStatus, setSelectedStatus] = useState('all');
     const [dateFilter, setDateFilter] = useState('all');
     const [customDate, setCustomDate] = useState('');
-    const [activeShift, setActiveShift] = useState<Shift | null>(() => lastShiftsViewSnapshot?.activeShift || null);
+    const [activeShift, setActiveShift] = useState<Shift | null>(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.activeShift || null) : null);
     const [showOpenDialog, setShowOpenDialog] = useState(false);
     const [showCloseDialog, setShowCloseDialog] = useState(false);
     const [openingAmount, setOpeningAmount] = useState('0');
@@ -285,7 +287,7 @@ export default function Shifts() {
     const [mobileMoneyAmount, setMobileMoneyAmount] = useState('');
     const [otherAmount, setOtherAmount] = useState('');
     const [loading, setLoading] = useState(false);
-    const [dataLoaded, setDataLoaded] = useState(() => Boolean(lastShiftsViewSnapshot));
+    const [dataLoaded, setDataLoaded] = useState(() => Boolean(hasSnapshotForCurrentStore));
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
     const isMobile = useIsMobile();
     const [filtersOpen, setFiltersOpen] = useState(false);
@@ -299,8 +301,8 @@ export default function Shifts() {
     const [computedDiffsState, setComputedDiffsState] = useState<Record<string, {
         expected: number | null;
         difference: number | null;
-    }>>(() => lastShiftsViewSnapshot?.computedDiffs || {});
-    const [encaissesState, setEncaissesState] = useState<Record<string, number>>(() => lastShiftsViewSnapshot?.encaisses || {});
+    }>>(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.computedDiffs || {}) : {});
+    const [encaissesState, setEncaissesState] = useState<Record<string, number>>(() => hasSnapshotForCurrentStore ? (lastShiftsViewSnapshot?.encaisses || {}) : {});
     // State pour suivre la synchronisation
     const [syncing, setSyncing] = useState(false);
     // Cache des ventes en mÃ©moire pour Ã©viter les appels DB rÃ©pÃ©tÃ©s
@@ -312,6 +314,7 @@ export default function Shifts() {
         if (!dataLoaded)
             return;
         lastShiftsViewSnapshot = {
+            storeId: String(user?.storeId || ''),
             shifts,
             cashiers,
             activeShift,
@@ -320,7 +323,7 @@ export default function Shifts() {
             computedDiffs: computedDiffsState,
             encaisses: encaissesState,
         };
-    }, [dataLoaded, shifts, cashiers, activeShift, loadedCount, hasMore, computedDiffsState, encaissesState]);
+    }, [user?.storeId, dataLoaded, shifts, cashiers, activeShift, loadedCount, hasMore, computedDiffsState, encaissesState]);
     // Debounce pour la recherche (optimisation)
     useEffect(() => {
         const timer = setTimeout(() => {

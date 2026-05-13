@@ -65,6 +65,7 @@ interface StoreInfo {
     address?: string;
 }
 type CustomerReceiptsSnapshot = {
+    storeId: string;
     customerId: string;
     sales: Sale[];
     filteredSales: Sale[];
@@ -97,7 +98,9 @@ export default function CustomerReceipts() {
     const navigate = useNavigate();
     const isMobile = useIsMobile();
 
-    const hasSnapshotForCurrentCustomer = Boolean(lastCustomerReceiptsSnapshot && String(lastCustomerReceiptsSnapshot.customerId) === String(customerId || ''));
+    const hasSnapshotForCurrentCustomer = Boolean(lastCustomerReceiptsSnapshot
+        && String(lastCustomerReceiptsSnapshot.customerId) === String(customerId || '')
+        && String(lastCustomerReceiptsSnapshot.storeId || '') === String(user?.storeId || ''));
     const [loading, setLoading] = useState(!hasSnapshotForCurrentCustomer);
     const [refreshing, setRefreshing] = useState(false);
     const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
@@ -118,6 +121,7 @@ export default function CustomerReceipts() {
             return;
         }
         lastCustomerReceiptsSnapshot = {
+            storeId: String(user?.storeId || ''),
             customerId: String(customerId),
             sales,
             filteredSales,
@@ -125,7 +129,7 @@ export default function CustomerReceipts() {
             customer,
             pendingSyncCount,
         };
-    }, [customerId, customer, sales, filteredSales, stores, pendingSyncCount]);
+    }, [user?.storeId, customerId, customer, sales, filteredSales, stores, pendingSyncCount]);
 
     const updatePendingSyncCount = async (db: any) => {
         try {

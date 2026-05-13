@@ -888,6 +888,16 @@ export function AuthProvider({ children }: {
                     : 'Impossible de verifier le magasin cible.');
             }
             const newUser = { ...user, storeId: nextStoreId } as User;
+            if (previousStoreId && previousStoreId !== nextStoreId) {
+                try {
+                    localStorage.removeItem('storeLogo');
+                    localStorage.removeItem('storeLogo_ts');
+                    localStorage.removeItem('storeLogo_print_data');
+                    localStorage.removeItem('storeLogo_print_source');
+                }
+                catch (e) {
+                }
+            }
             setUser(newUser);
             try {
                 await secureStorage.setItem('pos-user', JSON.stringify(newUser));

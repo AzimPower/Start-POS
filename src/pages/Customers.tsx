@@ -116,7 +116,9 @@ export default function Customers() {
     }, [searchTerm, customers]);
     const loadSales = async () => {
         const db = await getDB();
-        const sales = await db.getAll('sales');
+        const sales = user?.storeId
+            ? await db.getAllFromIndex('sales', 'by-store', user.storeId)
+            : await db.getAll('sales');
         // Regroupe les ventes par client
         const byCustomer: {
             [customerId: string]: any[];

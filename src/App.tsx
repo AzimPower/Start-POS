@@ -61,12 +61,12 @@ function ProtectedRoute({ children }: {
     // input on the underlying page.
     if (isLocked) {
         // keep route mounted while locked
-        return <Layout>{children}</Layout>;
+        return <Layout key={`store-${String(user?.storeId || 'none')}`}>{children}</Layout>;
     }
     if (!user) {
         return <Navigate to="/login" replace/>;
     }
-    return <Layout>{children}</Layout>;
+    return <Layout key={`store-${String(user?.storeId || 'none')}`}>{children}</Layout>;
 }
 function AdminRoute({ children }: {
     children: React.ReactNode;

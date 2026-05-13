@@ -76,6 +76,7 @@ const createInitialExpenseFormData = () => ({
     categoryId: '',
 });
 type ExpensesViewSnapshot = {
+    storeId: string;
     products: Product[];
     expenseCategories: ExpenseCategory[];
     expenses: ExpenseAdvanced[];
@@ -92,26 +93,27 @@ let lastExpensesViewSnapshot: ExpensesViewSnapshot | null = null;
 export default function Expenses() {
     const { user } = useAuth();
     const { isBackendReachable, isOnline, manualSync, lastCheck } = useNetwork();
+    const hasSnapshotForCurrentStore = Boolean(lastExpensesViewSnapshot && String(lastExpensesViewSnapshot.storeId || '') === String(user?.storeId || ''));
     const [activeTab, setActiveTab] = useState('list');
     const [expenseType, setExpenseType] = useState<'direct' | 'indirect' | 'operational'>('direct');
-    const [products, setProducts] = useState<Product[]>(() => lastExpensesViewSnapshot?.products || []);
-    const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>(() => lastExpensesViewSnapshot?.expenseCategories || []);
-    const [expenses, setExpenses] = useState<ExpenseAdvanced[]>(() => lastExpensesViewSnapshot?.expenses || []);
-    const [filteredExpenses, setFilteredExpenses] = useState<ExpenseAdvanced[]>(() => lastExpensesViewSnapshot?.filteredExpenses || []);
+    const [products, setProducts] = useState<Product[]>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.products || []) : []);
+    const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.expenseCategories || []) : []);
+    const [expenses, setExpenses] = useState<ExpenseAdvanced[]>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.expenses || []) : []);
+    const [filteredExpenses, setFilteredExpenses] = useState<ExpenseAdvanced[]>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.filteredExpenses || []) : []);
     // Par défaut on utilise "aujourd'hui", mais si on revient sur la page
     // on restaure la dernière période réellement sélectionnée.
-    const [filterOption, setFilterOption] = useState<'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom'>(() => lastExpensesViewSnapshot?.filterOption || 'today');
-    const [customStart, setCustomStart] = useState<string>(() => lastExpensesViewSnapshot?.customStart || '');
-    const [customEnd, setCustomEnd] = useState<string>(() => lastExpensesViewSnapshot?.customEnd || '');
-    const [rangeTotal, setRangeTotal] = useState<number>(() => lastExpensesViewSnapshot?.rangeTotal || 0);
+    const [filterOption, setFilterOption] = useState<'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'thisYear' | 'custom'>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.filterOption || 'today') : 'today');
+    const [customStart, setCustomStart] = useState<string>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.customStart || '') : '');
+    const [customEnd, setCustomEnd] = useState<string>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.customEnd || '') : '');
+    const [rangeTotal, setRangeTotal] = useState<number>(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.rangeTotal || 0) : 0);
     const [showAddDialog, setShowAddDialog] = useState(false);
-    const [loadedCount, setLoadedCount] = useState(() => lastExpensesViewSnapshot?.loadedCount || 0);
+    const [loadedCount, setLoadedCount] = useState(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.loadedCount || 0) : 0);
     const [pageSize] = useState(10);
-    const [hasMore, setHasMore] = useState(() => lastExpensesViewSnapshot?.hasMore ?? true);
+    const [hasMore, setHasMore] = useState(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.hasMore ?? true) : true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [loading, setLoading] = useState(() => !lastExpensesViewSnapshot);
+    const [loading, setLoading] = useState(() => !hasSnapshotForCurrentStore);
     const [isRangeLoading, setIsRangeLoading] = useState(false);
-    const [pendingSyncCount, setPendingSyncCount] = useState(() => lastExpensesViewSnapshot?.pendingSyncCount || 0);
+    const [pendingSyncCount, setPendingSyncCount] = useState(() => hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.pendingSyncCount || 0) : 0);
     const [editingExpense, setEditingExpense] = useState<ExpenseAdvanced | null>(null);
     const [adminUser, setAdminUser] = useState<any>(null);
     // Search and filter states
@@ -125,9 +127,9 @@ export default function Expenses() {
         customStart: string;
         customEnd: string;
     }>({
-        filterOption: lastExpensesViewSnapshot?.filterOption || 'today',
-        customStart: lastExpensesViewSnapshot?.customStart || '',
-        customEnd: lastExpensesViewSnapshot?.customEnd || '',
+        filterOption: hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.filterOption || 'today') : 'today',
+        customStart: hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.customStart || '') : '',
+        customEnd: hasSnapshotForCurrentStore ? (lastExpensesViewSnapshot?.customEnd || '') : '',
     });
     useEffect(() => {
         rangeSelectionRef.current = {
@@ -232,7 +234,7 @@ export default function Expenses() {
     // Calcul du total sélectionné dès le chargement de la page
     useEffect(() => {
         (async () => {
-            await loadData(!lastExpensesViewSnapshot);
+            await loadData(!hasSnapshotForCurrentStore);
         })();
     }, []);
     // Attacher l'event listener pour le scroll
@@ -1057,6 +1059,7 @@ export default function Expenses() {
     }, [getFilteredExpenses, pageSize]);
     useEffect(() => {
         lastExpensesViewSnapshot = {
+            storeId: String(user?.storeId || ''),
             products,
             expenseCategories,
             expenses,
@@ -1069,7 +1072,7 @@ export default function Expenses() {
             hasMore,
             pendingSyncCount,
         };
-    }, [products, expenseCategories, expenses, filteredExpenses, filterOption, customStart, customEnd, rangeTotal, loadedCount, hasMore, pendingSyncCount]);
+    }, [user?.storeId, products, expenseCategories, expenses, filteredExpenses, filterOption, customStart, customEnd, rangeTotal, loadedCount, hasMore, pendingSyncCount]);
     // Fonction pour calculer les données du graphique (mémorisée)
     const getChartData = useMemo(() => {
         const filtered = getFilteredExpenses;

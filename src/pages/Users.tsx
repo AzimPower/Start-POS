@@ -155,6 +155,7 @@ interface StoreData {
     name: string;
 }
 type UsersViewSnapshot = {
+    scopeKey: string;
     users: UserData[];
     stores: StoreData[];
     lastRefresh: Date;
@@ -172,11 +173,13 @@ let lastUsersViewSnapshot: UsersViewSnapshot | null = null;
 
 export default function Users() {
     const { user } = useAuth();
+  const snapshotScopeKey = `${String(user?.role || 'guest')}:${String(user?.storeId || 'all')}`;
+  const hasSnapshotForCurrentScope = Boolean(lastUsersViewSnapshot && String(lastUsersViewSnapshot.scopeKey || '') === snapshotScopeKey);
   const userFormTotalSteps = 2;
-    const [users, setUsers] = useState<UserData[]>(() => lastUsersViewSnapshot?.users || []);
-    const [stores, setStores] = useState<StoreData[]>(() => lastUsersViewSnapshot?.stores || []);
-    const [isLoading, setIsLoading] = useState(() => !lastUsersViewSnapshot);
-  const [lastRefresh, setLastRefresh] = useState(() => lastUsersViewSnapshot?.lastRefresh || new Date());
+    const [users, setUsers] = useState<UserData[]>(() => hasSnapshotForCurrentScope ? (lastUsersViewSnapshot?.users || []) : []);
+    const [stores, setStores] = useState<StoreData[]>(() => hasSnapshotForCurrentScope ? (lastUsersViewSnapshot?.stores || []) : []);
+    const [isLoading, setIsLoading] = useState(() => !hasSnapshotForCurrentScope);
+  const [lastRefresh, setLastRefresh] = useState(() => hasSnapshotForCurrentScope ? (lastUsersViewSnapshot?.lastRefresh || new Date()) : new Date());
     const [showDialog, setShowDialog] = useState(false);
     const [editingUser, setEditingUser] = useState<UserData | null>(null);
     const [showPassword, setShowPassword] = useState(false);
@@ -198,7 +201,7 @@ export default function Users() {
     useEffect(() => {
         // We intentionally call loadData once when `user` changes. loadData is stable here.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        loadData(!lastUsersViewSnapshot);
+        loadData(!hasSnapshotForCurrentScope);
     }, [user]);
     const loadData = async (showLoading = true) => {
         if (showLoading) {
@@ -308,11 +311,12 @@ export default function Users() {
     };
     useEffect(() => {
         lastUsersViewSnapshot = {
+            scopeKey: snapshotScopeKey,
             users,
             stores,
             lastRefresh,
         };
-    }, [users, stores, lastRefresh]);
+    }, [snapshotScopeKey, users, stores, lastRefresh]);
     const handleSubmit = async () => {
       if (!editingUser && user?.role !== 'super_admin') {
         toast.error('Seul le super admin peut créer des utilisateurs');
