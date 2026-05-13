@@ -1,6 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Edit, type LucideIcon } from 'lucide-react';
+import { Edit, ChevronDown, type LucideIcon } from 'lucide-react';
 import * as NativePrinter from '@/lib/nativePrinter';
 import * as secureStorage from '@/lib/secureStorage';
 import { useAuth } from '@/contexts/AuthContext';
@@ -55,6 +55,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Printer, ImageIcon, Trash, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
@@ -83,6 +84,15 @@ function SettingsSectionHeading({ icon: Icon, title, description, action }: {
             {action ? <div className="shrink-0">{action}</div> : null}
         </div>);
 }
+function SectionToggleButton({ open, onClick }: {
+        open: boolean;
+        onClick: () => void;
+}) {
+        return (<Button type="button" variant="ghost" size="sm" className="gap-2 rounded-xl px-3" onClick={onClick}>
+            <span>{open ? 'Reduire' : 'Afficher'}</span>
+            <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`}/>
+        </Button>);
+}
 export default function Settings() {
     const { user } = useAuth();
     const runtimeLabel = getRuntimeLabel();
@@ -94,6 +104,11 @@ export default function Settings() {
     const [manualValue, setManualValue] = useState<string>('');
     const [note, setNote] = useState<string>('');
     const [confirmOpen, setConfirmOpen] = useState(false);
+    const [isWideDesktop, setIsWideDesktop] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
+    const [printerOpen, setPrinterOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
+    const [notificationsOpen, setNotificationsOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
+    const [pinSectionOpen, setPinSectionOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+    const [appearanceOpen, setAppearanceOpen] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
     // Email notification settings
     const [emailSettings, setEmailSettings] = useState<StoreAlertSettings>(DEFAULT_STORE_ALERT_SETTINGS);
     const [loadingEmailSettings, setLoadingEmailSettings] = useState(false);
@@ -111,6 +126,27 @@ export default function Settings() {
     const [categories, setCategories] = useState<Array<any>>([]);
     const [selectedFondCats, setSelectedFondCats] = useState<Array<string>>([]);
     const [selectedBenefCats, setSelectedBenefCats] = useState<Array<string>>([]);
+    useEffect(() => {
+        const syncResponsiveSections = () => {
+            const mobile = window.innerWidth < 768;
+            const wideDesktop = window.innerWidth >= 1280;
+            setIsWideDesktop(wideDesktop);
+            if (mobile) {
+                setPrinterOpen(false);
+                setNotificationsOpen(false);
+                setPinSectionOpen(false);
+                setAppearanceOpen(false);
+                return;
+            }
+            if (wideDesktop) {
+                setPinSectionOpen(true);
+                setAppearanceOpen(true);
+            }
+        };
+        syncResponsiveSections();
+        window.addEventListener('resize', syncResponsiveSections);
+        return () => window.removeEventListener('resize', syncResponsiveSections);
+    }, []);
     // Format currency for XOF
     function formatCurrency(v: number | string | undefined | null) {
         const n = Number(v) || 0;
@@ -1750,10 +1786,15 @@ export default function Settings() {
           {/* Printer card */}
                     <Card className={`${elevatedCardClassName} 2xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
-                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<Button onClick={() => void handleSearchPrinters()} className="hidden lg:inline-flex" disabled={scanning}>
-                                        {scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}
-                                    </Button>}/>
+                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<div className="flex items-center gap-2">
+                                        {printerOpen ? <Button onClick={() => void handleSearchPrinters()} className="hidden lg:inline-flex" disabled={scanning}>
+                                                {scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}
+                                            </Button> : null}
+                                        <SectionToggleButton open={printerOpen} onClick={() => setPrinterOpen((current) => !current)}/>
+                                    </div>}/>
             </CardHeader>
+            <Collapsible open={printerOpen} onOpenChange={setPrinterOpen}>
+              <CollapsibleContent>
             <CardContent>
               <div className="space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -1940,13 +1981,17 @@ export default function Settings() {
                   </>) : null}
               </div>
             </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
           </Card>
 
           {/* Email Notifications Configuration card */}
                     {canEditEmailSettings && (<Card className={`${elevatedCardClassName} 2xl:col-span-5`}>
                             <CardHeader className="space-y-4 pb-4">
-                                                                <SettingsSectionHeading icon={BellRing} title="Notifications automatiques" description="Choisissez quels événements doivent déclencher un email ou une alerte dans la boîte de réception du magasin." action={<Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700">Synchronisé</Badge>}/>
+                                                                <SettingsSectionHeading icon={BellRing} title="Notifications automatiques" description="Choisissez quels événements doivent déclencher un email ou une alerte dans la boîte de réception du magasin." action={<SectionToggleButton open={notificationsOpen} onClick={() => setNotificationsOpen((current) => !current)}/>}/>
               </CardHeader>
+              <Collapsible open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+                <CollapsibleContent>
               <CardContent>
                 <div className="space-y-4">
                                     <div>
@@ -2089,6 +2134,8 @@ export default function Settings() {
                                     </div>
                 </div>
               </CardContent>
+                </CollapsibleContent>
+              </Collapsible>
             </Card>)}
                 </div>
 
@@ -2097,10 +2144,12 @@ export default function Settings() {
           {/* PIN Security Configuration card */}
                                         <Card className={`${elevatedCardClassName} xl:col-span-5`}>
                         <CardHeader className="space-y-4 pb-4">
-                                                        <SettingsSectionHeading icon={Shield} title="Sécurité par code PIN" description="Ajoutez un code PIN demandé au retour sur l'application pour sécuriser le poste." action={<Badge variant="outline" className={pinEnabled ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>
+                                                        <SettingsSectionHeading icon={Shield} title="Sécurité par code PIN" description="Ajoutez un code PIN demandé au retour sur l'application pour sécuriser le poste." action={isWideDesktop ? <Badge variant="outline" className={pinEnabled ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>
                                         {pinEnabled ? 'Protection active' : 'Protection inactive'}
-                                    </Badge>}/>
+                                    </Badge> : <SectionToggleButton open={pinSectionOpen} onClick={() => setPinSectionOpen((current) => !current)}/>}/>
             </CardHeader>
+            <Collapsible open={pinSectionOpen} onOpenChange={setPinSectionOpen} disabled={isWideDesktop}>
+              <CollapsibleContent>
             <CardContent>
                             <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
                                                                 <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
@@ -2151,12 +2200,16 @@ export default function Settings() {
                 </Dialog>
               </div>
             </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
           </Card>
           {/* Appearance / Logo card */}
                                         <Card className={`${elevatedCardClassName} xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
-                                                        <SettingsSectionHeading icon={Palette} title="Apparence" description="Ajustez le thème et l’identité visuelle affichée sur les reçus et dans l’interface." action={<Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{darkMode ? 'Mode sombre' : 'Mode clair'}</Badge>}/>
+                                                        <SettingsSectionHeading icon={Palette} title="Apparence" description="Ajustez le thème et l’identité visuelle affichée sur les reçus et dans l’interface." action={isWideDesktop ? <Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{darkMode ? 'Mode sombre' : 'Mode clair'}</Badge> : <SectionToggleButton open={appearanceOpen} onClick={() => setAppearanceOpen((current) => !current)}/>}/>
             </CardHeader>
+            <Collapsible open={appearanceOpen} onOpenChange={setAppearanceOpen} disabled={isWideDesktop}>
+              <CollapsibleContent>
             <CardContent>
                             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:items-start">
                                 <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
@@ -2205,6 +2258,8 @@ export default function Settings() {
                 </div>
               </div>
             </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
           </Card>
         </div>
 
