@@ -1288,8 +1288,27 @@ export default function Settings() {
     const canManageStoreBalance = user.role === 'admin' || user.role === 'super_admin';
     const canEditEmailSettings = user.role === 'admin';
     const canManageReceiptSettings = (user.role === 'admin' || user.role === 'super_admin') && !!user.storeId;
-    const selectedPrinterName = isWebPrinterDialogMode ? 'Choix dans Edge/Chrome' : (paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante');
-    const printerStatusLabel = isWebPrinterDialogMode ? 'Boîte navigateur' : (selectedPrinter ? (printerConnected ? 'Connectée' : 'À reconnecter') : 'Non configurée');
+    const selectedPrinterName = isWebPrinterDialogMode ? 'Impression via navigateur' : (paired.find((device) => device.id === selectedPrinter)?.name || selectedPrinter || 'Aucune imprimante');
+    const handleSearchPrinters = async () => {
+        try {
+            if (isWebPrinterDialogMode) {
+                setPaired([]);
+                toast.info('Sur la version web, la liste des imprimantes Windows n’est pas accessible. Utilisez Imprimer pour choisir POS-58 dans la boîte de dialogue.');
+                return;
+            }
+            setScanning(true);
+            const devices = await NativePrinter.listPaired();
+            setPaired(devices || []);
+            if (!devices || devices.length === 0)
+                toast.info('Aucune imprimante trouvée');
+        }
+        catch (e) {
+            toast.error('Impossible de lister les imprimantes');
+        }
+        finally {
+            setScanning(false);
+        }
+    };
     // Unified test-print function: prefer using NativePrinter.printHtml which handles
     // connecting and sending via the configured native plugin. If no native plugin
     // is available, show an informative toast.
@@ -1731,39 +1750,14 @@ export default function Settings() {
           {/* Printer card */}
                     <Card className={`${elevatedCardClassName} 2xl:col-span-7`}>
                         <CardHeader className="space-y-4 pb-4">
-                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<Badge variant="outline" className={nativePrinterAvailable ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-red-200 bg-red-500/10 text-red-700'}>
-                                        {nativePrinterAvailable ? 'Support natif détecté' : 'Support natif absent'}
-                                    </Badge>}/>
-                            <div className="flex flex-wrap gap-2">
-                                <Badge variant="outline" className={selectedPrinter ? (printerConnected ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700' : 'border-amber-200 bg-amber-500/10 text-amber-700') : 'border-slate-200 bg-slate-500/10 text-slate-700'}>{printerStatusLabel}</Badge>
-                                <Badge variant="outline" className="border-slate-200 bg-slate-500/10 text-slate-700">{selectedPrinterName}</Badge>
-                                <Badge variant="outline" className={autoPrint ? 'border-blue-200 bg-blue-500/10 text-blue-700' : 'border-slate-200 bg-slate-500/10 text-slate-700'}>{autoPrint ? 'Auto-impression active' : 'Auto-impression inactive'}</Badge>
-                            </div>
+                            <SettingsSectionHeading icon={Printer} title="Imprimante" description="Connectez une imprimante thermique en Bluetooth sur Android ou via l'imprimante Windows sur PC." action={<Button onClick={() => void handleSearchPrinters()} className="hidden lg:inline-flex" disabled={scanning}>
+                                        {scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}
+                                    </Button>}/>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <Button onClick={async () => {
-            // Open native paired devices list / test print flow
-            try {
-                                if (isWebPrinterDialogMode) {
-                                    setPaired([]);
-                                    toast.info('Sur la version web, la liste des imprimantes Windows n’est pas accessible. Utilisez Imprimer pour choisir POS-58 dans la boîte de dialogue.');
-                                    return;
-                                }
-                                setScanning(true);
-                const devices = await NativePrinter.listPaired();
-                setPaired(devices || []);
-                if (!devices || devices.length === 0)
-                    toast.info('Aucune imprimante trouvée');
-            }
-            catch (e) {
-                toast.error('Impossible de lister les imprimantes');
-            }
-                        finally {
-                                setScanning(false);
-                        }
-                }} className="w-full sm:w-auto" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button>
+                  <Button onClick={() => void handleSearchPrinters()} className="w-full sm:w-auto lg:hidden" disabled={scanning}>{scanning ? 'Recherche en cours...' : 'Rechercher imprimantes'}</Button>
                   <div className="flex-1"/>
                   {/* Test d'impression disponible ci-dessous — un seul bouton centralisé */}
                 </div>
