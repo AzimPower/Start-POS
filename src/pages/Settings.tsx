@@ -55,7 +55,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { Printer, ImageIcon, Trash, Check, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
+import { Printer, ImageIcon, Trash, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
 import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
@@ -1916,24 +1916,12 @@ export default function Settings() {
                   </>) : null}
 
                                 <div className="rounded-2xl border border-border/60 text-white">
-                                    <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
-                                            <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="w-full justify-start gap-3 whitespace-nowrap rounded-xl px-4 py-3 text-left sm:w-auto sm:justify-center" disabled={isTesting}>
+                                    <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
+                                            <Button onClick={handleTestPrint} title="Test d'impression" aria-label="Test d'impression" className="w-full justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-3 text-center sm:w-auto sm:justify-center" disabled={isTesting}>
                         <Printer className="h-4 w-4 shrink-0"/>
-                                                <span>{isTesting ? 'Test en cours...' : 'Imprimer un reçu de test'}</span>
+                                                <span>{isTesting ? 'Test en cours...' : 'Imprimer Test'}</span>
                       </Button>
-                                            <Button className="w-full justify-start gap-3 whitespace-nowrap rounded-xl border-sky-700 bg-sky-600 px-4 py-3 text-left text-white shadow-sm hover:bg-sky-700 sm:w-auto sm:justify-center" variant="outline" onClick={async () => {
-            if (isWebPrinterDialogMode) {
-                toast.info('Sur la version web, il n’y a pas de connexion native persistante. L’impression passe par la boîte de dialogue du navigateur.');
-                return;
-            }
-            const ok = NativePrinter.isConnected();
-            setPrinterConnected(ok);
-            toast.info(ok ? 'Imprimante native connectée' : 'Aucune connexion native');
-        }} title="Statut imprimante" aria-label="Statut imprimante">
-                        <Check className="h-4 w-4 shrink-0"/>
-                        <span className="text-sm">Verifier le statut</span>
-                      </Button>
-                                            <Button size="sm" variant="outline" className="w-full justify-start gap-3 whitespace-nowrap rounded-xl border-rose-700 bg-rose-600 px-4 py-3 text-left text-white shadow-sm hover:bg-rose-700 sm:w-auto sm:justify-center" onClick={async () => {
+                                            <Button size="sm" variant="outline" className="w-full justify-center gap-2 whitespace-nowrap rounded-xl border-rose-700 bg-rose-600 px-3 py-3 text-center text-white shadow-sm hover:bg-rose-700 sm:w-auto sm:justify-center" onClick={async () => {
             try {
                 await NativePrinter.disconnect();
             }
@@ -1971,7 +1959,7 @@ export default function Settings() {
             toast.success('Imprimante dissociée et déconnectée (auto-connexion désactivée)');
                 }}>
                                                 <LogOut className="h-4 w-4 shrink-0"/>
-                                                <span>Dissocier l'imprimante</span>
+                                                <span>Dissocier</span>
                                             </Button>
                     </div>
                 </div>
@@ -2229,7 +2217,7 @@ export default function Settings() {
                         {logoUploading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v4a1 1 0 001 1h3m10 0h3a1 1 0 001-1V7M8 21h8M12 3v12"/>
                         </svg>}
-                        <span className="text-sm">Téléverser un logo</span>
+                        <span className="text-sm">Téléverser</span>
                       </label>
 
                                                                                         {(logoPreview || store?.logo) && (<button type="button" onClick={handleRemoveLogo} disabled={logoUploading} className="inline-flex items-center justify-center rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60" title="Supprimer le logo">
