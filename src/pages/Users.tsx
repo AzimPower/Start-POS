@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from '@/components/ui/label';
 import { UserCircle, Edit, Trash2, Plus, Shield, RefreshCw,  User, Eye, EyeOff, Search } from 'lucide-react';
 import { toast } from 'sonner';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { hashPasswordForCache } from '@/lib/auth';
@@ -493,7 +494,7 @@ export default function Users() {
         setStorePickerKey((current) => current + 1);
     };
     const handleDelete = async (id: string) => {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?'))
+        if (!await showAppConfirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?'))
             return;
         const db = await getDB();
         try {

@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { AlertTriangle, TrendingUp, TrendingDown, Package, DollarSign, Clock, CheckCircle, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { buildBypassUrl, buildProjectedLocalSales, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { getPendingSyncOps, hasPendingStockOperations } from '@/lib/sync';
@@ -1507,7 +1508,7 @@ export default function StockSignals() {
             return;
         const cat = categoryMap.get(signal.productId);
         const name = cat ? cat.name : (signal.productId === 'indirect' ? 'Dépense indirecte' : getProductName(signal.productId));
-        const ok = window.confirm(`Confirmer l'annulation du signalement pour "${name}" ? Le stock redeviendra actif et devra être signalé à nouveau.`);
+        const ok = await showAppConfirm(`Confirmer l'annulation du signalement pour "${name}" ? Le stock redeviendra actif et devra être signalé à nouveau.`);
         if (!ok)
             return;
         setLoading(true);

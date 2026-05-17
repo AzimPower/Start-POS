@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Edit, Trash2, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAppDialog } from '@/contexts/AppDialogContext';
 import { BACKEND_BASE } from '@/lib/backend';
 interface Category {
     id: string;
@@ -24,6 +25,7 @@ interface HiddenCategory {
     storeId: string;
 }
 export default function Categories() {
+    const { confirm } = useAppDialog();
     const [categories, setCategories] = useState<Category[]>([]);
     const [hiddenCategories, setHiddenCategories] = useState<HiddenCategory[]>([]);
     const { user } = useAuth();
@@ -171,7 +173,11 @@ export default function Categories() {
             return;
         if (!category.storeId && user?.role !== 'super_admin') {
             // Catégorie par défaut, admin/caissier : masquer pour ce magasin
-            if (confirm('Voulez-vous masquer cette catégorie par défaut pour votre magasin ?')) {
+            if (await confirm({
+                title: 'START POS',
+                description: 'Voulez-vous masquer cette catégorie par défaut pour votre magasin ?',
+                confirmLabel: 'Masquer',
+            })) {
                 const hiddenCat: HiddenCategory = {
                     id: generateId(),
                     categoryId: id,
@@ -184,7 +190,12 @@ export default function Categories() {
             return;
         }
         // Suppression normale
-        if (confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ?')) {
+        if (await confirm({
+            title: 'START POS',
+            description: 'Êtes-vous sûr de vouloir supprimer cette catégorie ?',
+            confirmLabel: 'Supprimer',
+            intent: 'destructive',
+        })) {
             await db.delete('categories', id);
             if (connectionState.isOnline) {
                 await fetch(`${BACKEND_BASE}/api/categories.php?id=${id}`, {

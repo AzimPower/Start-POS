@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Store, Edit, Trash2, Plus, RefreshCw, Power, ArrowLeftRight, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { isActiveFlag } from '@/lib/status';
@@ -725,7 +726,7 @@ export default function Stores() {
         setShowDialog(true);
     };
     const handleDelete = async (id: string) => {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer ce magasin ?'))
+        if (!await showAppConfirm('Êtes-vous sûr de vouloir supprimer ce magasin ?'))
             return;
         const db = await getDB();
         try {

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { showAppAlert } from '@/contexts/AppDialogContext';
 import { tryNativePrint } from '@/lib/print';
 import * as NativePrinter from '@/lib/nativePrinter';
 import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
@@ -483,13 +484,13 @@ export default function ShiftReceiptDetails({ selectedShift, cashiers }: {
                 if (!printed) {
                     const used = await tryNativePrint(html, 'Rapport-shift');
                     if (!used)
-                        alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
+                        await showAppAlert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
                 }
             }
             catch (e) {
                 const used = html ? await tryNativePrint(html, 'Rapport-shift') : false;
                 if (!used)
-                    alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
+                    await showAppAlert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
             }
         }}>Imprimer le reçu</Button>
       </div>

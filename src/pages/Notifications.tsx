@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { BACKEND_BASE } from '@/lib/backend';
 import { getDB } from '@/lib/db';
@@ -339,7 +340,7 @@ export default function Notifications() {
         return null;
     }
       const handleDismissForMe = async (notificationId: string) => {
-        if (!window.confirm('Supprimer cette notification de votre boîte de réception ?')) {
+        if (!await showAppConfirm('Supprimer cette notification de votre boîte de réception ?')) {
           return;
         }
         try {
@@ -407,7 +408,7 @@ export default function Notifications() {
           toast.info('Aucune notification sélectionnée à supprimer');
           return;
         }
-        if (!window.confirm(`Supprimer ${notificationIds.length} notification${notificationIds.length > 1 ? 's' : ''} de votre boîte de réception ?`)) {
+        if (!await showAppConfirm(`Supprimer ${notificationIds.length} notification${notificationIds.length > 1 ? 's' : ''} de votre boîte de réception ?`)) {
           return;
         }
         setIsApplyingInboxBulkAction(true);
@@ -514,7 +515,7 @@ export default function Notifications() {
         if (!isSuperAdmin) {
             return;
         }
-        if (!window.confirm('Supprimer cette notification de la diffusion ?')) {
+        if (!await showAppConfirm('Supprimer cette notification de la diffusion ?')) {
             return;
         }
         try {

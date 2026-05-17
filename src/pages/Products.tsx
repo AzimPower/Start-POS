@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Edit, Trash2, Package, History, Upload, Download, FileSpreadsheet, FileOutput } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNetwork } from '@/hooks/useNetwork';
 import { hasPendingStockOperations } from '@/lib/sync';
@@ -1186,7 +1187,7 @@ export default function Products() {
         }
     };
     const handleDelete = async (id: string) => {
-        if (confirm('Êtes-vous sûr de vouloir supprimer ce produit ?')) {
+        if (await showAppConfirm('Êtes-vous sûr de vouloir supprimer ce produit ?')) {
             try {
                 const db = await getDB();
                 // Récupérer le produit pour obtenir l'image

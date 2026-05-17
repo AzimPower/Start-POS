@@ -5,6 +5,7 @@ import { getStoredReceiptPaper } from '@/lib/receiptPaper';
 import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { DEFAULT_STORE_RECEIPT_SETTINGS, getReceiptFooterLines, getStoreReceiptSettings, type StoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { buildSaleReceiptHtml, buildSaleReceiptLines, getSaleReceiptPaymentMethodText } from '@/lib/saleReceiptDocument';
+import { showAppAlert } from '@/contexts/AppDialogContext';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Printer } from 'lucide-react';
@@ -157,14 +158,14 @@ export default function Receipt({
             if (!printed) {
                 const usedNative = await tryNativePrint(html, `Recu-${receiptNumber}`);
                 if (!usedNative) {
-                    alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
+                    await showAppAlert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
                 }
             }
         }
         catch (error) {
             const usedNative = await tryNativePrint(html, `Recu-${receiptNumber}`);
             if (!usedNative) {
-                alert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
+                await showAppAlert("Impossible d'imprimer: utilisez Android ou l'application desktop avec une imprimante native configurée.");
             }
         }
     };

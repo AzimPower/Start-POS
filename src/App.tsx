@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { AppDialogProvider } from "./contexts/AppDialogContext";
 import { NotificationProvider } from './contexts/NotificationContext';
 import Layout from "./components/Layout";
 import { useState, useEffect, useRef } from 'react';
@@ -350,10 +351,11 @@ function InnerApp() {
       {/* Back button initializer must be inside Router so useNavigate/useLocation work */}
       <BackButtonInitializer />
       <AuthProvider>
-        <NotificationProvider>
-          <PinOverlay />
-          <StoreStatusChecker>
-            <Routes>
+        <AppDialogProvider>
+          <NotificationProvider>
+            <PinOverlay />
+            <StoreStatusChecker>
+              <Routes>
               <Route path="/login" element={<Login />}/>
               <Route path="/pin" element={<PinRoute />}/>
               <Route path="/" element={<RoleRedirect />}/>
@@ -419,9 +421,10 @@ function InnerApp() {
                   </ProtectedRoute>}/>
               <Route path="*" element={<NotFound />}/>
               {/* Printer debug page removed for production builds */}
-            </Routes>
-          </StoreStatusChecker>
-        </NotificationProvider>
+              </Routes>
+            </StoreStatusChecker>
+          </NotificationProvider>
+        </AppDialogProvider>
         </AuthProvider>
       </HashRouter>);
 }

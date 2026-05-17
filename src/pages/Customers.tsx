@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { BACKEND_BASE } from '@/lib/backend';
 interface Customer {
@@ -433,7 +434,7 @@ export default function Customers() {
         setIsDialogOpen(true);
     };
     const handleDelete = async (id: string) => {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer ce client ?'))
+        if (!await showAppConfirm('Êtes-vous sûr de vouloir supprimer ce client ?'))
             return;
         try {
             setIsMutatingCustomer(true);

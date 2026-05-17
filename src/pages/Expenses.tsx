@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 import { emailService } from '@/lib/emailService';
 import { pendingEmailService } from '@/lib/pendingEmailService';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
+import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { BACKEND_BASE } from '@/lib/backend';
 interface Product {
     id: string;
@@ -615,7 +616,7 @@ export default function Expenses() {
         setShowAddDialog(true);
     }, []);
     const handleDeleteExpense = useCallback(async (id: string) => {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer cette dépense ?'))
+        if (!await showAppConfirm('Êtes-vous sûr de vouloir supprimer cette dépense ?'))
             return;
         try {
             setLoading(true);
@@ -1856,7 +1857,7 @@ function CategoryManagement({ expenseCategories, onCategoriesChange, storeId, pr
         setShowAddDialog(true);
     };
     const handleDelete = async (categoryId: string) => {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ?'))
+        if (!await showAppConfirm('Êtes-vous sûr de vouloir supprimer cette catégorie ?'))
             return;
         try {
             const db = await getDB();
