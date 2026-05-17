@@ -83,7 +83,7 @@ switch ($groupBy) {
 
 // Aggregate ventes by group, excluding refunded sales
 $salesWhere = $where . ' AND refunded = 0';
-$sql = "SELECT $groupExpr as period_key, $labelExpr as label, SUM(CAST(total AS DECIMAL(20,2))) as ventes FROM sales" . $salesWhere . " GROUP BY period_key ORDER BY period_key";
+$sql = "SELECT $groupExpr as period_key, $labelExpr as label, SUM(CAST(total AS DECIMAL(20,2))) as ventes FROM sales" . $salesWhere . " GROUP BY period_key, label ORDER BY period_key";
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);

@@ -25,6 +25,10 @@ function is_draft_sale_flag($value) {
     return $value === true || $value === 1 || $value === '1' || $value === 'true';
 }
 
+function sale_flag_to_db_int($value) {
+    return (is_refunded_sale_flag($value) || is_draft_sale_flag($value)) ? 1 : 0;
+}
+
 function should_sync_sale_stock($sale) {
     return !is_draft_sale_flag($sale['draft'] ?? false)
         && !is_refunded_sale_flag($sale['refunded'] ?? false);
@@ -334,9 +338,9 @@ switch ($method) {
                 $data['mobileMoneyAmount'] ?? null,
                 $data['otherAmount'] ?? null,
                 $data['createdAt'] ?? time() * 1000,
-                $data['refunded'] ?? false,
+                sale_flag_to_db_int($data['refunded'] ?? false),
                 $data['refundedAt'] ?? null,
-                $data['draft'] ?? false,
+                sale_flag_to_db_int($data['draft'] ?? false),
                 $data['completedAt'] ?? null,
                 $data['receiptSequence'] ?? null,
                 $data['receiptNumber'] ?? null,
@@ -426,9 +430,9 @@ switch ($method) {
                 $data['mobileMoneyAmount'] ?? null,
                 $data['otherAmount'] ?? null,
                 $data['createdAt'],
-                $data['refunded'] ?? false,
+                sale_flag_to_db_int($data['refunded'] ?? false),
                 $data['refundedAt'] ?? null,
-                $data['draft'] ?? false,
+                sale_flag_to_db_int($data['draft'] ?? false),
                 $data['completedAt'] ?? null,
                 $data['receiptSequence'] ?? null,
                 $data['receiptNumber'] ?? null,

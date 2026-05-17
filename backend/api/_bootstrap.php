@@ -64,7 +64,7 @@ function init_api_headers(array $methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPT
     }
 
     header('Access-Control-Allow-Methods: ' . implode(', ', $methods));
-    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma');
     header('Access-Control-Max-Age: 86400');
     header('Content-Type: application/json');
 
