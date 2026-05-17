@@ -16,6 +16,11 @@ export default function Login() {
     // as soon as the backend is confirmed reachable.
     useEffect(() => {
         const msg = localStorage.getItem('pos-login-last-error');
+        if (msg && msg.includes('Premi')) {
+            localStorage.removeItem('pos-login-last-error');
+            setError('');
+            return;
+        }
         if (msg)
             setError(msg);
         void backendAvailable(5000, true).then((ok) => {
