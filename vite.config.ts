@@ -100,7 +100,7 @@ export default defineConfig(({ mode }) => ({
               const isBackendApi = url.pathname.includes('/backend/api/');
               const hasBypass = url.searchParams.has('_bypass_sw');
               const isNavigationRequest = request.mode === 'navigate' || request.destination === 'document';
-              return url.hostname === 'mediumslateblue-cod-399211.hostingersite.com'
+              return url.hostname === 'start-pos.com'
                 && !isEmailAPI
                 && !isBackendApi
                 && !hasBypass

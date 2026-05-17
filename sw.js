@@ -196,7 +196,7 @@ define(['./workbox-3bd5b695'], (function (workbox) { 'use strict';
     const isBackendApi = url.pathname.includes("/backend/api/");
     const hasBypass = url.searchParams.has("_bypass_sw");
     const isNavigationRequest = request.mode === "navigate" || request.destination === "document";
-    return url.hostname === "mediumslateblue-cod-399211.hostingersite.com" && !isEmailAPI && !isBackendApi && !hasBypass && !isNavigationRequest;
+    return url.hostname === "start-pos.com" && !isEmailAPI && !isBackendApi && !hasBypass && !isNavigationRequest;
   }, new workbox.NetworkFirst({
     "cacheName": "external-api-cache",
     "networkTimeoutSeconds": 15,
