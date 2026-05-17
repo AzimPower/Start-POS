@@ -21,7 +21,7 @@ export default defineConfig(({ mode }) => ({
         enabled: false,
         type: 'module'
       },
-      includeAssets: ['favicon/site.webmanifest', 'robots.txt', 'offline.html'],
+      includeAssets: ['favicon/site.webmanifest', 'robots.txt'],
       manifest: {
         name: 'POS System',
         short_name: 'POS',
@@ -163,10 +163,6 @@ export default defineConfig(({ mode }) => ({
         additionalManifestEntries: [
           {
             url: '/',
-            revision: null
-          },
-          {
-            url: '/offline.html',
             revision: null
           }
         ]
