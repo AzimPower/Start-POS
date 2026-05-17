@@ -7,15 +7,23 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShoppingCart, AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { backendAvailable } from '@/lib/backend';
 export default function Login() {
     const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
-    // Show the last error set by AuthContext (like 'first login requires internet')
+    // Show the last error set by AuthContext, but clear stale offline errors
+    // as soon as the backend is confirmed reachable.
     useEffect(() => {
         const msg = localStorage.getItem('pos-login-last-error');
         if (msg)
             setError(msg);
+        void backendAvailable(5000, true).then((ok) => {
+            if (!ok)
+                return;
+            localStorage.removeItem('pos-login-last-error');
+            setError('');
+        }).catch(() => { });
     }, []);
     // local form submit loading
     const [submitting, setSubmitting] = useState(false);
