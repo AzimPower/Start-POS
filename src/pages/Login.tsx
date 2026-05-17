@@ -7,15 +7,32 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShoppingCart, AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { backendAvailable } from '@/lib/backend';
 export default function Login() {
     const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     // Show the last error set by AuthContext (like 'first login requires internet')
     useEffect(() => {
-        const msg = localStorage.getItem('pos-login-last-error');
-        if (msg)
+        const syncStoredError = async () => {
+            const msg = localStorage.getItem('pos-login-last-error');
+            if (!msg) {
+                return;
+            }
+
+            if (msg.includes('Première connexion')) {
+                const backendUp = await backendAvailable(5000, true).catch(() => false);
+                if (backendUp) {
+                    localStorage.removeItem('pos-login-last-error');
+                    setError('');
+                    return;
+                }
+            }
+
             setError(msg);
+        };
+
+        void syncStoredError();
     }, []);
     // local form submit loading
     const [submitting, setSubmitting] = useState(false);

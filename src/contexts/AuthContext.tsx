@@ -544,7 +544,7 @@ export function AuthProvider({ children }: {
             let remoteUser: UserRecord | undefined = undefined;
             let localUser: UserRecord | undefined = undefined;
             // 1. Toujours prioriser la vérification sur le serveur si possible
-            if (backendIsUp) {
+            if (backendIsUp || !backendIsUp) {
                 try {
                     remoteAttempted = true;
                     const res = await fetch(`${BACKEND_BASE}/api/auth_login.php`, {
@@ -833,7 +833,7 @@ export function AuthProvider({ children }: {
                 catch (e) {
                 }
             }
-            if (!remoteAttempted && !backendIsUp) {
+            if (!remoteReachable && !backendIsUp) {
                 localStorage.setItem('pos-login-last-error', 'Première connexion: une connexion Internet est requise.');
             }
             else {
