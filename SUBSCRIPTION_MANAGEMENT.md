@@ -45,7 +45,7 @@ Ce système bloque automatiquement l'accès aux utilisateurs d'un magasin désac
 **Via API (curl) :**
 ```bash
 # Soft delete (désactivation)
-curl -X DELETE "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?id=STOREID&soft=1"
+curl -X DELETE "https://start-pos.com/backend/api/stores.php?id=STOREID&soft=1"
 
 # Réponse attendue :
 # {"success":true,"soft":true,"id":"STOREID"}
@@ -94,7 +94,7 @@ UPDATE stores SET active = 0 WHERE id = 'STOREID';
 curl -X PUT \
   -H "Content-Type: application/json" \
   -d '{"id":"STOREID","name":"Mon Magasin","address":"Adresse","active":1}' \
-  "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php"
+  "https://start-pos.com/backend/api/stores.php"
 ```
 
 **Méthode 2 : Via phpMyAdmin (SQL)**
@@ -208,7 +208,7 @@ https://votre-domaine.com/stores?include_inactive=1
 
 **Via API :**
 ```bash
-curl "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?include_inactive=1"
+curl "https://start-pos.com/backend/api/stores.php?include_inactive=1"
 ```
 
 ### Désactiver un Magasin (Soft Delete)
@@ -216,7 +216,7 @@ curl "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.ph
 **Via API :**
 ```bash
 curl -X DELETE \
-  "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php?id=STOREID&soft=1"
+  "https://start-pos.com/backend/api/stores.php?id=STOREID&soft=1"
 ```
 
 **Résultat :**
@@ -242,7 +242,7 @@ curl -X PUT \
     "subscriptionEnd":1267103890,
     "lastPayment":1234567890
   }' \
-  "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php"
+  "https://start-pos.com/backend/api/stores.php"
 ```
 
 **Minimal (just reactivate) :**
@@ -250,7 +250,7 @@ curl -X PUT \
 curl -X PUT \
   -H "Content-Type: application/json" \
   -d '{"id":"STOREID","active":1}' \
-  "https://mediumslateblue-cod-399211.hostingersite.com/backend/api/stores.php"
+  "https://start-pos.com/backend/api/stores.php"
 ```
 
 ---

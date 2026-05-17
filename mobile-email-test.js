@@ -17,7 +17,7 @@ const testEmailAndroid = async () => {
   // Test XMLHttpRequest direct
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', 'https://mediumslateblue-cod-399211.hostingersite.com/backend/api/send-email.php?_android_test=1', true);
+    xhr.open('POST', 'https://start-pos.com/backend/api/send-email.php?_android_test=1', true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.timeout = 15000;
     
@@ -50,7 +50,7 @@ const testEmailAndroid = async () => {
 
 const detectBackendReachability = async () => {
   try {
-    const response = await fetch('https://mediumslateblue-cod-399211.hostingersite.com/backend/api/health.php?_mobile_test=' + Date.now(), {
+    const response = await fetch('https://start-pos.com/backend/api/health.php?_mobile_test=' + Date.now(), {
       cache: 'no-store'
     });
     return response.ok;
