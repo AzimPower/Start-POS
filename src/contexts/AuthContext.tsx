@@ -544,7 +544,8 @@ export function AuthProvider({ children }: {
             let remoteUser: UserRecord | undefined = undefined;
             let localUser: UserRecord | undefined = undefined;
             // 1. Toujours prioriser la vérification sur le serveur si possible
-            if (backendIsUp) {
+            const shouldAttemptRemote = backendIsUp || typeof navigator === 'undefined' || navigator.onLine;
+            if (shouldAttemptRemote) {
                 try {
                     remoteAttempted = true;
                     const res = await fetch(`${BACKEND_BASE}/api/auth_login.php`, {
