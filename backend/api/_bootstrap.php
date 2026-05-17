@@ -13,7 +13,7 @@ function get_allowed_origins(): array {
         'https://127.0.0.1:*',
         'capacitor://localhost',
         'ionic://localhost',
-        'https://mediumslateblue-cod-399211.hostingersite.com',
+        'https://start-pos.com',
     ];
 }
 

@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND_BASE = 'https://mediumslateblue-cod-399211.hostingersite.com/backend';
+const DEFAULT_BACKEND_BASE = 'https://start-pos.com/backend';
 
 export const BACKEND_BASE = (import.meta.env.VITE_API_URL || DEFAULT_BACKEND_BASE).trim().replace(/\/+$/, '');
 let backendAvailabilityCache: {

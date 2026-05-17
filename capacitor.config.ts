@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     allowNavigation: [
-      'https://mediumslateblue-cod-399211.hostingersite.com'
+      'https://start-pos.com'
     ]
   },
   android: {
