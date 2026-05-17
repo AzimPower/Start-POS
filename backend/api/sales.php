@@ -379,6 +379,10 @@ switch ($method) {
                 break;
             }
 
+            error_log('sales.php POST error: ' . $exception->getMessage());
+            error_log('sales.php POST trace: ' . $exception->getFile() . ':' . $exception->getLine());
+            error_log('sales.php POST payload: ' . json_encode($data));
+
             http_response_code(500);
             echo json_encode([
                 'success' => false,
