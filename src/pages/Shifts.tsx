@@ -1321,14 +1321,30 @@ export default function Shifts() {
                     return;
                 }
                 if (!response.ok) {
-                    throw new Error(`Erreur backend: ${response.status}`);
+                    let backendMessage = '';
+                    try {
+                        const errorPayload = await response.json();
+                        backendMessage = String(errorPayload?.error || errorPayload?.message || '').trim();
+                    }
+                    catch (parseError) {
+                    }
+                    throw new Error(backendMessage || `Erreur backend: ${response.status}`);
                 }
                 await db.add('shifts', newShift);
                 persistActiveShiftCache(newShift);
                 toast.success('Shift ouvert et synchronisé avec succès');
             }
             catch (error) {
-                toast.error('Ouverture impossible : le serveur doit valider qu\'aucun autre appareil n\'a déjà un service ouvert.');
+                const message = error instanceof Error ? error.message : '';
+                if (message.toLowerCase().includes('shift est déjà ouvert') || message.toLowerCase().includes('shift est deja ouvert')) {
+                    toast.error('Ouverture impossible : un service est déjà ouvert pour ce compte dans ce magasin.');
+                }
+                else if (message) {
+                    toast.error(`Ouverture impossible : ${message}`);
+                }
+                else {
+                    toast.error('Ouverture impossible : le serveur doit valider qu\'aucun autre service n\'est déjà ouvert pour ce compte.');
+                }
                 return;
             }
             setShowOpenDialog(false);

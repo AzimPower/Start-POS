@@ -74,21 +74,42 @@ try {
         $sql = 'INSERT INTO shifts (id, userId, storeId, openingAmount, closingAmount, expectedAmount, difference, cashAmount, mobileMoneyAmount, otherAmount, openedAt, closedAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
-        $stmt->execute([
-            $id,
-            $data['userId'],
-            $data['storeId'],
-            $data['openingAmount'],
-            $data['closingAmount'] ?? null,
-            $data['expectedAmount'] ?? null,
-            $data['difference'] ?? null,
-            isset($data['cashAmount']) ? $data['cashAmount'] : null,
-            isset($data['mobileMoneyAmount']) ? $data['mobileMoneyAmount'] : null,
-            isset($data['otherAmount']) ? $data['otherAmount'] : null,
-            $data['openedAt'] ?? time()*1000,
-            $data['closedAt'] ?? null,
-            $data['status']
-        ]);
+        try {
+            $stmt->execute([
+                $id,
+                $data['userId'],
+                $data['storeId'],
+                $data['openingAmount'],
+                $data['closingAmount'] ?? null,
+                $data['expectedAmount'] ?? null,
+                $data['difference'] ?? null,
+                isset($data['cashAmount']) ? $data['cashAmount'] : null,
+                isset($data['mobileMoneyAmount']) ? $data['mobileMoneyAmount'] : null,
+                isset($data['otherAmount']) ? $data['otherAmount'] : null,
+                $data['openedAt'] ?? time()*1000,
+                $data['closedAt'] ?? null,
+                $data['status']
+            ]);
+        } catch (PDOException $insertError) {
+            $sqlState = (string)($insertError->errorInfo[0] ?? '');
+            $driverCode = (string)($insertError->errorInfo[1] ?? '');
+            $driverMessage = (string)($insertError->errorInfo[2] ?? $insertError->getMessage());
+            $isOpenShiftConflict = $sqlState === '23000'
+                && ($driverCode === '1062' || str_contains(strtolower($driverMessage), 'open_constraint'));
+            if ($isOpenShiftConflict) {
+                $existingStmt = $pdo->prepare('SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open" LIMIT 1');
+                $existingStmt->execute([$data['userId'], $data['storeId']]);
+                $existingShift = $existingStmt->fetch();
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'Un shift est déjà ouvert pour cet utilisateur dans ce magasin',
+                    'existingShiftId' => $existingShift['id'] ?? null,
+                    'openedAt' => $existingShift['openedAt'] ?? null
+                ]);
+                exit;
+            }
+            throw $insertError;
+        }
         store_metrics_invalidate_cache($data['storeId'] ?? null);
         echo json_encode(['success' => true, 'id' => $id]);
         break;
@@ -129,21 +150,42 @@ try {
         
         $sql = 'UPDATE shifts SET userId=?, storeId=?, openingAmount=?, closingAmount=?, expectedAmount=?, difference=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, openedAt=?, closedAt=?, status=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-            $data['userId'],
-            $data['storeId'],
-            $data['openingAmount'],
-            $data['closingAmount'],
-            $data['expectedAmount'],
-            $data['difference'],
-            isset($data['cashAmount']) ? $data['cashAmount'] : 0,
-            isset($data['mobileMoneyAmount']) ? $data['mobileMoneyAmount'] : 0,
-            isset($data['otherAmount']) ? $data['otherAmount'] : 0,
-            $data['openedAt'],
-            $data['closedAt'],
-            $data['status'],
-            $data['id']
-        ]);
+        try {
+            $stmt->execute([
+                $data['userId'],
+                $data['storeId'],
+                $data['openingAmount'],
+                $data['closingAmount'],
+                $data['expectedAmount'],
+                $data['difference'],
+                isset($data['cashAmount']) ? $data['cashAmount'] : 0,
+                isset($data['mobileMoneyAmount']) ? $data['mobileMoneyAmount'] : 0,
+                isset($data['otherAmount']) ? $data['otherAmount'] : 0,
+                $data['openedAt'],
+                $data['closedAt'],
+                $data['status'],
+                $data['id']
+            ]);
+        } catch (PDOException $updateError) {
+            $sqlState = (string)($updateError->errorInfo[0] ?? '');
+            $driverCode = (string)($updateError->errorInfo[1] ?? '');
+            $driverMessage = (string)($updateError->errorInfo[2] ?? $updateError->getMessage());
+            $isOpenShiftConflict = $sqlState === '23000'
+                && ($driverCode === '1062' || str_contains(strtolower($driverMessage), 'open_constraint'));
+            if ($isOpenShiftConflict) {
+                $existingStmt = $pdo->prepare('SELECT * FROM shifts WHERE userId = ? AND storeId = ? AND status = "open" AND id <> ? LIMIT 1');
+                $existingStmt->execute([$data['userId'], $data['storeId'], $data['id']]);
+                $existingShift = $existingStmt->fetch();
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'Un autre shift est déjà ouvert pour cet utilisateur dans ce magasin',
+                    'existingShiftId' => $existingShift['id'] ?? null,
+                    'openedAt' => $existingShift['openedAt'] ?? null
+                ]);
+                exit;
+            }
+            throw $updateError;
+        }
         if ($stmt->rowCount() === 0) {
             $checkStmt = $pdo->prepare('SELECT id FROM shifts WHERE id = ? LIMIT 1');
             $checkStmt->execute([$data['id']]);
