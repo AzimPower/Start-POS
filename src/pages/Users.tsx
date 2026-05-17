@@ -856,7 +856,7 @@ export default function Users() {
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
               <div className="flex w-full gap-2 sm:w-auto">
-                <Button variant="secondary" size="sm" onClick={loadData} className="flex-1 bg-white/10 text-white hover:bg-white/20 sm:flex-none">
+                <Button variant="secondary" size="sm" onClick={() => void loadData()} className="flex-1 bg-white/10 text-white hover:bg-white/20 sm:flex-none">
                   <RefreshCw className="mr-1.5 h-4 w-4" />
                   Actualiser
                 </Button>
