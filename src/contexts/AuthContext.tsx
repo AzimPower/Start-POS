@@ -310,7 +310,7 @@ const sendLoginNotificationEmail = async (userData: User) => {
     </div>
     <div class="info-row">
       <span class="info-label">Rôle :&nbsp;</span>
-      <span class="info-value">${userData.role === 'admin' ? '👨‍💼 Administrateur' : userData.role === 'cashier' ? '💰 Caissier' : userData.role === 'manager' ? '👥 Gestionnaire' : '🔧 Super Admin'}</span>
+      <span class="info-value">${userData.role === 'admin' ? '👨‍💼 Administrateur' : userData.role === 'cashier' ? '💰 Caissier' : userData.role === 'manager' ? '👥 Gestionnaire' : userData.role === 'ambassador' ? '🎁 Ambassadeur' : '🔧 Super Admin'}</span>
     </div>
     <div class="info-row">
       <span class="info-label">Téléphone :&nbsp;</span>
@@ -380,7 +380,9 @@ const sendLoginInboxNotification = async (userData: User) => {
                 ? 'Caissier'
                 : userData.role === 'manager'
                     ? 'Gestionnaire'
-                    : 'Super Admin';
+                    : userData.role === 'ambassador'
+                        ? 'Ambassadeur'
+                        : 'Super Admin';
 
         await sendStoreAdminNotification({
             event: 'login',
@@ -400,7 +402,10 @@ interface User {
     username: string;
     phone: string; // Téléphone unique pour la connexion
     email?: string; // Email optionnel
-    role: 'super_admin' | 'admin' | 'cashier' | 'manager';
+    promoCode?: string;
+    commissionRate?: number | null;
+    withdrawalPhone?: string;
+    role: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador';
     storeId: string;
     storeIds?: string[]; // liste des magasins liés à l'utilisateur
     active?: boolean;
@@ -592,12 +597,16 @@ export function AuthProvider({ children }: {
                                     id: remoteUser.id,
                                     username: remoteUser.username,
                                     phone: remoteUser.phone,
+                                    email: remoteUser.email,
                                     passwordHash: await hashPasswordForCache(password),
                                     pin: remoteUser.pin || '',
                                     pinEnabled: (remoteUser as any).pinEnabled || false,
                                     role: remoteUser.role,
                                     storeId: primaryStoreId,
                                     storeIds: (remoteUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
+                                    promoCode: (remoteUser as any).promoCode || null,
+                                    commissionRate: (remoteUser as any).commissionRate ?? null,
+                                    withdrawalPhone: (remoteUser as any).withdrawalPhone || null,
                                     active: remoteUser.active,
                                     createdAt: (remoteUser.createdAt as number) || Date.now(),
                                     updatedAt: remoteUser.updatedAt || Date.now(),
@@ -611,6 +620,9 @@ export function AuthProvider({ children }: {
                                 username: remoteUser.username,
                                 phone: remoteUser.phone,
                                 email: remoteUser.email,
+                                promoCode: (remoteUser as any).promoCode || null,
+                                commissionRate: (remoteUser as any).commissionRate ?? null,
+                                withdrawalPhone: (remoteUser as any).withdrawalPhone || null,
                                 role: remoteUser.role,
                                 storeId: primaryStoreId,
                                 storeIds: (remoteUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
@@ -705,6 +717,9 @@ export function AuthProvider({ children }: {
                             username: localUser.username,
                             phone: localUser.phone,
                             email: localUser.email,
+                            promoCode: (localUser as any).promoCode || null,
+                            commissionRate: (localUser as any).commissionRate ?? null,
+                            withdrawalPhone: (localUser as any).withdrawalPhone || null,
                             role: localUser.role,
                             storeId: primaryStoreId,
                             storeIds: (localUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),
@@ -785,6 +800,9 @@ export function AuthProvider({ children }: {
                                 username: localUser.username,
                                 phone: localUser.phone,
                                 email: localUser.email,
+                                promoCode: (localUser as any).promoCode || null,
+                                commissionRate: (localUser as any).commissionRate ?? null,
+                                withdrawalPhone: (localUser as any).withdrawalPhone || null,
                                 role: localUser.role,
                                 storeId: primaryStoreId,
                                 storeIds: (localUser as any).storeIds || (primaryStoreId ? [primaryStoreId] : []),

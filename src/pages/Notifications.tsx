@@ -611,6 +611,7 @@ export default function Notifications() {
                         <SelectItem value="admin">Administrateurs</SelectItem>
                         <SelectItem value="manager">Gestionnaires</SelectItem>
                         <SelectItem value="cashier">Caissiers</SelectItem>
+                        <SelectItem value="ambassador">Ambassadeurs</SelectItem>
                         <SelectItem value="super_admin">Super admins</SelectItem>
                       </SelectContent>
                     </Select>

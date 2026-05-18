@@ -1,6 +1,7 @@
 <?php
 require_once '../config.php';
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/_ambassadors.php';
 
 init_api_headers(['GET', 'POST', 'DELETE', 'OPTIONS']);
 header('Cache-Control: no-cache, no-store, must-revalidate');
@@ -8,6 +9,7 @@ header('Pragma: no-cache');
 header('Expires: 0');
 
 $claims = require_auth();
+ensure_ambassador_schema($pdo);
 
 // Auto-create table if it doesn't exist yet
 try {
@@ -96,6 +98,13 @@ try {
                  VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([$id, $storeId, $storeName, $months, $amount, $paidAt, $note]);
+            create_first_subscription_commission($pdo, [
+                'id' => $id,
+                'storeId' => $storeId,
+                'storeName' => $storeName,
+                'amount' => $amount,
+                'paidAt' => $paidAt,
+            ]);
 
             echo json_encode(['success' => true, 'id' => $id]);
             break;
@@ -121,6 +130,11 @@ try {
 
             $stmt = $pdo->prepare('DELETE FROM subscription_payments WHERE id = ?');
             $stmt->execute([$id]);
+            try {
+                $deleteCommission = $pdo->prepare('DELETE FROM ambassador_commissions WHERE subscriptionPaymentId = ?');
+                $deleteCommission->execute([$id]);
+            } catch (Exception $e) {
+            }
             echo json_encode(['success' => true]);
             break;
 

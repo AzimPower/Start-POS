@@ -14,6 +14,8 @@ export default function RoleRedirect() {
         return null;
     if (!user)
         return <Navigate to="/login" replace/>;
+    if (user.role === "ambassador")
+        return <Navigate to="/ambassador-dashboard" replace/>;
     if (user.role === "cashier" || user.role === "manager")
         return <Navigate to="/pos" replace/>;
     return <Navigate to="/dashboard" replace/>;

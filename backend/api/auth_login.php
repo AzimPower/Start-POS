@@ -1,6 +1,7 @@
 <?php
 require_once './_bootstrap.php';
 init_api_headers(['POST', 'OPTIONS']);
+require_once './_ambassadors.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -9,6 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 require_once '../config.php';
+ensure_ambassador_schema($pdo);
 
 function normalize_phone_digits($phone) {
     return preg_replace('/\D+/', '', (string)$phone);
@@ -82,7 +84,7 @@ if (empty($phoneCandidates) || $password === '') {
 }
 
 $stmt = $pdo->query(
-    "SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt
+    "SELECT id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt, promoCode, commissionRate, withdrawalPhone
      FROM users
      WHERE phone IS NOT NULL AND phone <> ''"
 );
@@ -136,6 +138,9 @@ echo json_encode([
     'storeIds' => $authenticatedUser['storeIds'],
     'active' => $authenticatedUser['active'],
     'createdAt' => $authenticatedUser['createdAt'],
+    'promoCode' => $authenticatedUser['promoCode'] ?? null,
+    'commissionRate' => isset($authenticatedUser['commissionRate']) ? (float)$authenticatedUser['commissionRate'] : null,
+    'withdrawalPhone' => $authenticatedUser['withdrawalPhone'] ?? null,
     'pin' => $authenticatedUser['pin'],
     'pinEnabled' => $authenticatedUser['pinEnabled'],
 ]);

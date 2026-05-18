@@ -43,6 +43,9 @@ export default function Login() {
         if (role === 'admin' || role === 'super_admin') {
             navigate('/dashboard');
         }
+        else if (role === 'ambassador') {
+            navigate('/ambassador-dashboard');
+        }
         else {
             navigate('/pos');
         }
@@ -68,7 +71,7 @@ export default function Login() {
         const success = await login(fullPhone, password);
         if (success) {
             localStorage.removeItem('pos-login-last-error');
-            navigate('/dashboard');
+            navigate('/');
         }
         else {
             const msg = localStorage.getItem('pos-login-last-error') || 'Numéro de téléphone ou mot de passe incorrect';

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, } from 'recharts';
-import { Store, Users, TrendingUp, AlertTriangle, CheckCircle, XCircle, RefreshCw, Crown, Building2, UserCheck, ShoppingCart, Calendar, ArrowUpRight, ArrowDownRight, Clock, CreditCard, Activity, ShieldCheck, Wallet, BarChart3, Settings, Eye, } from 'lucide-react';
+import { Store, Users, TrendingUp, AlertTriangle, CheckCircle, XCircle, RefreshCw, Crown, Building2, UserCheck, ShoppingCart, Calendar, ArrowUpRight, ArrowDownRight, Clock, CreditCard, Activity, ShieldCheck, Wallet, BarChart3, Settings, Eye, Gift, ArrowDownToLine, } from 'lucide-react';
 import { format, isAfter, isBefore, addDays, differenceInDays } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -26,7 +26,7 @@ interface StoreData {
 interface UserData {
     id: string;
     username: string;
-    role: 'super_admin' | 'admin' | 'cashier' | 'manager';
+    role: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador';
     storeId?: string;
     storeIds?: string[];
     email?: string;
@@ -37,6 +37,15 @@ interface StoreStats {
     storeName: string;
     revenue: number;
     transactions: number;
+}
+interface AmbassadorAdminSummary {
+    ambassadorsCount: number;
+    storesLinkedCount: number;
+    commissionsTotal: number;
+    pendingWithdrawalsTotal: number;
+    paidWithdrawalsTotal: number;
+    availableBalancesTotal: number;
+    pendingWithdrawalsCount: number;
 }
 const COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899'];
 function StatCard({ title, value, subtitle, icon: Icon, trend, color, onClick, }: {
@@ -114,17 +123,19 @@ export default function SuperAdminDashboard() {
     const [payments, setPayments] = useState<PaymentRecord[]>([]);
     const [paymentsTotal, setPaymentsTotal] = useState(0);
     const [paymentsFilter, setPaymentsFilter] = useState<string>('all');
+    const [ambassadorSummary, setAmbassadorSummary] = useState<AmbassadorAdminSummary | null>(null);
     const loadData = useCallback(async () => {
         setIsLoading(true);
         try {
             const now = new Date();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
             const endOfMonth = now.getTime();
-            const [storesRes, usersRes, statsRes, paymentsRes] = await Promise.all([
+            const [storesRes, usersRes, statsRes, paymentsRes, ambassadorsRes] = await Promise.all([
                 fetch(`${BACKEND_BASE}/api/stores.php?include_inactive=1`),
                 fetch(`${BACKEND_BASE}/api/users.php`),
                 fetch(`${BACKEND_BASE}/api/dashboard_store_stats.php?start=${startOfMonth}&end=${endOfMonth}`),
                 fetch(`${BACKEND_BASE}/api/subscription_payments.php?limit=500`),
+                fetch(`${BACKEND_BASE}/api/ambassador_admin.php`),
             ]);
             if (storesRes.ok) {
                 const rawStores = await storesRes.json();
@@ -183,6 +194,10 @@ export default function SuperAdminDashboard() {
                 }
                 setMonthlyRevenue(monthsData);
             }
+            if (ambassadorsRes.ok) {
+                const ambassadorJson = await ambassadorsRes.json();
+                setAmbassadorSummary(ambassadorJson?.summary || null);
+            }
         }
         catch (err) {
             toast.error('Erreur lors du chargement des données');
@@ -220,6 +235,7 @@ export default function SuperAdminDashboard() {
         { name: 'Admin', value: roleCount['admin'] || 0 },
         { name: 'Manager', value: roleCount['manager'] || 0 },
         { name: 'Caissier', value: roleCount['cashier'] || 0 },
+        { name: 'Ambassadeur', value: roleCount['ambassador'] || 0 },
     ].filter((d) => d.value > 0);
     const storeStatusData = [
         { name: 'Actifs', value: activeStores.length },
@@ -236,24 +252,24 @@ export default function SuperAdminDashboard() {
     }
     return (<div className="min-h-screen bg-background">
       {/* ── Header ────────────────────────────────────────────────────── */}
-      <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 px-4 pt-6 pb-8">
+      <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-800 px-4 pt-6 pb-8">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 <Crown size={18} className="text-yellow-300"/>
-                <span className="text-indigo-200 text-sm font-medium">Propriétaire SAS</span>
+                <span className="text-blue-100 text-sm font-medium">Propriétaire SAS</span>
               </div>
               <h1 className="break-words text-xl font-bold text-white sm:text-2xl">
                 Bonjour, {user?.username || 'Super Admin'} 👋
               </h1>
-              <p className="text-indigo-200 text-sm mt-0.5">
+              <p className="text-blue-100 text-sm mt-0.5">
                 {format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
               </p>
             </div>
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               <div className="text-right">
-                <p className="text-indigo-200 text-xs">Dernière sync</p>
+                <p className="text-blue-100 text-xs">Dernière sync</p>
                 <p className="text-white text-xs font-medium">{format(lastRefresh, 'HH:mm:ss')}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={loadData} className="bg-white/20 text-white border-white/30 hover:bg-white/30">
@@ -283,6 +299,13 @@ export default function SuperAdminDashboard() {
           <StatCard title="Utilisateurs" value={users.length} subtitle={`${roleCount['admin'] || 0} admins · ${roleCount['cashier'] || 0} caissiers`} icon={Users} color="bg-purple-500" onClick={() => navigate('/users')}/>
           <StatCard title="Abonnements ce mois" value={formatCurrency(subscriptionRevenueThisMonth)} subtitle={`${subscriptionPaymentsThisMonth.length} paiement${subscriptionPaymentsThisMonth.length !== 1 ? 's' : ''} encaissé${subscriptionPaymentsThisMonth.length !== 1 ? 's' : ''}`} icon={TrendingUp} color="bg-emerald-500"/>
           <StatCard title="Aonnements" value={expiredStores.length + expiringStores.length} subtitle={`${expiredStores.length} expirés · ${expiringStores.length} proches`} icon={AlertTriangle} color={expiredStores.length > 0 ? 'bg-red-500' : expiringStores.length > 0 ? 'bg-orange-500' : 'bg-slate-400'}/>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard title="Ambassadeurs" value={ambassadorSummary?.ambassadorsCount || 0} subtitle={`${ambassadorSummary?.storesLinkedCount || 0} magasins liés`} icon={Gift} color="bg-cyan-500" onClick={() => navigate('/ambassadors')}/>
+          <StatCard title="Commissions" value={formatCurrency(ambassadorSummary?.commissionsTotal || 0)} subtitle="Premiers abonnements" icon={Wallet} color="bg-sky-500" onClick={() => navigate('/ambassadors')}/>
+          <StatCard title="Retraits en attente" value={ambassadorSummary?.pendingWithdrawalsCount || 0} subtitle={formatCurrency(ambassadorSummary?.pendingWithdrawalsTotal || 0)} icon={Clock} color="bg-amber-500" onClick={() => navigate('/ambassadors')}/>
+          <StatCard title="Retraits payés" value={formatCurrency(ambassadorSummary?.paidWithdrawalsTotal || 0)} subtitle={`${formatCurrency(ambassadorSummary?.availableBalancesTotal || 0)} disponibles`} icon={ArrowDownToLine} color="bg-rose-500" onClick={() => navigate('/ambassadors')}/>
         </div>
 
         <div className="space-y-4">
@@ -424,8 +447,8 @@ export default function SuperAdminDashboard() {
               {[
             { label: 'Gérer les boutiques', icon: Store, path: '/stores', color: 'bg-indigo-500' },
             { label: 'Gérer les utilisateurs', icon: Users, path: '/users', color: 'bg-purple-500' },
-            { label: 'Voir les rapports', icon: BarChart3, path: '/dashboard', color: 'bg-emerald-500' },
-            { label: 'Paramètres', icon: Settings, path: '/settings', color: 'bg-slate-500' },
+            { label: 'Gérer les ambassadeurs', icon: Gift, path: '/ambassadors', color: 'bg-cyan-500' },
+            { label: 'Notifications', icon: BarChart3, path: '/notifications', color: 'bg-emerald-500' },
         ].map((action) => (<button key={action.path} onClick={() => navigate(action.path)} className="flex flex-col items-center gap-2 p-3 rounded-xl border hover:bg-muted/40 transition-colors text-center">
                   <div className={`p-2.5 rounded-xl ${action.color}`}>
                     <action.icon size={18} className="text-white"/>
@@ -435,12 +458,6 @@ export default function SuperAdminDashboard() {
             </div>
           </CardContent>
         </Card>
-
-        {/* ── Footer ────────────────────────────────────────────────────── */}
-        <div className="text-center text-xs text-muted-foreground py-2">
-          <Crown size={12} className="inline mr-1 text-yellow-500"/>
-          Accès propriétaire · SAS · Données en temps réel
-        </div>
       </div>
     </div>);
 }

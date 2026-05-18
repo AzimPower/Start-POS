@@ -48,7 +48,7 @@ export default defineConfig(({ mode }) => ({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [
           /^\/backend\//,
@@ -57,9 +57,9 @@ export default defineConfig(({ mode }) => ({
           /^\/favicon\//,
           /\/[^/?]+\.[^/]+$/,
         ],
-        // Améliorer la gestion des versions
+        // AmÃ©liorer la gestion des versions
         mode: 'generateSW',
-        // Fichiers à précacher
+        // Fichiers Ã  prÃ©cacher
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,webp,woff2}'
         ],
@@ -159,7 +159,7 @@ export default defineConfig(({ mode }) => ({
             }
           }
         ],
-        // Code personnalisé pour gérer les mises à jour
+        // Code personnalisÃ© pour gÃ©rer les mises Ã  jour
         additionalManifestEntries: [
           {
             url: '/',
@@ -177,7 +177,7 @@ export default defineConfig(({ mode }) => ({
   build: {
     rollupOptions: {
       output: {
-        // Utiliser des hash plus longs pour éviter les collisions
+        // Utiliser des hash plus longs pour Ã©viter les collisions
         entryFileNames: 'assets/[name]-[hash:8].js',
         chunkFileNames: 'assets/[name]-[hash:8].js',
         assetFileNames: 'assets/[name]-[hash:8].[ext]'

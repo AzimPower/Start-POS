@@ -5,7 +5,7 @@ import { hasAuthToken, requiresBackendAuth } from '@/lib/apiAuth';
 import { generateId } from '@/lib/id';
 export type NotificationKind = 'info' | 'success' | 'warning' | 'critical';
 export type NotificationTargetType = 'all' | 'role' | 'store' | 'user';
-export type UserRole = 'super_admin' | 'admin' | 'cashier' | 'manager';
+export type UserRole = 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador';
 export interface NotificationViewer {
     id: string;
     role: UserRole;

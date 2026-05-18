@@ -35,6 +35,8 @@ import SubscriptionPayments from "./pages/SubscriptionPayments";
 import Notifications from "./pages/Notifications";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
+import AmbassadorDashboard from "./pages/AmbassadorDashboard";
+import AmbassadorsAdmin from "./pages/AmbassadorsAdmin";
 const queryClient = new QueryClient();
 const STORES_STATUS_URL = `${BACKEND_BASE}/api/stores.php?include_inactive=1`;
 
@@ -104,6 +106,8 @@ function PinRoute() {
     if (user && !isLocked) {
         if (user.role === 'cashier')
             return <Navigate to="/pos" replace/>;
+        if (user.role === 'ambassador')
+            return <Navigate to="/ambassador-dashboard" replace/>;
         return <Navigate to="/dashboard" replace/>;
     }
     // If there is no stored session awaiting PIN, don't show PIN page
@@ -136,7 +140,7 @@ function StoreStatusChecker({ children }: {
 
         const checkStoreStatus = async () => {
             // Skip si pas de user ou si c'est le super admin (accès illimité)
-            if (!user || user.role === 'super_admin' || isLoading) {
+            if (!user || user.role === 'super_admin' || user.role === 'ambassador' || isLoading) {
                 if (!cancelled) {
                     setStoreStatus({ active: true, reason: null, name: '', loading: false });
                 }
@@ -286,7 +290,7 @@ function StoreStatusChecker({ children }: {
 
         checkStoreStatus();
 
-        if (user && user.role !== 'super_admin' && !isLoading) {
+        if (user && user.role !== 'super_admin' && user.role !== 'ambassador' && !isLoading) {
             intervalId = window.setInterval(checkStoreStatus, 120000);
 
             const handleVisibility = () => {
@@ -322,7 +326,7 @@ function StoreStatusChecker({ children }: {
       </div>);
     }
     // Si le magasin est désactivé, afficher l'écran de blocage
-    if (!storeStatus.active && user && user.role !== 'super_admin') {
+    if (!storeStatus.active && user && user.role !== 'super_admin' && user.role !== 'ambassador') {
         return (<SubscriptionExpired storeName={storeStatus.name} reason={storeStatus.reason} onCheckAgain={() => setCheckKey(prev => prev + 1)}/>);
     }
     // Sinon, afficher l'application normalement
@@ -364,6 +368,9 @@ function InnerApp() {
                   </ProtectedRoute>}/>
               <Route path="/dashboard" element={<ProtectedRoute>
                     <DashboardOnlyAdmin />
+                  </ProtectedRoute>}/>
+              <Route path="/ambassador-dashboard" element={<ProtectedRoute>
+                    <AmbassadorDashboard />
                   </ProtectedRoute>}/>
               <Route path="/pos" element={<ProtectedRoute>
                     <POS {...({} as any)}/>
@@ -411,6 +418,11 @@ function InnerApp() {
               <Route path="/subscription-payments" element={<ProtectedRoute>
                     <SuperAdminRoute>
                       <SubscriptionPayments />
+                    </SuperAdminRoute>
+                  </ProtectedRoute>}/>
+              <Route path="/ambassadors" element={<ProtectedRoute>
+                    <SuperAdminRoute>
+                      <AmbassadorsAdmin />
                     </SuperAdminRoute>
                   </ProtectedRoute>}/>
               <Route path="/notifications" element={<ProtectedRoute>

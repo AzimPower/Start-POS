@@ -204,7 +204,7 @@ function require_notification_sender(PDO $pdo, $notificationId, $senderUserId) {
 function validate_notification_payload($data) {
     $allowedTypes = ['info', 'success', 'warning', 'critical'];
     $allowedTargets = ['all', 'role', 'store', 'user', 'store_admins'];
-    $allowedRoles = ['super_admin', 'admin', 'cashier', 'manager'];
+    $allowedRoles = ['super_admin', 'admin', 'cashier', 'manager', 'ambassador'];
 
     $title = trim((string)($data['title'] ?? ''));
     $message = trim((string)($data['message'] ?? ''));

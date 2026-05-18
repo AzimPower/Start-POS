@@ -7,12 +7,12 @@ interface CachedNotificationPayload {
     message: string;
     type: 'info' | 'success' | 'warning' | 'critical';
     targetType: 'all' | 'role' | 'store' | 'user';
-    targetRole?: 'super_admin' | 'admin' | 'cashier' | 'manager' | null;
+    targetRole?: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador' | null;
     targetStoreId?: string | null;
     targetUserId?: string | null;
     senderUserId: string;
     senderUsername?: string | null;
-    senderRole?: 'super_admin' | 'admin' | 'cashier' | 'manager' | null;
+    senderRole?: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador' | null;
     active?: boolean | number;
     createdAt: number;
     expiresAt?: number | null;
@@ -148,7 +148,10 @@ interface POSDB extends DBSchema {
             email?: string; // Email optionnel
             password?: string; // Legacy only, kept for migration compatibility
             passwordHash?: string;
-            role: 'super_admin' | 'admin' | 'cashier' | 'manager';
+            promoCode?: string | null;
+            commissionRate?: number | null;
+            withdrawalPhone?: string | null;
+            role: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador';
             storeId: string;
             storeIds?: string[]; // support multi-magasin (mapping user_stores)
             active?: boolean;
@@ -185,6 +188,7 @@ interface POSDB extends DBSchema {
             subscriptionStart?: number;
             subscriptionEnd?: number;
             lastPayment?: number;
+            ambassadorUserId?: string | null;
         };
         indexes: {};
     };
@@ -490,7 +494,7 @@ let dbInstance: IDBPDatabase<POSDB> | null = null;
 export async function getDB() {
     if (dbInstance)
         return dbInstance;
-    dbInstance = await openDB<POSDB>('pos-db', 19, {
+    dbInstance = await openDB<POSDB>('pos-db', 21, {
         upgrade(db, oldVersion, newVersion, transaction) {
             if (!db.objectStoreNames.contains('notificationInbox')) {
                 const notificationInboxStore = db.createObjectStore('notificationInbox', { keyPath: 'cacheKey' });
@@ -505,7 +509,7 @@ export async function getDB() {
             // Users store
             if (!db.objectStoreNames.contains('users')) {
                 const userStore = db.createObjectStore('users', { keyPath: 'id' });
-                userStore.createIndex('by-username', 'username', { unique: true });
+                userStore.createIndex('by-username', 'username', { unique: false });
                 userStore.createIndex('by-phone', 'phone', { unique: true });
                 userStore.createIndex('by-email', 'email', { unique: false });
             }
@@ -520,6 +524,13 @@ export async function getDB() {
                 if (!userStore.indexNames.contains('by-email')) {
                     userStore.createIndex('by-email', 'email', { unique: false });
                 }
+            }
+            else if (oldVersion < 21) {
+                const userStore = transaction.objectStore('users');
+                if (userStore.indexNames.contains('by-username')) {
+                    userStore.deleteIndex('by-username');
+                }
+                userStore.createIndex('by-username', 'username', { unique: false });
             }
             // Stores
             if (!db.objectStoreNames.contains('stores')) {
@@ -714,7 +725,7 @@ async function initializeDefaultData(db: IDBPDatabase<POSDB>) {
             active: true,
             createdAt: now,
             subscriptionStart: now,
-            subscriptionEnd: now + (30 * 24 * 60 * 60 * 1000), // 30 jours
+            subscriptionEnd: now, // 0 jour a la creation
             lastPayment: now,
         };
         await db.add('stores', defaultStore);

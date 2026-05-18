@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import NotificationBell from '@/components/NotificationBell';
 import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
-import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard, Gift, Wallet } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
 interface LayoutProps {
@@ -73,6 +73,8 @@ export default function Layout({ children }: LayoutProps) {
         { icon: UserCircle, label: 'Utilisateurs', path: '/users', roles: ['admin', 'super_admin'], group: 'admin' },
         { icon: Store, label: 'Magasins', path: '/stores', roles: ['admin', 'super_admin'], group: 'admin' },
         { icon: CreditCard, label: 'Encaissements', path: '/subscription-payments', roles: ['super_admin'], group: 'admin' },
+        { icon: Wallet, label: 'Ambassadeurs', path: '/ambassadors', roles: ['super_admin'], group: 'admin' },
+        { icon: Gift, label: 'Dashboard ambassadeur', path: '/ambassador-dashboard', roles: ['ambassador'], group: 'principal' },
         { icon: Bell, label: 'Notifications', path: '/notifications', roles: ['super_admin'], group: 'admin' },
         { icon: Menu, label: 'Parametres', path: '/settings', roles: ['admin', 'cashier', 'manager'], group: 'admin' },
     ];
@@ -97,7 +99,7 @@ export default function Layout({ children }: LayoutProps) {
 
     const handleLogout = () => {
         logout();
-        navigate('/login');
+        window.location.href = '/accueil.html';
         setMenuOpen(false);
     };
     const NavContent = () => (<nav className="flex flex-col h-full overflow-y-auto">
@@ -109,7 +111,7 @@ export default function Layout({ children }: LayoutProps) {
           <div>
             <h2 className="font-bold text-sidebar-foreground">START POS</h2>
             <p className="text-xs text-sidebar-foreground/60">
-              {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
+              {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Admin' : user?.role === 'manager' ? 'Gestionnaire' : user?.role === 'ambassador' ? 'Ambassadeur' : 'Caissier'}
             </p>
           </div>
         </div>
@@ -162,7 +164,7 @@ export default function Layout({ children }: LayoutProps) {
         <div className="mb-3 p-3 bg-sidebar-accent/70 border border-sidebar-border/60 rounded-lg">
           <p className="text-sm font-medium text-sidebar-foreground">{user?.username}</p>
           <p className="text-xs text-sidebar-foreground/60">
-            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrateur' : user?.role === 'manager' ? 'Gestionnaire' : 'Caissier'}
+            {user?.role === 'super_admin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrateur' : user?.role === 'manager' ? 'Gestionnaire' : user?.role === 'ambassador' ? 'Ambassadeur' : 'Caissier'}
           </p>
         </div>
         <Button variant="ghost" className="w-full bg-white/10 text-white hover:bg-white/20 hover:shadow-sm" onClick={handleLogout} aria-label="Deconnexion">

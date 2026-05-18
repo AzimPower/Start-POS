@@ -27,6 +27,7 @@ interface StoreData {
     subscriptionStart?: number; // Date de début d'abonnement
     subscriptionEnd?: number; // Date de fin d'abonnement
     lastPayment?: number; // Date du dernier paiement
+    ambassadorUserId?: string | null;
 }
 type StoresViewSnapshot = {
     stores: StoreData[];
@@ -249,7 +250,9 @@ export default function Stores() {
     const [adminLookup, setAdminLookup] = useState('');
     const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
     const [admins, setAdmins] = useState<Array<any>>([]);
+    const [ambassadors, setAmbassadors] = useState<Array<any>>([]);
     const [selectedAdminId, setSelectedAdminId] = useState<string | null>(null);
+    const [selectedAmbassadorId, setSelectedAmbassadorId] = useState<string>('none');
     const [linkedAdmins, setLinkedAdmins] = useState<Array<any>>([]);
     const [storeFormStep, setStoreFormStep] = useState(1);
     // Renouvellement abonnement
@@ -374,12 +377,13 @@ export default function Stores() {
         // Recharger les données après mise à jour
         storesData = await db.getAll('stores');
         // Ajouter les propriétés d'abonnement et active si elles n'existent pas (compatibilité)
-        storesData = storesData.map(store => ({
+            storesData = storesData.map(store => ({
             ...store,
           active: isActiveFlag(store.active),
             subscriptionStart: (store as any).subscriptionStart || store.createdAt,
-            subscriptionEnd: (store as any).subscriptionEnd || (store.createdAt + (30 * 24 * 60 * 60 * 1000)),
-            lastPayment: (store as any).lastPayment || store.createdAt
+            subscriptionEnd: (store as any).subscriptionEnd ?? store.createdAt,
+            lastPayment: (store as any).lastPayment || store.createdAt,
+            ambassadorUserId: (store as any).ambassadorUserId || null,
         }));
         // Si c'est un admin, il ne voit que les magasins qui lui sont liés
         if (user?.role === 'admin') {
@@ -401,7 +405,9 @@ export default function Stores() {
             const db = await getDB();
             const allUsers = await db.getAll('users');
             const adminsOnly = allUsers.filter(u => u.role === 'admin');
+            const ambassadorsOnly = allUsers.filter((u: any) => u.role === 'ambassador');
             setAdmins(adminsOnly);
+            setAmbassadors(ambassadorsOnly);
         }
         catch (e) {
         }
@@ -556,6 +562,7 @@ export default function Stores() {
                     ...editingStore,
                     name: formData.name,
                     address: formData.address,
+                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 };
                 if (selectedAdminId)
                     putData.adminId = selectedAdminId;
@@ -568,6 +575,7 @@ export default function Stores() {
                     ...editingStore,
                     name: formData.name,
                     address: formData.address,
+                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 });
                 // If assigned an existing admin during edit, create local mapping and update user
                 let mappingAlreadyExisted = false;
@@ -608,7 +616,7 @@ export default function Stores() {
             }
             else {
                 const now = Date.now();
-                const subscriptionEnd = now + (30 * 24 * 60 * 60 * 1000); // 30 jours
+                const subscriptionEnd = now; // creation a 0 jour
                 // Ajout store (API ou file d'attente)
                 const storePayload: any = {
                     id: storeId,
@@ -619,6 +627,7 @@ export default function Stores() {
                     subscriptionStart: now,
                     subscriptionEnd: subscriptionEnd,
                     lastPayment: now,
+                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 };
                 // If super_admin creating a store: either include admin (new) or adminId (existing)
                 if (user?.role === 'super_admin') {
@@ -651,6 +660,7 @@ export default function Stores() {
                     subscriptionStart: now,
                     subscriptionEnd: subscriptionEnd,
                     lastPayment: now,
+                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 });
                 // Création de l'admin associé au magasin (super_admin seulement)
                 if (user?.role === 'super_admin') {
@@ -719,6 +729,7 @@ export default function Stores() {
         // Prepare admin selection for edit: load admins and existing mapping
         setIsCreatingAdmin(false);
         setSelectedAdminId(null);
+      setSelectedAmbassadorId(store.ambassadorUserId || 'none');
       setAdminLookup('');
         // Load admins afterwards so suggestions are available
         await loadAdmins();
@@ -984,6 +995,7 @@ export default function Stores() {
         setAdminLookup('');
         setIsCreatingAdmin(false);
         setSelectedAdminId(null);
+        setSelectedAmbassadorId('none');
         setLinkedAdmins([]);
         loadAdmins();
         setShowDialog(true);
@@ -1074,6 +1086,21 @@ export default function Stores() {
                   <Input id="admin-password" type="password" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} placeholder="Mot de passe admin" />
                 </div>)}
             </div>
+          </div>)}
+        {user?.role === 'super_admin' && (<div className="space-y-2">
+            <Label htmlFor="ambassador-select">Ambassadeur lié</Label>
+            <Select value={selectedAmbassadorId} onValueChange={setSelectedAmbassadorId}>
+              <SelectTrigger id="ambassador-select">
+                <SelectValue placeholder="Aucun ambassadeur" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Aucun ambassadeur</SelectItem>
+                {ambassadors.map((ambassador) => (<SelectItem key={ambassador.id} value={ambassador.id}>
+                    {(ambassador.username || ambassador.phone) + ((ambassador.promoCode ? ` - ${ambassador.promoCode}` : ''))}
+                  </SelectItem>))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">La commission ambassadeur est déclenchée une seule fois lors du premier abonnement payé du magasin.</p>
           </div>)}
       </>);
     const renderStoreDialogForm = () => (<div className="space-y-4">

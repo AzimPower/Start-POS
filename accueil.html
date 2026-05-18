@@ -1,0 +1,3331 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>START POS | Application de caisse, stock et gestion boutique</title>
+  <meta
+    name="description"
+    content="START POS est une application de point de vente pour boutiques, alimentations, pharmacies et commerces: caisse, stock, recus, depenses, clients, rapports et mode hors ligne."
+  />
+  <link rel="icon" type="image/svg+xml" href="favicon/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon/icon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon/icon-16x16.png" />
+  <link rel="shortcut icon" href="favicon/favicon-96x96.png" />
+  <link rel="apple-touch-icon" href="favicon/apple-touch-icon.png" />
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5d6978;
+      --paper: #ffffff;
+      --wash: #f5f7fb;
+      --line: #dce3ec;
+      --brand: #2563eb;
+      --brand-dark: #1d4ed8;
+      --blue: #1d4ed8;
+      --coral: #e4572e;
+      --gold: #f4b942;
+      --navy: #102033;
+      --green-soft: #e7efff;
+      --blue-soft: #e7efff;
+      --coral-soft: #ffe9e1;
+      --shadow: 0 18px 50px rgba(16, 32, 51, 0.16);
+      --max: 1160px;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.5;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .container {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid rgba(220, 227, 236, 0.78);
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(14px);
+    }
+
+    .scroll-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 80;
+      width: 100%;
+      height: 4px;
+      pointer-events: none;
+    }
+
+    .scroll-progress span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--brand), var(--blue), var(--coral));
+      transition: width 90ms linear;
+    }
+
+    .nav {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.02rem;
+      font-weight: 800;
+    }
+
+    .brand-logo {
+      width: 42px;
+      height: 42px;
+      display: block;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      object-fit: cover;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+    }
+
+    .brand-name {
+      color: var(--navy);
+      font-size: 1.65rem;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .nav-links a {
+      position: relative;
+      transition: color 180ms ease;
+    }
+
+    .nav-links a::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -9px;
+      height: 2px;
+      transform: scaleX(0);
+      transform-origin: left;
+      background: var(--brand);
+      transition: transform 180ms ease;
+    }
+
+    .nav-links a.active {
+      color: var(--brand-dark);
+      font-weight: 800;
+    }
+
+    .nav-links a.active::after {
+      transform: scaleX(1);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 18px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font-weight: 750;
+      cursor: pointer;
+      transition: transform 180ms ease, background 180ms ease, border-color 180ms ease, color 180ms ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      color: #fff;
+      background: var(--brand);
+      box-shadow: 0 12px 26px rgba(15, 118, 110, 0.24);
+    }
+
+    .btn-primary:hover {
+      background: var(--brand-dark);
+    }
+
+    .btn-light {
+      color: var(--ink);
+      background: #fff;
+      border-color: var(--line);
+    }
+
+    .btn-login {
+      color: #fff;
+      background: #ea580c;
+      border-color: #ea580c;
+      box-shadow: 0 12px 24px rgba(234, 88, 12, 0.22);
+    }
+
+    .btn-login:hover {
+      background: #c2410c;
+      border-color: #c2410c;
+    }
+
+    .btn-orange {
+      color: #fff;
+      background: #ea580c;
+      border-color: #ea580c;
+      box-shadow: 0 12px 24px rgba(234, 88, 12, 0.22);
+    }
+
+    .btn-orange:hover {
+      background: #c2410c;
+      border-color: #c2410c;
+    }
+
+    .btn-dark {
+      color: #fff;
+      background: var(--navy);
+    }
+
+    .btn-whatsapp {
+      color: #fff;
+      background: #16a34a;
+      border-color: #16a34a;
+      box-shadow: 0 12px 24px rgba(22, 163, 74, 0.22);
+    }
+
+    .btn-whatsapp:hover {
+      background: #15803d;
+      border-color: #15803d;
+    }
+
+    .hero {
+      position: relative;
+      min-height: 82svh;
+      display: flex;
+      align-items: center;
+      color: #fff;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(10, 27, 43, 0.92) 0%, rgba(10, 27, 43, 0.72) 52%, rgba(10, 27, 43, 0.28) 100%),
+        #102033;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: linear-gradient(90deg, rgba(7, 16, 28, 0.82) 0%, rgba(7, 16, 28, 0.68) 42%, rgba(7, 16, 28, 0.36) 70%, rgba(7, 16, 28, 0.18) 100%);
+      pointer-events: none;
+    }
+
+    .hero-media {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .hero-media video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: left center;
+      opacity: 0.9;
+      transform: scale(1.04);
+    }
+
+    .hero .container {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 28px;
+      align-items: stretch;
+      width: min(var(--max), calc(100% - 32px));
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      height: 9px;
+      background: linear-gradient(90deg, var(--brand), var(--blue), var(--coral), var(--gold));
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      min-height: 500px;
+      display: flex;
+      justify-content: center;
+      padding: 32px;
+    }
+
+    .hero-content::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: 28px;
+      background: linear-gradient(135deg, rgba(8, 18, 31, 0.74), rgba(8, 18, 31, 0.48));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+    }
+
+    .hero-copy {
+      width: min(100%, 560px);
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .hero-video-card {
+      position: relative;
+      min-height: 500px;
+      border-radius: 28px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.06);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(8px);
+    }
+
+    .hero-video-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background: linear-gradient(180deg, rgba(8, 18, 31, 0.06), rgba(8, 18, 31, 0.22));
+      pointer-events: none;
+    }
+
+    .hero-video-card video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: center center;
+    }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 20px;
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      color: #f1fffb;
+      background: rgba(7, 16, 28, 0.42);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(8px);
+      font-size: 0.92rem;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: 18px;
+      max-width: 760px;
+      font-size: clamp(2.4rem, 7vw, 5.2rem);
+      line-height: 1.02;
+      letter-spacing: 0;
+      text-shadow: 0 6px 24px rgba(0, 0, 0, 0.34);
+    }
+
+    .hero-subtitle {
+      max-width: 680px;
+      margin-bottom: 28px;
+      color: rgba(255, 255, 255, 0.95);
+      font-size: clamp(1.02rem, 2.2vw, 1.25rem);
+      text-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 30px;
+    }
+
+    .hero-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      width: 100%;
+    }
+
+    .metric {
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(9, 19, 32, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 1.35rem;
+    }
+
+    .metric span {
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.9rem;
+      text-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
+    }
+
+    .hero .btn-light {
+      border-color: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .hero .btn-primary {
+      box-shadow: 0 14px 30px rgba(15, 118, 110, 0.3);
+    }
+
+    section {
+      padding: 72px 0;
+    }
+
+    .reveal-prep {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 600ms ease, transform 600ms ease;
+    }
+
+    .reveal-prep.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(520px, 1.35fr) minmax(320px, 0.9fr);
+      gap: 42px;
+      align-items: end;
+      margin-bottom: 34px;
+    }
+
+    .kicker {
+      margin-bottom: 12px;
+      color: var(--brand);
+      font-size: 0.85rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin-bottom: 0;
+      color: var(--navy);
+      max-width: 860px;
+      font-size: clamp(2.15rem, 3.4vw, 3.25rem);
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .section-head p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 1.02rem;
+    }
+
+    .strip {
+      padding: 24px 0;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .strip-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .proof {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 64px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: var(--wash);
+      border: 1px solid var(--line);
+      font-weight: 750;
+    }
+
+    .proof-icon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: var(--radius);
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .proof:nth-child(2) .proof-icon {
+      background: var(--brand);
+    }
+
+    .proof:nth-child(3) .proof-icon {
+      background: var(--coral);
+    }
+
+    .proof:nth-child(4) .proof-icon {
+      background: #b7791f;
+    }
+
+    .product-preview {
+      background:
+        linear-gradient(180deg, #fff 0%, #f3f7fb 100%);
+      overflow: hidden;
+    }
+
+    .product-preview .section-head {
+      grid-template-columns: 1fr;
+      margin-bottom: 24px;
+    }
+
+    .product-preview .section-head p {
+      display: none;
+    }
+
+    .product-visual-only {
+      display: grid;
+      gap: 20px;
+      perspective: 1600px;
+    }
+
+    .hero-showcase {
+      --mx: 50%;
+      --my: 50%;
+      --rx: 0deg;
+      --ry: 0deg;
+      margin: 0;
+      padding: 18px;
+      position: relative;
+      isolation: isolate;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 30px 80px rgba(15, 23, 42, 0.12);
+      overflow: hidden;
+      transform: rotateX(var(--rx)) rotateY(var(--ry)) translateY(0);
+      transition: transform 260ms ease, box-shadow 260ms ease, border-color 260ms ease;
+      animation: showcaseFloat 6s ease-in-out infinite;
+    }
+
+    .hero-showcase::before {
+      content: "";
+      position: absolute;
+      inset: -30%;
+      background:
+        radial-gradient(circle at var(--mx) var(--my), rgba(14, 165, 233, 0.18), transparent 28%),
+        linear-gradient(120deg, transparent 35%, rgba(255, 255, 255, 0.65) 50%, transparent 65%);
+      transform: translateX(-22%);
+      animation: showcaseShine 7s linear infinite;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .hero-showcase::after {
+      content: "";
+      position: absolute;
+      inset: auto 8% -24px;
+      height: 36px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(14, 165, 233, 0.22), transparent 70%);
+      filter: blur(14px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .hero-showcase:hover {
+      border-color: rgba(14, 165, 233, 0.3);
+      box-shadow: 0 36px 110px rgba(15, 23, 42, 0.18);
+    }
+
+    .hero-showcase img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 20px;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-badge {
+      position: absolute;
+      z-index: 3;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.68);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(10px);
+      color: var(--navy);
+      font-size: 0.83rem;
+      font-weight: 850;
+      letter-spacing: 0.01em;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+    }
+
+    .hero-badge::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #14b8a6, #0ea5e9);
+      box-shadow: 0 0 0 6px rgba(20, 184, 166, 0.12);
+    }
+
+    .hero-badge.top-left {
+      top: 28px;
+      left: 28px;
+      animation: badgeDrift 4.8s ease-in-out infinite;
+    }
+
+    .hero-badge.bottom-right {
+      right: 28px;
+      bottom: 28px;
+      animation: badgeDrift 5.8s ease-in-out infinite reverse;
+    }
+
+    @keyframes showcaseFloat {
+      0%, 100% {
+        transform: rotateX(var(--rx)) rotateY(var(--ry)) translateY(0);
+      }
+      50% {
+        transform: rotateX(calc(var(--rx) * 0.7)) rotateY(calc(var(--ry) * 0.7)) translateY(-8px);
+      }
+    }
+
+    @keyframes showcaseShine {
+      0% {
+        transform: translateX(-34%);
+      }
+      100% {
+        transform: translateX(34%);
+      }
+    }
+
+    @keyframes badgeDrift {
+      0%, 100% {
+        transform: translateY(0);
+      }
+      50% {
+        transform: translateY(-8px);
+      }
+    }
+
+    .device-stage {
+      position: relative;
+      padding: 28px 0 24px;
+    }
+
+    .demo-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 10px 30px rgba(16, 32, 51, 0.08);
+    }
+
+    .device-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .demo-label {
+      color: var(--navy);
+      font-size: 0.82rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .device-tab,
+    .demo-action {
+      min-height: 40px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--navy);
+      font-weight: 850;
+      cursor: pointer;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, color 180ms ease;
+    }
+
+    .device-tab:hover,
+    .demo-action:hover {
+      transform: translateY(-1px);
+      border-color: rgba(15, 118, 110, 0.42);
+    }
+
+    .device-tab.active,
+    .demo-action {
+      color: #fff;
+      border-color: var(--brand);
+      background: var(--brand);
+    }
+
+    .demo-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 760;
+    }
+
+    .demo-live::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #22c55e;
+      box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+    }
+
+    .device-slider {
+      position: relative;
+      overflow: hidden;
+      border-radius: 18px;
+    }
+
+    .device-track {
+      display: flex;
+      transition: transform 420ms ease;
+    }
+
+    .device-slide {
+      min-width: 100%;
+      padding: 0 58px;
+      display: grid;
+      place-items: center;
+    }
+
+    .device {
+      overflow: hidden;
+      border: 6px solid #111827;
+      background: #111827;
+      box-shadow: var(--shadow);
+      transition: transform 260ms ease, box-shadow 260ms ease, opacity 260ms ease;
+    }
+
+    .device:hover {
+      transform: translateY(-4px);
+    }
+
+    .device-stage[data-focus="desktop"] .desktop-device,
+    .device-stage[data-focus="tablet"] .tablet-device,
+    .device-stage[data-focus="phone"] .phone-device {
+      box-shadow: 0 24px 70px rgba(15, 118, 110, 0.28);
+      transform: scale(1.01);
+    }
+
+    .desktop-device {
+      width: min(100%, 980px);
+      border-radius: 14px;
+    }
+
+    .desktop-screen {
+      display: grid;
+      grid-template-columns: 178px 1fr;
+      min-height: 540px;
+      background: #f8fafc;
+    }
+
+    .mock-sidebar {
+      padding: 14px 12px;
+      color: #d9e5f5;
+      background: #101827;
+    }
+
+    .mock-brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 22px;
+      font-weight: 850;
+    }
+
+    .mock-brand-icon,
+    .mock-top-icon {
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: #fff;
+      background: #3b82f6;
+      font-weight: 900;
+    }
+
+    .mock-brand-icon {
+      width: 34px;
+      height: 34px;
+    }
+
+    .mock-role {
+      display: block;
+      margin-top: 2px;
+      color: #9db1ca;
+      font-size: 0.72rem;
+      font-weight: 650;
+    }
+
+    .mock-menu-title {
+      margin: 18px 0 8px;
+      color: #8ba0bc;
+      font-size: 0.66rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .mock-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      min-height: 34px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 8px;
+      color: inherit;
+      background: transparent;
+      font-size: 0.78rem;
+      font-weight: 780;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .mock-menu-item.active {
+      color: #fff;
+      background: rgba(96, 165, 250, 0.16);
+      border-left: 3px solid #3b82f6;
+    }
+
+    .module-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .module-card {
+      min-height: 82px;
+      padding: 13px;
+      border: 1px solid #dbe4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .module-card strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #0f172a;
+      font-size: 0.9rem;
+    }
+
+    .module-card span {
+      color: #52627a;
+      font-size: 0.78rem;
+    }
+
+    .module-card button,
+    .module-action {
+      margin-top: 10px;
+      min-height: 32px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: #fff;
+      background: var(--brand);
+      font-size: 0.76rem;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .module-table {
+      grid-column: 1 / -1;
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid #dbe4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .module-row {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr 0.8fr;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #eef2f7;
+      color: #52627a;
+      font-size: 0.8rem;
+    }
+
+    .module-row:last-child {
+      border-bottom: 0;
+    }
+
+    .module-row strong {
+      color: #0f172a;
+    }
+
+    .module-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: fit-content;
+      padding: 4px 8px;
+      border-radius: 999px;
+      color: #1d4ed8;
+      background: #e7efff;
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .desktop-main {
+      padding: 18px;
+      background: #fff;
+    }
+
+    .mock-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .mock-stat {
+      min-height: 96px;
+      padding: 14px;
+      border: 1px solid #e2e8f0;
+      border-top: 4px solid var(--brand);
+      border-radius: 8px;
+      background: #fff;
+      transition: transform 180ms ease, box-shadow 180ms ease;
+    }
+
+    .mock-stat.flash {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 26px rgba(15, 118, 110, 0.16);
+    }
+
+    .mock-stat:nth-child(2) {
+      border-top-color: var(--coral);
+      background: #fff9f6;
+    }
+
+    .mock-stat:nth-child(3) {
+      border-top-color: #3b82f6;
+      background: #f8fbff;
+    }
+
+    .mock-stat:nth-child(4) {
+      border-top-color: #ef4444;
+      background: #fff8f8;
+    }
+
+    .mock-stat:nth-child(5) {
+      border-top-color: #a855f7;
+      background: #fbf8ff;
+    }
+
+    .mock-stat:nth-child(6) {
+      border-top-color: #14b8a6;
+      background: #f7fffd;
+    }
+
+    .mock-stat span {
+      display: block;
+      margin-bottom: 8px;
+      color: #52627a;
+      font-size: 0.74rem;
+      font-weight: 760;
+      text-transform: uppercase;
+    }
+
+    .mock-stat strong {
+      display: block;
+      color: #1d4ed8;
+      font-size: 1.18rem;
+    }
+
+    .mock-stat small {
+      color: #06833d;
+      font-size: 0.72rem;
+    }
+
+    .mock-panel {
+      padding: 16px;
+      border: 1px solid #dbe4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .mock-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .mock-panel-title {
+      color: #0f172a;
+      font-weight: 850;
+    }
+
+    .mock-export {
+      display: flex;
+      gap: 8px;
+    }
+
+    .mock-export span {
+      padding: 8px 12px;
+      border: 1px solid #dbe4ef;
+      border-radius: 8px;
+      font-size: 0.76rem;
+      font-weight: 800;
+    }
+
+    .mock-bars {
+      display: grid;
+      gap: 13px;
+      margin-top: 6px;
+    }
+
+    .mock-bar {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 10px;
+      align-items: center;
+      color: #52627a;
+      font-size: 0.76rem;
+    }
+
+    .mock-track {
+      height: 13px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e8eef6;
+    }
+
+    .mock-fill {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #3b82f6, #34d399);
+      transition: width 320ms ease;
+    }
+
+    .tablet-device {
+      width: min(100%, 540px);
+      border-radius: 18px;
+    }
+
+    .tablet-screen {
+      display: grid;
+      grid-template-columns: 154px 1fr;
+      min-height: 426px;
+      background: #0f172a;
+    }
+
+    .tablet-shade {
+      padding: 14px 11px;
+      color: #e9f2ff;
+      background: #111827;
+    }
+
+    .tablet-content {
+      position: relative;
+      padding: 14px;
+      background: #f8fafc;
+    }
+
+    .tablet-content::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .tablet-bars {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 34px;
+      z-index: 1;
+      display: flex;
+      align-items: end;
+      gap: 9px;
+      height: 168px;
+    }
+
+    .tablet-bars span {
+      width: 18px;
+      border-radius: 5px 5px 0 0;
+      background: #16a34a;
+    }
+
+    .phone-device {
+      width: 216px;
+      border-width: 5px;
+      border-radius: 18px;
+    }
+
+    .phone-screen {
+      min-height: 452px;
+      background: #f8fafc;
+    }
+
+    .phone-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 0 10px;
+      color: #fff;
+      background: #3b82f6;
+      font-size: 0.62rem;
+      font-weight: 850;
+    }
+
+    .phone-body {
+      padding: 12px;
+    }
+
+    .phone-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: #111827;
+      font-size: 1rem;
+      font-weight: 900;
+    }
+
+    .phone-cart-count {
+      padding: 3px 6px;
+      border-radius: 999px;
+      color: #fff;
+      background: #2563eb;
+      font-size: 0.58rem;
+    }
+
+    .phone-search,
+    .phone-filter {
+      height: 22px;
+      margin-bottom: 7px;
+      border: 1px solid #dbe4ef;
+      border-radius: 5px;
+      background: #fff;
+    }
+
+    .phone-products {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+
+    .phone-product {
+      min-height: 76px;
+      padding: 5px;
+      border: 1px solid #dbe4ef;
+      border-radius: 6px;
+      background: #fff;
+      text-align: center;
+      font-size: 0.55rem;
+      font-weight: 800;
+      color: #111827;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .phone-product:hover,
+    .phone-product:focus-visible {
+      transform: translateY(-2px);
+      border-color: #3b82f6;
+      box-shadow: 0 8px 16px rgba(37, 99, 235, 0.16);
+      outline: none;
+    }
+
+    .phone-product.added {
+      border-color: #22c55e;
+      background: #f0fdf4;
+    }
+
+    .phone-thumb {
+      width: 34px;
+      height: 26px;
+      margin: 0 auto 5px;
+      border-radius: 5px;
+      background: linear-gradient(135deg, #22c55e, #f97316);
+    }
+
+    .phone-product:nth-child(2n) .phone-thumb {
+      background: linear-gradient(135deg, #f97316, #facc15);
+    }
+
+    .phone-product:nth-child(3n) .phone-thumb {
+      background: linear-gradient(135deg, #60a5fa, #f8fafc);
+    }
+
+    .phone-product strong {
+      display: block;
+      color: #2563eb;
+      font-size: 0.5rem;
+    }
+
+    .visual-caption {
+      margin: 18px auto 0;
+      max-width: 720px;
+      padding: 14px 16px;
+      border: 1px solid rgba(220, 227, 236, 0.92);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: 0 10px 30px rgba(16, 32, 51, 0.1);
+      color: var(--muted);
+      font-size: 0.98rem;
+    }
+
+    .slider-control {
+      position: absolute;
+      top: 50%;
+      z-index: 2;
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--navy);
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 10px 24px rgba(16, 32, 51, 0.12);
+      cursor: pointer;
+      transform: translateY(-50%);
+    }
+
+    .slider-control:hover {
+      color: #fff;
+      background: var(--brand);
+      border-color: var(--brand);
+    }
+
+    .slider-prev {
+      left: 4px;
+    }
+
+    .slider-next {
+      right: 4px;
+    }
+
+    .slider-dots {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .slider-dot {
+      width: 10px;
+      height: 10px;
+      border: 0;
+      border-radius: 999px;
+      background: #cbd5e1;
+      cursor: pointer;
+    }
+
+    .slider-dot.active {
+      width: 28px;
+      background: var(--brand);
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .feature {
+      min-height: 245px;
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(16, 32, 51, 0.06);
+    }
+
+    .feature:nth-child(2n) {
+      background: var(--blue-soft);
+    }
+
+    .feature:nth-child(3n) {
+      background: var(--coral-soft);
+    }
+
+    .feature:nth-child(4n) {
+      background: var(--green-soft);
+    }
+
+    .feature-icon {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 16px;
+      border-radius: var(--radius);
+      color: #fff;
+      background: var(--navy);
+      font-weight: 900;
+    }
+
+    .feature h3 {
+      margin-bottom: 9px;
+      color: var(--navy);
+      font-size: 1.12rem;
+    }
+
+    .feature p {
+      margin-bottom: 0;
+      color: var(--muted);
+    }
+
+    .roles {
+      background: #fff;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .role {
+      padding: 20px;
+      border-radius: var(--radius);
+      background: var(--wash);
+      border: 1px solid var(--line);
+    }
+
+    .role h3 {
+      margin-bottom: 8px;
+      color: var(--navy);
+    }
+
+    .role p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .roi {
+      background: #f8fafc;
+    }
+
+    .roi-grid {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .roi-panel,
+    .roi-result {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(16, 32, 51, 0.07);
+    }
+
+    .roi-fields {
+      display: grid;
+      gap: 14px;
+    }
+
+    .range-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    input[type="range"] {
+      min-height: auto;
+      padding: 0;
+      accent-color: var(--brand);
+    }
+
+    .range-value {
+      min-width: 92px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      color: var(--brand-dark);
+      background: var(--green-soft);
+      text-align: center;
+      font-weight: 900;
+    }
+
+    .roi-result {
+      display: grid;
+      gap: 14px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--navy), #173e55);
+    }
+
+    .roi-result h3 {
+      margin-bottom: 0;
+      color: #fff;
+      font-size: 1.55rem;
+    }
+
+    .roi-number {
+      color: #8ee6d6;
+      font-size: clamp(2.1rem, 4vw, 3.6rem);
+      font-weight: 950;
+      line-height: 1;
+    }
+
+    .roi-result p {
+      margin-bottom: 0;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .roi-breakdown {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .roi-breakdown span {
+      padding: 12px;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.1);
+      font-size: 0.9rem;
+    }
+
+    .roi-breakdown strong {
+      display: block;
+      color: #fff;
+      font-size: 1.05rem;
+    }
+
+    .conversion {
+      background: var(--navy);
+      color: #fff;
+    }
+
+    .conversion-grid {
+      display: grid;
+      grid-template-columns: minmax(520px, 1.15fr) minmax(360px, 0.85fr);
+      gap: 42px;
+      align-items: start;
+    }
+
+    .conversion h2 {
+      color: #fff;
+    }
+
+    .conversion .kicker {
+      color: #8ee6d6;
+    }
+
+    .conversion-copy {
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 1.04rem;
+    }
+
+    .offer-list {
+      display: grid;
+      gap: 10px;
+      margin: 24px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .offer-list li {
+      display: flex;
+      gap: 10px;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .offer-list li::before {
+      content: "OK";
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 24px;
+      flex: 0 0 auto;
+      border-radius: var(--radius);
+      color: #0d332f;
+      background: #8ee6d6;
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .lead-form {
+      padding: 22px;
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--ink);
+      box-shadow: var(--shadow);
+    }
+
+    .lead-form h3 {
+      margin-bottom: 6px;
+      color: var(--navy);
+      font-size: 1.45rem;
+    }
+
+    .lead-form p {
+      margin-bottom: 18px;
+      color: var(--muted);
+    }
+
+    .lead-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 8px;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .lead-actions .btn {
+      min-width: 190px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      color: var(--navy);
+      font-size: 0.9rem;
+      font-weight: 800;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-height: 46px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--ink);
+      outline: none;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+
+    .form-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .form-status {
+      display: none;
+      margin: 12px 0;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      color: var(--brand-dark);
+      background: var(--green-soft);
+      font-weight: 800;
+    }
+
+    .form-status.show {
+      display: block;
+    }
+
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+
+    .price {
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      cursor: pointer;
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+
+    .price:hover,
+    .price.selected {
+      transform: translateY(-4px);
+      border-color: rgba(15, 118, 110, 0.5);
+      box-shadow: 0 16px 38px rgba(15, 118, 110, 0.14);
+    }
+
+    .price.highlight {
+      border-color: rgba(15, 118, 110, 0.44);
+      box-shadow: 0 14px 36px rgba(15, 118, 110, 0.12);
+    }
+
+    .tag {
+      display: inline-flex;
+      margin-bottom: 14px;
+      padding: 7px 10px;
+      border-radius: var(--radius);
+      color: var(--brand-dark);
+      background: var(--green-soft);
+      font-size: 0.82rem;
+      font-weight: 850;
+    }
+
+    .amount {
+      margin: 12px 0 12px;
+      color: var(--navy);
+      font-size: 2rem;
+      font-weight: 900;
+    }
+
+    .price ul {
+      display: grid;
+      gap: 9px;
+      margin: 18px 0 22px;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+    }
+
+    .price li::before {
+      content: "+";
+      margin-right: 8px;
+      color: var(--brand);
+      font-weight: 900;
+    }
+
+    .faq {
+      background: #fff;
+      border-top: 1px solid var(--line);
+    }
+
+    details {
+      border-bottom: 1px solid var(--line);
+      padding: 18px 0;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--navy);
+      font-weight: 850;
+    }
+
+    details p {
+      max-width: 820px;
+      margin: 10px 0 0;
+      color: var(--muted);
+    }
+
+    .final-cta {
+      padding: 46px 0;
+      color: #fff;
+      background: linear-gradient(90deg, var(--brand), var(--blue));
+    }
+
+    .final-cta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .final-cta h2 {
+      color: #fff;
+      font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+    }
+
+    .final-cta p {
+      max-width: 680px;
+      margin-bottom: 0;
+      color: rgba(255, 255, 255, 0.86);
+    }
+
+    footer {
+      padding: 30px 0;
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    .back-to-top {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 60;
+      width: 46px;
+      height: 46px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: var(--radius);
+      color: #fff;
+      background: var(--navy);
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(12px);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .back-to-top.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .nav-links {
+        display: none;
+      }
+
+      .section-head,
+      .conversion-grid,
+      .final-cta-row,
+      .roi-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .strip-grid,
+      .features,
+      .role-grid,
+      .pricing-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .device-stage {
+        min-height: auto;
+        display: grid;
+        gap: 18px;
+      }
+
+      .demo-controls {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .desktop-device,
+      .tablet-device,
+      .phone-device {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+      }
+
+      .device-slide {
+        padding: 0 46px;
+      }
+
+      .hero-showcase {
+        padding: 12px;
+      }
+
+      .hero-badge {
+        padding: 8px 12px;
+        font-size: 0.76rem;
+      }
+
+      .hero-badge.top-left {
+        top: 18px;
+        left: 18px;
+      }
+
+      .hero-badge.bottom-right {
+        right: 18px;
+        bottom: 18px;
+      }
+
+      .desktop-screen {
+        min-height: 460px;
+      }
+
+      .tablet-screen {
+        min-height: 360px;
+      }
+
+      .phone-device {
+        width: min(100%, 280px);
+        justify-self: center;
+      }
+
+      .visual-caption {
+        max-width: none;
+        margin: 0;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .nav {
+        min-height: 64px;
+      }
+
+      .brand span:last-child {
+        display: none;
+      }
+
+      .nav-actions .btn-light {
+        display: none;
+      }
+
+      .hero {
+        min-height: auto;
+        background:
+          linear-gradient(180deg, rgba(10, 27, 43, 0.94), rgba(10, 27, 43, 0.82)),
+          #102033;
+      }
+
+      .hero::before {
+        background: linear-gradient(180deg, rgba(7, 16, 28, 0.8), rgba(7, 16, 28, 0.52));
+      }
+
+      .hero-media video {
+        object-position: center center;
+        opacity: 0.5;
+      }
+
+      .hero .container {
+        grid-template-columns: 1fr;
+        gap: 20px;
+      }
+
+      .hero-content {
+        padding: 18px;
+        width: 100%;
+        min-height: auto;
+      }
+
+      .hero-content::before {
+        inset: 18px -10px 18px -10px;
+      }
+
+      .hero-copy {
+        width: 100%;
+      }
+
+      .hero-video-card {
+        min-height: 320px;
+      }
+
+      .hero-metrics,
+      .strip-grid,
+      .features,
+      .role-grid,
+      .pricing-grid,
+      .roi-breakdown,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-actions .btn,
+      .final-cta .btn,
+      .lead-form .btn {
+        width: 100%;
+      }
+
+      section {
+        padding: 54px 0;
+      }
+
+      .desktop-screen,
+      .tablet-screen {
+        grid-template-columns: 1fr;
+      }
+
+      .mock-sidebar,
+      .tablet-shade {
+        display: none;
+      }
+
+      .mock-stats {
+        grid-template-columns: 1fr;
+      }
+
+      .mock-panel-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .desktop-screen {
+        min-height: auto;
+      }
+
+      .device-slide {
+        padding: 0 34px;
+      }
+
+      .slider-control {
+        width: 38px;
+        height: 38px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" aria-hidden="true"><span id="scroll-progress-bar"></span></div>
+
+  <header class="topbar">
+    <div class="container nav">
+      <a class="brand" href="#accueil" aria-label="START POS">
+        <img class="brand-logo" src="favicon/favicon-96x96.png" alt="Logo START POS" />
+        <span class="brand-name">START POS</span>
+      </a>
+
+      <nav class="nav-links" aria-label="Navigation principale">
+        <a href="#produit">Produit</a>
+        <a href="#fonctionnalites">Fonctionnalit&eacute;s</a>
+        <a href="#roles">R&ocirc;les</a>
+        <a href="#tarifs">Prix</a>
+        <a href="#demo">D&eacute;mo</a>
+      </nav>
+
+      <div class="nav-actions">
+        <a class="btn btn-login" href="/#/login">Connexion</a>
+        <a class="btn btn-primary" href="#demo">Demander une d&eacute;mo</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="accueil">
+    <section class="hero" aria-label="Presentation START POS">
+      <div class="hero-media" aria-hidden="true">
+        <video autoplay muted loop playsinline preload="metadata">
+          <source src="slide.mp4" type="video/mp4" />
+        </video>
+      </div>
+      <div class="container">
+        <div class="hero-content">
+          <div class="hero-copy">
+            <div class="label">Application de caisse, stock et gestion boutique</div>
+            <h1>START POS</h1>
+            <p class="hero-subtitle">
+              Une solution de point de vente pour encaisser, imprimer les re&ccedil;us, suivre le stock,
+              g&eacute;rer les clients, les d&eacute;penses, les services et les performances de vos boutiques,
+              m&ecirc;me en l'absence de connexion.
+            </p>
+
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#demo">Planifier une d&eacute;mo</a>
+              <a class="btn btn-light" href="#produit">Voir ce que l'app fait</a>
+            </div>
+
+            <div class="hero-metrics" aria-label="Arguments principaux">
+              <div class="metric">
+                <strong>Gestion claire</strong>
+                <span>Ventes, utilisateurs, stock et rapports organis&eacute;s au m&ecirc;me endroit.</span>
+              </div>
+              <div class="metric">
+                <strong>Hors ligne</strong>
+                <span>Ventes, clients, d&eacute;penses et shifts continuent localement.</span>
+              </div>
+              <div class="metric">
+                <strong>Android + Windows</strong>
+                <span>Impression des re&ccedil;us sur Android et Windows.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-video-card" aria-label="Apercu video START POS">
+          <video autoplay muted loop playsinline preload="metadata">
+            <source src="slide.mp4" type="video/mp4" />
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <div class="strip" aria-label="Benefices rapides">
+      <div class="container strip-grid">
+        <div class="proof">
+          <span class="proof-icon">$</span>
+          <span>Encaissement plus rapide</span>
+        </div>
+        <div class="proof">
+          <span class="proof-icon">S</span>
+          <span>Stock et marges suivis</span>
+        </div>
+        <div class="proof">
+          <span class="proof-icon">R</span>
+          <span>Re&ccedil;us et remboursements</span>
+        </div>
+        <div class="proof">
+          <span class="proof-icon">A</span>
+          <span>Tableaux de bord clairs</span>
+        </div>
+      </div>
+    </div>
+
+    <section id="produit" class="product-preview">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Vue produit</div>
+            <h2>Tout ce qu'un commerce doit suivre, dans une seule interface.</h2>
+          </div>
+          <p></p>
+        </div>
+
+        <div class="device-stage product-visual-only" data-focus="desktop" aria-label="Apercu visuel de START POS">
+          <figure class="hero-showcase" id="hero-showcase">
+            <span class="hero-badge top-left">Vue multi-ecrans</span>
+            <img src="hero-pos-preview.png" alt="Presentation START POS sur ordinateur, tablette et mobile." loading="lazy" />
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="fonctionnalites">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Fonctionnalit&eacute;s</div>
+            <h2>Une app construite pour le travail r&eacute;el en boutique.</h2>
+          </div>
+          <p>
+            Gardez la main sur chaque vente, chaque produit et chaque mouvement de caisse.
+            START POS r&eacute;duit les erreurs, limite les pertes et vous donne une vision claire de votre activit&eacute;,
+            m&ecirc;me lorsque la connexion internet devient instable.
+          </p>
+        </div>
+
+        <div class="features">
+          <article class="feature">
+            <div class="feature-icon">01</div>
+            <h3>Vente en caisse</h3>
+            <p>Recherche produit, variantes, prix personnalis&eacute;s, panier, brouillon, client associ&eacute;, paiement esp&egrave;ces, mobile money ou mixte.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">02</div>
+            <h3>Services et shifts</h3>
+            <p>Ouverture et fermeture de service, suivi du fonds de caisse, diff&eacute;rence de caisse et re&ccedil;u de shift.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">03</div>
+            <h3>Re&ccedil;us et remboursements</h3>
+            <p>Recherche des ventes, d&eacute;tail de re&ccedil;u, r&eacute;impression, remboursement et tra&ccedil;abilit&eacute; des op&eacute;rations.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">04</div>
+            <h3>Clients et historique</h3>
+            <p>Cr&eacute;ation rapide depuis la caisse, fiches clients, num&eacute;ros, historique des ventes et consultation des re&ccedil;us.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">05</div>
+            <h3>Produits, stock et cat&eacute;gories</h3>
+            <p>Catalogue, prix de revient, prix de vente, marge, variantes, images, stock minimum et ajustements de stock.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">06</div>
+            <h3>D&eacute;penses et signaux</h3>
+            <p>D&eacute;penses directes, indirectes et op&eacute;rationnelles, filtres, analyses, impact sur marge et signaux de stock.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">07</div>
+            <h3>Mode hors ligne</h3>
+            <p>Les ventes, clients, d&eacute;penses et shifts peuvent continuer localement, puis partir en synchronisation au retour du serveur.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">08</div>
+            <h3>S&eacute;curit&eacute; par PIN</h3>
+            <p>Verrouillage de session sans perdre la page courante, code PIN &agrave; 4 chiffres et fermeture apr&egrave;s tentatives incorrectes.</p>
+          </article>
+
+          <article class="feature">
+            <div class="feature-icon">09</div>
+            <h3>Impression des re&ccedil;us</h3>
+            <p>Imprimez vos tickets sur imprimante Bluetooth ou sur imprimante Windows, selon l'&eacute;quipement disponible dans votre boutique.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="roles" class="roles">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Organisation</div>
+            <h2>Chaque utilisateur voit seulement ce dont il a besoin.</h2>
+          </div>
+          <p>
+            START POS s'adapte &agrave; l'&eacute;quipe: le caissier encaisse, le gestionnaire suit l'activit&eacute;,
+            et l'administrateur pilote le magasin, les utilisateurs, les produits et les indicateurs.
+          </p>
+        </div>
+
+        <div class="role-grid">
+          <article class="role">
+            <h3>Caissier</h3>
+            <p>Vente, services, re&ccedil;us, clients, d&eacute;penses, stock et param&egrave;tres utiles au quotidien.</p>
+          </article>
+
+          <article class="role">
+            <h3>Gestionnaire</h3>
+            <p>Fonctions caisse plus gestion produit, suivi d'activit&eacute; et ajustements selon l'organisation.</p>
+          </article>
+
+          <article class="role">
+            <h3>Administrateur</h3>
+            <p>Tableau de bord, produits, utilisateurs, magasins, catalogue, indicateurs et configuration.</p>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section id="gain" class="roi">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Calcul rapide</div>
+            <h2>Estimez ce que votre boutique peut r&eacute;cup&eacute;rer chaque mois.</h2>
+          </div>
+          <p>
+            Les petites erreurs de caisse, les ruptures non anticip&eacute;es et les d&eacute;penses mal suivies
+            finissent par co&ucirc;ter cher. Avec un meilleur suivi quotidien, une partie de ces pertes
+            peut &ecirc;tre identifi&eacute;e, corrig&eacute;e et r&eacute;cup&eacute;r&eacute;e.
+          </p>
+        </div>
+
+        <div class="roi-grid">
+          <div class="roi-panel">
+            <div class="roi-fields">
+              <div class="field">
+                <label for="roi-sales">Ventes moyennes par jour</label>
+                <div class="range-row">
+                  <input id="roi-sales" type="range" min="25000" max="500000" step="5000" value="100000" />
+                  <span class="range-value" id="roi-sales-value">100 000 F</span>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="roi-loss">Pertes, erreurs ou ruptures estim&eacute;es</label>
+                <div class="range-row">
+                  <input id="roi-loss" type="range" min="1" max="15" step="1" value="7" />
+                  <span class="range-value" id="roi-loss-value">5%</span>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="roi-days">Jours d'activit&eacute; par mois</label>
+                <div class="range-row">
+                  <input id="roi-days" type="range" min="10" max="31" step="1" value="26" />
+                  <span class="range-value" id="roi-days-value">26 jours</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="roi-result">
+            <h3>Gain potentiel estim&eacute;</h3>
+            <div class="roi-number" id="roi-result">91 000 F / mois</div>
+            <p>
+              Estimation bas&eacute;e sur une r&eacute;duction prudente de 70% des pertes et erreurs visibles
+              gr&acirc;ce au suivi caisse, stock, d&eacute;penses et rapports.
+            </p>
+            <div class="roi-breakdown">
+              <span><strong id="roi-month-sales">2 600 000 F</strong> volume mensuel</span>
+              <span><strong id="roi-month-loss">130 000 F</strong> pertes estim&eacute;es</span>
+              <span><strong>70%</strong> marge de r&eacute;cup&eacute;ration</span>
+            </div>
+            <a class="btn btn-primary" href="#demo">Transformer ce gain en d&eacute;mo</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tarifs">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Offres</div>
+            <h2>Une proposition simple pour passer de l'int&eacute;r&ecirc;t &agrave; l'action.</h2>
+          </div>
+          <p>
+            Choisissez une formule adapt&eacute;e &agrave; votre rythme de travail: d&eacute;couverte guid&eacute;e,
+            gestion compl&egrave;te d'une boutique ou accompagnement pour plusieurs points de vente.
+          </p>
+        </div>
+
+        <div class="pricing-grid">
+          <article class="price" data-plan="Demo guidee">
+            <span class="tag">D&eacute;couverte</span>
+            <h3>D&eacute;mo guid&eacute;e</h3>
+            <div class="amount">Gratuite pendant 5 jours</div>
+            <p>Pour comprendre comment START POS peut s'adapter à votre commerce.</p>
+            <ul>
+              <li>Pr&eacute;sentation de la caisse</li>
+              <li>Questions sur le besoin du magasin</li>
+              <li>Recommandation de configuration</li>
+            </ul>
+            <a class="btn btn-orange" href="#demo">Demander la d&eacute;mo</a>
+          </article>
+
+          <article class="price highlight selected" data-plan="Abonnement Mensuel">
+            <span class="tag">Recommand&eacute;</span>
+            <h3>Abonnement Mensuel</h3>
+            <div class="amount">5 000 F / mois</div>
+            <p>Pour une boutique qui veut vendre, suivre son stock et garder des rapports propres.</p>
+            <ul>
+              <li>Caisse, re&ccedil;us et clients</li>
+              <li>Stock, produits et cat&eacute;gories</li>
+              <li>D&eacute;penses, shifts et tableau de bord</li>
+            </ul>
+            <a class="btn btn-primary" href="#demo">Je veux cette offre</a>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section id="demo" class="conversion">
+      <div class="container conversion-grid">
+        <div>
+          <div class="kicker">Contacts</div>
+          <h2>Transformez votre boutique en commerce pilot&eacute; par les chiffres.</h2>
+          <p class="conversion-copy">
+            En quelques minutes, vous voyez comment START POS s'adapte &agrave; vos produits,
+            &agrave; votre &eacute;quipe, &agrave; vos re&ccedil;us et &agrave; votre mani&egrave;re d'encaisser.
+            La d&eacute;mo vous permet de valider concr&egrave;tement ce que l'application peut changer dans votre boutique.
+          </p>
+
+          <ul class="offer-list">
+            <li>Installation possible sur ordinateur Windows et appareil compatible avec votre imprimante Bluetooth.</li>
+            <li>Système conçu pour offrir stabilité, rapidité et efficacité même en cas de coupure Internet.</li>
+            <li>Fonctionnement local avec synchronisation lorsque le serveur revient.</li>
+            <li>Gestion des acc&egrave;s par r&ocirc;le pour prot&eacute;ger les donn&eacute;es sensibles.</li>
+            <li>Impression des re&ccedil;us et suivi des op&eacute;rations du magasin.</li>
+            <li>Gestion des dépenses avec historique détaillé et suivi des sorties d’argent.</li>
+        </ul>
+        </div>
+
+        <form class="lead-form" id="lead-form" action="mailto:powerstartbf@gmail.com" method="post" enctype="text/plain">
+          <h3>Demander une d&eacute;mo</h3>
+          <p>Laissez vos informations et nous vous recontactons pour configurer START POS selon votre commerce.</p>
+          <div class="form-status show" id="form-status">Offre s&eacute;lectionn&eacute;e: Abonnement Mensuel</div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label for="name">Nom complet</label>
+              <input id="name" name="Nom" type="text" placeholder="Votre nom" required />
+            </div>
+
+            <div class="field">
+              <label for="phone">T&eacute;l&eacute;phone</label>
+              <input id="phone" name="Telephone" type="tel" placeholder="+226 70 00 00 00" required />
+            </div>
+
+            <div class="field">
+              <label for="business">Type de commerce</label>
+              <select id="business" name="Commerce" required>
+                <option value="">Choisir</option>
+                <option>Boutique</option>
+                <option>Alimentation</option>
+                <option>Pharmacie</option>
+                <option>Restaurant</option>
+                <option>Autre</option>
+              </select>
+            </div>
+
+            <div class="field full">
+              <label for="message">Besoin principal</label>
+              <textarea id="message" name="Message" placeholder="Exemple: je veux gerer la caisse, le stock et les recus de ma boutique."></textarea>
+            </div>
+          </div>
+
+          <div class="lead-actions">
+            <button class="btn btn-primary" type="submit">Envoyer la demande</button>
+            <a class="btn btn-whatsapp" href="https://wa.me/22672210216?text=Bonjour%20START%20POS%2C%20je%20souhaite%20demander%20une%20demo." target="_blank" rel="noopener noreferrer">WhatsApp</a>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="faq">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">Questions</div>
+            <h2>Les objections classiques sont trait&eacute;es avant l'appel.</h2>
+          </div>
+          <p>
+            Retrouvez les r&eacute;ponses aux questions essentielles avant de d&eacute;marrer:
+            fonctionnement hors ligne, impression, s&eacute;curit&eacute; et suivi du stock.
+          </p>
+        </div>
+
+        <details>
+          <summary>Est-ce que l'application fonctionne sans connexion internet ?</summary>
+          <p>Oui. Les op&eacute;rations importantes peuvent continuer localement selon les donn&eacute;es d&eacute;j&agrave; synchronis&eacute;es, puis repartir vers le serveur lorsque la connexion revient.</p>
+        </details>
+
+        <details>
+          <summary>Peut-on imprimer les re&ccedil;us ?</summary>
+          <p>Oui. START POS prend en charge l'impression des re&ccedil;us via imprimante Bluetooth ou imprimante Windows, selon votre configuration.</p>
+        </details>
+
+        <details>
+          <summary>Peut-on suivre les marges, les d&eacute;penses et le stock ?</summary>
+          <p>Oui. START POS permet de suivre produits, prix de revient, prix de vente, d&eacute;penses, signaux de stock, ajustements et indicateurs du tableau de bord.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="container final-cta-row">
+        <div>
+          <h2>La prochaine vente peut d&eacute;j&agrave; &ecirc;tre mieux suivie.</h2>
+          <p>Passez &agrave; une caisse qui enregistre, organise et analyse vos ventes d&egrave;s aujourd'hui. Votre boutique gagne en rapidit&eacute;, en contr&ocirc;le et en tranquillit&eacute;.</p>
+        </div>
+        <a class="btn btn-dark" href="#demo">Demander une d&eacute;mo</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-row">
+      <div>&copy; 2026 START POS. Tous droits r&eacute;serv&eacute;s.</div>
+      <div class="footer-links">
+        <a href="/#/login">Connexion app</a>
+        <a href="documentation.html">Documentation</a>
+        <a href="#fonctionnalites">Fonctionnalit&eacute;s</a>
+        <a href="#demo">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+  <a class="back-to-top" id="back-to-top" href="#accueil" aria-label="Retour en haut">&uarr;</a>
+
+  <script>
+    (function () {
+      const stage = document.querySelector(".device-stage");
+      const heroShowcase = document.getElementById("hero-showcase");
+      const deviceTrack = document.getElementById("device-track");
+      const sliderDots = document.querySelectorAll("[data-slide-target]");
+      const sliderPrev = document.querySelector(".slider-prev");
+      const sliderNext = document.querySelector(".slider-next");
+      const appButtons = document.querySelectorAll("[data-app-page]");
+      const liveText = document.getElementById("demo-live-text");
+      const simulateSale = document.getElementById("simulate-sale");
+      const appStats = document.getElementById("app-stats");
+      const appPanelTitle = document.getElementById("app-panel-title");
+      const appPanelBody = document.getElementById("app-panel-body");
+      const cartCount = document.getElementById("phone-cart-count");
+      const products = document.querySelectorAll(".phone-product");
+      const progressBar = document.getElementById("scroll-progress-bar");
+      const backToTop = document.getElementById("back-to-top");
+      const navLinks = document.querySelectorAll(".nav-links a[href^='#']");
+      const revealItems = document.querySelectorAll("section, .proof, .feature, .role, .price, .roi-panel, .roi-result");
+      const roiSales = document.getElementById("roi-sales");
+      const roiLoss = document.getElementById("roi-loss");
+      const roiDays = document.getElementById("roi-days");
+      const roiSalesValue = document.getElementById("roi-sales-value");
+      const roiLossValue = document.getElementById("roi-loss-value");
+      const roiDaysValue = document.getElementById("roi-days-value");
+      const roiResult = document.getElementById("roi-result");
+      const roiMonthSales = document.getElementById("roi-month-sales");
+      const roiMonthLoss = document.getElementById("roi-month-loss");
+      const planCards = document.querySelectorAll("[data-plan]");
+      const formStatus = document.getElementById("form-status");
+      const messageField = document.getElementById("message");
+      const leadForm = document.getElementById("lead-form");
+      const leadName = document.getElementById("name");
+      const leadPhone = document.getElementById("phone");
+      const leadBusiness = document.getElementById("business");
+      if (!stage) {
+        return;
+      }
+
+      const appPages = {
+        tableau: {
+          focus: "desktop",
+          live: "Tableau: ventes, marge, remboursements et graphiques du jour.",
+          title: "Periode d'analyse: ventes du jour",
+          stats: [
+            ["Ventes brutes", "76 300 F", "+350 F aujourd'hui"],
+            ["Remboursements", "1 050 F", "-850 F"],
+            ["Surplus", "1 600 F", "+100%"],
+            ["Manque", "5 100 F", "-50.96%"],
+            ["Marchandises", "50 655 F", "66.39% des ventes nettes"],
+            ["Marge brute", "25 645 F", "33.61% de marge"]
+          ],
+          cards: [
+            ["Poisson", "Produit le plus vendu aujourd'hui"],
+            ["Atieke", "Quantite vendue en progression"],
+            ["Coca Cola", "Rotation rapide au comptoir"],
+            ["Alloco", "Article suivi dans les ventes"]
+          ]
+        },
+        vente: {
+          focus: "phone",
+          live: "Vente: recherche produit, panier, client et paiement rapide.",
+          title: "Point de vente: panier en cours",
+          stats: [
+            ["Panier", "8 articles", "Produits ajoutes"],
+            ["Total", "64 500 F", "Paiement mixte"],
+            ["Monnaie", "2 000 F", "A rendre"],
+            ["Client", "Associe", "Historique disponible"],
+            ["Brouillon", "Disponible", "Vente interrompue"],
+            ["Recu", "Pret", "Impression ticket"]
+          ],
+          cards: [
+            ["Recherche produit", "Nom, categorie ou article visible dans la grille."],
+            ["Paiement", "Especes, mobile money ou paiement mixte."],
+            ["Client", "Creation rapide depuis la caisse."],
+            ["Recu", "Impression Bluetooth ou Windows apres validation."]
+          ]
+        },
+        services: {
+          focus: "desktop",
+          live: "Services: ouverture, fermeture et controle du fonds de caisse.",
+          title: "Services ouverts et clotures",
+          stats: [
+            ["Service actif", "Ouvert", "Caisse demarree"],
+            ["Fond initial", "25 000 F", "Declare"],
+            ["Ventes liees", "186", "Tickets du service"],
+            ["Difference", "0 F", "Caisse juste"],
+            ["Caissier", "Connecte", "Session securisee"],
+            ["Cloture", "Prete", "Recu de shift"]
+          ],
+          cards: [
+            ["Ouverture", "Le caissier declare son fond de caisse."],
+            ["Suivi", "Les ventes restent rattachees au service."],
+            ["Cloture", "La difference de caisse est calculee."],
+            ["Recu de shift", "Document de fin de service disponible."]
+          ]
+        },
+        recus: {
+          focus: "desktop",
+          live: "Recus: retrouvez une vente, reimprimez ou remboursez.",
+          title: "Historique des recus",
+          stats: [
+            ["Tickets", "186", "Aujourd'hui"],
+            ["Recherche", "Active", "Par numero ou client"],
+            ["Reimpression", "Disponible", "Bluetooth ou Windows"],
+            ["Remboursements", "1 050 F", "Suivis"],
+            ["Client", "Lie", "Historique accessible"],
+            ["Trace", "Complete", "Operation conservee"]
+          ],
+          cards: [
+            ["Detail du recu", "Articles, quantites, paiement et total."],
+            ["Reimpression", "Relance du ticket depuis l'historique."],
+            ["Remboursement", "Operation controlee et visible dans les chiffres."],
+            ["Recherche", "Retrouvez rapidement une vente enregistree."]
+          ]
+        },
+        clients: {
+          focus: "desktop",
+          live: "Clients: fiches, telephone et historique des achats.",
+          title: "Gestion des clients",
+          stats: [
+            ["Clients", "128", "Fiches enregistrees"],
+            ["Nouveaux", "6", "Depuis la caisse"],
+            ["Historique", "Visible", "Ventes et recus"],
+            ["Telephone", "Controle", "Format propre"],
+            ["Modification", "Simple", "Infos a jour"],
+            ["Suivi", "Centralise", "Relation client"]
+          ],
+          cards: [
+            ["Creation rapide", "Un client peut etre ajoute pendant la vente."],
+            ["Historique", "Les recus du client restent consultables."],
+            ["Contact", "Les numeros sont mieux organises."],
+            ["Fidelisation", "Le commerce reconnait ses clients reguliers."]
+          ]
+        },
+        depenses: {
+          focus: "desktop",
+          live: "Depenses: saisie, filtres et analyse des couts.",
+          title: "Depenses du magasin",
+          stats: [
+            ["Directes", "18 500 F", "Liees aux ventes"],
+            ["Indirectes", "9 000 F", "Suivies"],
+            ["Operationnelles", "12 000 F", "Cout boutique"],
+            ["Filtres", "Actifs", "Par periode"],
+            ["Analyse", "Disponible", "Impact marge"],
+            ["Total", "39 500 F", "Mois en cours"]
+          ],
+          cards: [
+            ["Depense directe", "Achat lie directement a la vente."],
+            ["Depense indirecte", "Cout suivi sans vente immediate."],
+            ["Depense operationnelle", "Charges du fonctionnement quotidien."],
+            ["Analyse", "Les couts deviennent visibles dans les rapports."]
+          ]
+        },
+        stock: {
+          focus: "tablet",
+          live: "Stock: signaux, ecarts, marge et alertes produits.",
+          title: "Signaux de stock",
+          stats: [
+            ["Alertes", "12", "Stocks critiques"],
+            ["Ecarts", "3", "A verifier"],
+            ["Marge", "33.61%", "Suivie"],
+            ["Ajustements", "5", "Historique"],
+            ["Produits suivis", "84", "Stock actif"],
+            ["Minimum", "Defini", "Par article"]
+          ],
+          cards: [
+            ["Stock minimum", "Les produits sensibles sont surveilles."],
+            ["Ajustement", "Correction des ecarts entre reel et theorique."],
+            ["Signaux", "Detection des risques de rupture."],
+            ["Marge", "Impact des couts visible sur les produits."]
+          ]
+        },
+        produits: {
+          focus: "tablet",
+          live: "Produits: catalogue, prix, variantes, images et stock.",
+          title: "Catalogue produits",
+          stats: [
+            ["Produits", "214", "Articles actifs"],
+            ["Categories", "18", "Organisees"],
+            ["Variantes", "Oui", "Prix multiples"],
+            ["Images", "Ajoutables", "Fiches propres"],
+            ["Prix revient", "Suivi", "Marge calculee"],
+            ["Stock", "Parametre", "Initial et minimum"]
+          ],
+          cards: [
+            ["Fiche produit", "Nom, categorie, image et informations."],
+            ["Prix", "Prix de vente, revient et marge."],
+            ["Variantes", "Plusieurs formats ou prix selon le besoin."],
+            ["Stock", "Suivi activable article par article."]
+          ]
+        },
+        parametres: {
+          focus: "desktop",
+          live: "Parametres: logo, impression, securite et configuration.",
+          title: "Parametres du magasin",
+          stats: [
+            ["Logo", "Configure", "Recu personnalise"],
+            ["Impression", "Bluetooth", "Ou Windows"],
+            ["PIN", "Actif", "Session protegee"],
+            ["Notifications", "Email", "Selon reglage"],
+            ["Version", "Suivie", "Mise a jour"],
+            ["Caisse", "Reglee", "Fond et benefice"]
+          ],
+          cards: [
+            ["Logo magasin", "Personnalisation des documents."],
+            ["Impression", "Configuration Bluetooth ou Windows."],
+            ["Securite", "Verrouillage par PIN sans perdre l'ecran."],
+            ["Reglages", "Options utiles au fonctionnement quotidien."]
+          ]
+        }
+      };
+
+      const demoState = {
+        shiftOpen: true,
+        products: [
+          { id: "p1", name: "Poisson", price: 200, stock: 108, min: 20, category: "Alimentaire" },
+          { id: "p2", name: "Atieke", price: 100, stock: 64, min: 15, category: "Alimentaire" },
+          { id: "p3", name: "Coca Cola", price: 150, stock: 38, min: 12, category: "Boisson" },
+          { id: "p4", name: "Alloco", price: 100, stock: 52, min: 10, category: "Plat" }
+        ],
+        sales: [
+          { id: "R-001", total: 21600, items: 14, payment: "Especes" },
+          { id: "R-002", total: 18400, items: 9, payment: "Mobile money" },
+          { id: "R-003", total: 36300, items: 18, payment: "Mixte" }
+        ],
+        expenses: [
+          { name: "Achat marchandises", type: "Directe", amount: 18500 },
+          { name: "Transport", type: "Operationnelle", amount: 3500 },
+          { name: "Glace conservation", type: "Indirecte", amount: 5000 }
+        ],
+        customers: [
+          { name: "Client comptoir", phone: "+226 70 00 00 00", sales: 3 },
+          { name: "Awa Boutique", phone: "+226 76 10 20 30", sales: 7 }
+        ]
+      };
+
+      function sum(items, key) {
+        return items.reduce((total, item) => total + Number(item[key] || 0), 0);
+      }
+
+      function lowStockCount() {
+        return demoState.products.filter((product) => product.stock <= product.min).length;
+      }
+
+      function renderRows(rows) {
+        return `
+          <div class="module-table">
+            ${rows.map((row) => `
+              <div class="module-row">
+                <strong>${row[0]}</strong>
+                <span>${row[1]}</span>
+                <span>${row[2]}</span>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      function buildPage(pageKey) {
+        const grossSales = sum(demoState.sales, "total");
+        const expensesTotal = sum(demoState.expenses, "amount");
+        const margin = Math.max(0, Math.round(grossSales * 0.36 - expensesTotal * 0.25));
+        const productRows = demoState.products.map((product) => [
+          product.name,
+          formatAmount(product.price),
+          product.stock + " en stock"
+        ]);
+        const receiptRows = demoState.sales.slice().reverse().map((sale) => [
+          sale.id,
+          formatAmount(sale.total),
+          sale.payment
+        ]);
+        const expenseRows = demoState.expenses.slice().reverse().map((expense) => [
+          expense.name,
+          expense.type,
+          formatAmount(expense.amount)
+        ]);
+
+        const pages = {
+          tableau: {
+            focus: "desktop",
+            live: "Tableau: les chiffres changent avec les ventes, depenses et stocks de la demo.",
+            title: "Periode d'analyse: donnees locales de demonstration",
+            stats: [
+              ["Ventes brutes", formatAmount(grossSales), demoState.sales.length + " recus"],
+              ["Depenses", formatAmount(expensesTotal), demoState.expenses.length + " lignes"],
+              ["Marge estimee", formatAmount(margin), "Calculee en local"],
+              ["Stock faible", String(lowStockCount()), "Produits a surveiller"],
+              ["Service", demoState.shiftOpen ? "Ouvert" : "Ferme", "Etat du shift"],
+              ["Clients", String(demoState.customers.length), "Fiches locales"]
+            ],
+            cardsHtml: `
+              <div class="module-card">
+                <strong>Action rapide</strong>
+                <span>Ajoutez une vente et observez le tableau se mettre a jour.</span>
+                <button type="button" data-demo-action="quick-sale">Ajouter une vente</button>
+              </div>
+              <div class="module-card">
+                <strong>Depense rapide</strong>
+                <span>Ajoutez une charge et voyez son impact sur les chiffres.</span>
+                <button type="button" data-demo-action="quick-expense">Ajouter une depense</button>
+              </div>
+              ${renderRows(receiptRows.slice(0, 3))}
+            `
+          },
+          vente: {
+            focus: "phone",
+            live: "Vente: cliquez sur un produit ou validez une vente test, les donnees changent en direct.",
+            title: "Point de vente: panier et produits",
+            stats: [
+              ["Produits", String(demoState.products.length), "Catalogue local"],
+              ["Panier demo", addedCount + " article(s)", "Session courante"],
+              ["Derniere vente", demoState.sales.at(-1)?.id || "-", formatAmount(demoState.sales.at(-1)?.total || 0)],
+              ["Service", demoState.shiftOpen ? "Ouvert" : "Ferme", "Pret a encaisser"],
+              ["Recu", "Pret", "Bluetooth ou Windows"],
+              ["Stock faible", String(lowStockCount()), "A surveiller"]
+            ],
+            cardsHtml: `
+              ${demoState.products.map((product) => `
+                <div class="module-card">
+                  <strong>${product.name}</strong>
+                  <span>${formatAmount(product.price)} - stock ${product.stock}</span>
+                  <button type="button" data-demo-action="sell-product" data-product-id="${product.id}">Ajouter au panier</button>
+                </div>
+              `).join("")}
+              <div class="module-card">
+                <strong>Finaliser</strong>
+                <span>Creer un recu local et diminuer le stock.</span>
+                <button type="button" data-demo-action="quick-sale">Valider une vente</button>
+              </div>
+            `
+          },
+          services: {
+            focus: "desktop",
+            live: "Services: ouvrez ou fermez le service, comme au debut et a la fin de journee.",
+            title: "Services / shifts",
+            stats: [
+              ["Etat", demoState.shiftOpen ? "Ouvert" : "Ferme", "Service courant"],
+              ["Fond initial", "25 000 F", "Declare"],
+              ["Ventes liees", String(demoState.sales.length), "Recus du service"],
+              ["Total encaisse", formatAmount(grossSales), "Depuis ouverture"],
+              ["Difference", "0 F", "Caisse juste"],
+              ["Recu shift", "Disponible", "Fin de service"]
+            ],
+            cardsHtml: `
+              <div class="module-card">
+                <strong>${demoState.shiftOpen ? "Fermer le service" : "Ouvrir le service"}</strong>
+                <span>L'etat est local a cette demo et revient au depart au rechargement.</span>
+                <button type="button" data-demo-action="toggle-shift">${demoState.shiftOpen ? "Fermer" : "Ouvrir"}</button>
+              </div>
+              ${renderRows([["Fond initial", "25 000 F", "Declare"], ["Ventes", formatAmount(grossSales), demoState.sales.length + " recus"], ["Difference", "0 F", "Controle"]])}
+            `
+          },
+          recus: {
+            focus: "desktop",
+            live: "Recus: chaque vente ajoutee dans la demo apparait ici.",
+            title: "Historique des recus",
+            stats: [
+              ["Recus", String(demoState.sales.length), "Enregistres"],
+              ["Total", formatAmount(grossSales), "Ventes locales"],
+              ["Reimpression", "Disponible", "Ticket"],
+              ["Remboursement", "Demo", "Controle"],
+              ["Recherche", "Active", "Par numero"],
+              ["Trace", "Locale", "Reset au reload"]
+            ],
+            cardsHtml: `
+              ${renderRows(receiptRows)}
+              <div class="module-card">
+                <strong>Nouvelle vente</strong>
+                <span>Ajoute un recu local dans cette liste.</span>
+                <button type="button" data-demo-action="quick-sale">Ajouter un recu</button>
+              </div>
+            `
+          },
+          clients: {
+            focus: "desktop",
+            live: "Clients: ajoutez une fiche locale et consultez les historiques.",
+            title: "Clients",
+            stats: [
+              ["Clients", String(demoState.customers.length), "Fiches locales"],
+              ["Historique", "Visible", "Recus associes"],
+              ["Telephone", "Controle", "Format clair"],
+              ["Creation", "Rapide", "Depuis la caisse"],
+              ["Suivi", "Simple", "Achats clients"],
+              ["Relation", "Organisee", "Au comptoir"]
+            ],
+            cardsHtml: `
+              ${renderRows(demoState.customers.map((customer) => [customer.name, customer.phone, customer.sales + " achat(s)"]))}
+              <div class="module-card">
+                <strong>Ajouter un client</strong>
+                <span>Ajoute une fiche dans la demo locale.</span>
+                <button type="button" data-demo-action="add-customer">Creer client</button>
+              </div>
+            `
+          },
+          depenses: {
+            focus: "desktop",
+            live: "Depenses: ajoutez une charge, le tableau et les totaux changent.",
+            title: "Depenses",
+            stats: [
+              ["Total", formatAmount(expensesTotal), demoState.expenses.length + " depenses"],
+              ["Directes", formatAmount(demoState.expenses.filter((e) => e.type === "Directe").reduce((t, e) => t + e.amount, 0)), "Marchandises"],
+              ["Indirectes", formatAmount(demoState.expenses.filter((e) => e.type === "Indirecte").reduce((t, e) => t + e.amount, 0)), "Support"],
+              ["Operationnelles", formatAmount(demoState.expenses.filter((e) => e.type === "Operationnelle").reduce((t, e) => t + e.amount, 0)), "Charges"],
+              ["Analyse", "Active", "Par type"],
+              ["Impact marge", "Visible", "Tableau"]
+            ],
+            cardsHtml: `
+              ${renderRows(expenseRows)}
+              <div class="module-card">
+                <strong>Ajouter une depense</strong>
+                <span>Ajoute une charge locale et met les statistiques a jour.</span>
+                <button type="button" data-demo-action="quick-expense">Ajouter</button>
+              </div>
+            `
+          },
+          stock: {
+            focus: "tablet",
+            live: "Stock: ajustez une quantite, les alertes et fiches produits changent.",
+            title: "Stock et signaux",
+            stats: [
+              ["Produits suivis", String(demoState.products.length), "Catalogue"],
+              ["Alertes", String(lowStockCount()), "Stock faible"],
+              ["Stock total", String(sum(demoState.products, "stock")), "Unites"],
+              ["Ajustements", "Demo", "Correction locale"],
+              ["Minimum", "Defini", "Par article"],
+              ["Marge", "Suivie", "Signal"]
+            ],
+            cardsHtml: `
+              ${renderRows(productRows)}
+              <div class="module-card">
+                <strong>Ajuster le stock</strong>
+                <span>Diminue le premier produit pour simuler un ecart.</span>
+                <button type="button" data-demo-action="adjust-stock">Ajuster</button>
+              </div>
+            `
+          },
+          produits: {
+            focus: "tablet",
+            live: "Produits: creez un article local, il apparait ensuite dans Vente et Stock.",
+            title: "Catalogue produits",
+            stats: [
+              ["Produits", String(demoState.products.length), "Articles actifs"],
+              ["Categories", "4", "Organisees"],
+              ["Prix", "Definis", "Vente"],
+              ["Stock", String(sum(demoState.products, "stock")), "Unites"],
+              ["Minimum", "Actif", "Alerte"],
+              ["Marge", "Calculee", "Selon prix"]
+            ],
+            cardsHtml: `
+              ${renderRows(productRows)}
+              <div class="module-card">
+                <strong>Ajouter un produit</strong>
+                <span>Ajoute un article local qui disparait au rechargement.</span>
+                <button type="button" data-demo-action="add-product">Creer produit</button>
+              </div>
+            `
+          },
+          parametres: {
+            focus: "desktop",
+            live: "Parametres: configuration magasin, impression et securite.",
+            title: "Parametres",
+            stats: [
+              ["Logo", "Configure", "Recu"],
+              ["Impression", "Bluetooth", "Ou Windows"],
+              ["PIN", "Actif", "Session protegee"],
+              ["Notifications", "Email", "Reglage"],
+              ["Version", "Suivie", "Mise a jour"],
+              ["Caisse", "Reglee", "Fond"]
+            ],
+            cardsHtml: `
+              <div class="module-card"><strong>Impression</strong><span>Bluetooth ou Windows selon l'installation.</span></div>
+              <div class="module-card"><strong>Securite</strong><span>PIN de verrouillage pour proteger la session.</span></div>
+              <div class="module-card"><strong>Logo magasin</strong><span>Personnalisation du recu.</span></div>
+              <div class="module-card"><strong>Synchronisation</strong><span>Operations en attente visibles.</span></div>
+            `
+          }
+        };
+
+        return pages[pageKey] || pages.tableau;
+      }
+
+      let saleTotal = 76300;
+      let marginTotal = 25645;
+      let addedCount = 0;
+      let interacted = false;
+      let cycleIndex = 0;
+      const cycle = ["tableau", "vente", "stock"];
+      const slides = ["desktop", "tablet", "phone"];
+
+      function formatAmount(value) {
+        return new Intl.NumberFormat("fr-FR").format(value) + " F";
+      }
+
+      function updateScrollProgress() {
+        const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+        const progress = maxScroll > 0 ? (window.scrollY / maxScroll) * 100 : 0;
+
+        if (progressBar) {
+          progressBar.style.width = Math.min(100, Math.max(0, progress)) + "%";
+        }
+        if (backToTop) {
+          backToTop.classList.toggle("visible", window.scrollY > 560);
+        }
+      }
+
+      function updateActiveNav() {
+        let currentId = "accueil";
+
+        document.querySelectorAll("main section[id]").forEach((section) => {
+          const top = section.getBoundingClientRect().top;
+          if (top <= 120) {
+            currentId = section.id;
+          }
+        });
+
+        navLinks.forEach((link) => {
+          link.classList.toggle("active", link.getAttribute("href") === "#" + currentId);
+        });
+      }
+
+      function updateRoi() {
+        if (!roiSales || !roiLoss || !roiDays) {
+          return;
+        }
+
+        const dailySales = Number(roiSales.value);
+        const lossRate = Number(roiLoss.value);
+        const days = Number(roiDays.value);
+        const monthSales = dailySales * days;
+        const estimatedLoss = Math.round(monthSales * (lossRate / 100));
+        const recovered = Math.round(estimatedLoss * 0.7);
+
+        roiSalesValue.textContent = formatAmount(dailySales);
+        roiLossValue.textContent = lossRate + "%";
+        roiDaysValue.textContent = days + (days > 1 ? " jours" : " jour");
+        roiResult.textContent = formatAmount(recovered) + " / mois";
+        roiMonthSales.textContent = formatAmount(monthSales);
+        roiMonthLoss.textContent = formatAmount(estimatedLoss);
+      }
+
+      function selectPlan(card) {
+        const plan = card.dataset.plan || "Abonnement Mensuel";
+        planCards.forEach((item) => item.classList.remove("selected"));
+        card.classList.add("selected");
+
+        if (formStatus) {
+          formStatus.textContent = "Offre selectionnee: " + plan;
+          formStatus.classList.add("show");
+        }
+        if (messageField && !messageField.value.trim()) {
+          messageField.value = "Je veux une demo pour l'offre " + plan + ".";
+        }
+      }
+
+      function buildDemoMailto() {
+        const selectedPlan = document.querySelector("[data-plan].selected")?.dataset.plan || "Abonnement Mensuel";
+        const customerName = leadName ? leadName.value.trim() : "";
+        const customerPhone = leadPhone ? leadPhone.value.trim() : "";
+        const customerBusiness = leadBusiness ? leadBusiness.value.trim() : "";
+        const customerNeed = messageField ? messageField.value.trim() : "";
+        const subject = "Demande de demo START POS - " + (customerBusiness || "Commerce") + " - " + (customerName || "Nouveau prospect");
+        const body = [
+          "Bonjour START POS,",
+          "",
+          "Je souhaite demander une demonstration de START POS.",
+          "",
+          "Informations du prospect",
+          "Nom: " + (customerName || "-"),
+          "Telephone: " + (customerPhone || "-"),
+          "Type de commerce: " + (customerBusiness || "-"),
+          "Offre choisie: " + selectedPlan,
+          "",
+          "Besoin principal",
+          customerNeed || "-",
+          "",
+          "Merci de me recontacter pour planifier la demo.",
+        ].join("\n");
+
+        return "mailto:powerstartbf@gmail.com?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+      }
+
+      function bindHeroShowcase() {
+        if (!heroShowcase) {
+          return;
+        }
+
+        const resetHero = () => {
+          heroShowcase.style.setProperty("--mx", "50%");
+          heroShowcase.style.setProperty("--my", "50%");
+          heroShowcase.style.setProperty("--rx", "0deg");
+          heroShowcase.style.setProperty("--ry", "0deg");
+        };
+
+        heroShowcase.addEventListener("mousemove", (event) => {
+          const rect = heroShowcase.getBoundingClientRect();
+          const x = event.clientX - rect.left;
+          const y = event.clientY - rect.top;
+          const px = (x / rect.width) * 100;
+          const py = (y / rect.height) * 100;
+          const ry = ((px - 50) / 50) * 5;
+          const rx = ((50 - py) / 50) * 4;
+
+          heroShowcase.style.setProperty("--mx", px + "%");
+          heroShowcase.style.setProperty("--my", py + "%");
+          heroShowcase.style.setProperty("--rx", rx.toFixed(2) + "deg");
+          heroShowcase.style.setProperty("--ry", ry.toFixed(2) + "deg");
+        });
+
+        heroShowcase.addEventListener("mouseleave", resetHero);
+        heroShowcase.addEventListener("touchend", resetHero, { passive: true });
+        resetHero();
+      }
+
+      if (leadForm) {
+        leadForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          window.location.href = buildDemoMailto();
+        });
+      }
+
+      function focusDevice(device) {
+        stage.dataset.focus = device;
+        const slideIndex = Math.max(0, slides.indexOf(device));
+
+        if (deviceTrack) {
+          deviceTrack.style.transform = "translateX(-" + (slideIndex * 100) + "%)";
+        }
+
+        sliderDots.forEach((dot) => {
+          dot.classList.toggle("active", dot.dataset.slideTarget === device);
+        });
+      }
+
+      function moveSlide(direction) {
+        const current = stage.dataset.focus || "desktop";
+        const currentIndex = Math.max(0, slides.indexOf(current));
+        const nextIndex = (currentIndex + direction + slides.length) % slides.length;
+        focusDevice(slides[nextIndex]);
+      }
+
+      function renderAppPage(pageKey) {
+        const page = buildPage(pageKey);
+
+        if (appStats) {
+          appStats.innerHTML = page.stats.map((stat, index) => `
+            <div class="mock-stat">
+              <span>${stat[0]}</span>
+              <strong${(pageKey === "tableau" && index === 0) || (pageKey === "vente" && index === 1) ? ' id="mock-sales"' : ""}${pageKey === "tableau" && index === 5 ? ' id="mock-margin"' : ""}>${stat[1]}</strong>
+              <small${(pageKey === "tableau" && index === 0) || (pageKey === "vente" && index === 1) ? ' id="mock-sales-delta"' : ""}${pageKey === "tableau" && index === 5 ? ' id="mock-margin-rate"' : ""}>${stat[2]}</small>
+            </div>
+          `).join("");
+        }
+
+        if (appPanelTitle) {
+          appPanelTitle.textContent = page.title;
+        }
+
+        if (appPanelBody) {
+          appPanelBody.className = "module-grid";
+          appPanelBody.innerHTML = page.cardsHtml || page.cards.map((card) => `
+            <div class="module-card">
+              <strong>${card[0]}</strong>
+              <span>${card[1]}</span>
+            </div>
+          `).join("");
+        }
+
+        appButtons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.appPage === pageKey);
+        });
+
+        if (liveText) {
+          liveText.textContent = page.live;
+        }
+
+        focusDevice(page.focus);
+      }
+
+      function runDemoAction(action, target) {
+        const productId = target?.dataset?.productId;
+
+        if (action === "quick-sale") {
+          const product = demoState.products[0];
+          if (product) {
+            product.stock = Math.max(0, product.stock - 1);
+          }
+          const nextId = "R-" + String(demoState.sales.length + 1).padStart(3, "0");
+          demoState.sales.push({
+            id: nextId,
+            total: 8500 + (demoState.sales.length * 700),
+            items: 4,
+            payment: "Mixte"
+          });
+          renderAppPage("recus");
+          flashStats();
+          return;
+        }
+
+        if (action === "sell-product") {
+          const product = demoState.products.find((item) => item.id === productId) || demoState.products[0];
+          if (product) {
+            product.stock = Math.max(0, product.stock - 1);
+            addedCount += 1;
+            if (cartCount) {
+              cartCount.textContent = addedCount + (addedCount > 1 ? " articles" : " article");
+            }
+          }
+          renderAppPage("vente");
+          flashStats();
+          return;
+        }
+
+        if (action === "quick-expense") {
+          demoState.expenses.push({
+            name: "Depense demo " + (demoState.expenses.length + 1),
+            type: demoState.expenses.length % 2 === 0 ? "Operationnelle" : "Indirecte",
+            amount: 2500 + (demoState.expenses.length * 500)
+          });
+          renderAppPage("depenses");
+          flashStats();
+          return;
+        }
+
+        if (action === "toggle-shift") {
+          demoState.shiftOpen = !demoState.shiftOpen;
+          renderAppPage("services");
+          flashStats();
+          return;
+        }
+
+        if (action === "adjust-stock") {
+          const product = demoState.products[0];
+          if (product) {
+            product.stock = Math.max(0, product.stock - 7);
+          }
+          renderAppPage("stock");
+          flashStats();
+          return;
+        }
+
+        if (action === "add-product") {
+          const index = demoState.products.length + 1;
+          demoState.products.push({
+            id: "p" + index,
+            name: "Produit demo " + index,
+            price: 100 + (index * 25),
+            stock: 20 + index,
+            min: 10,
+            category: "Demo"
+          });
+          renderAppPage("produits");
+          flashStats();
+          return;
+        }
+
+        if (action === "add-customer") {
+          const index = demoState.customers.length + 1;
+          demoState.customers.push({
+            name: "Client demo " + index,
+            phone: "+226 70 00 00 " + String(index).padStart(2, "0"),
+            sales: 0
+          });
+          renderAppPage("clients");
+          flashStats();
+        }
+      }
+
+      function flashStats() {
+        const currentStats = document.querySelectorAll(".mock-stat");
+        currentStats.forEach((card) => card.classList.add("flash"));
+        window.setTimeout(() => {
+          currentStats.forEach((card) => card.classList.remove("flash"));
+        }, 380);
+      }
+
+      function animateBars() {
+        const bars = document.querySelectorAll("[data-bar]");
+        bars.forEach((bar, index) => {
+          const base = [88, 62, 72, 46, 54][index] || 50;
+          const next = Math.min(96, base + Math.floor(Math.random() * 14));
+          bar.style.width = next + "%";
+        });
+      }
+
+      function addSale(amount) {
+        renderAppPage("vente");
+        addedCount += 1;
+        saleTotal += amount;
+        marginTotal += Math.round(amount * 0.34);
+        const salesValue = document.getElementById("mock-sales");
+        const salesDelta = document.getElementById("mock-sales-delta");
+        const marginValue = document.getElementById("mock-margin");
+        const marginRate = document.getElementById("mock-margin-rate");
+
+        if (salesValue) {
+          salesValue.textContent = formatAmount(saleTotal);
+        }
+        if (salesDelta) {
+          salesDelta.textContent = "+" + formatAmount(amount) + " ajoute";
+        }
+        if (marginValue) {
+          marginValue.textContent = formatAmount(marginTotal);
+        }
+        if (marginRate) {
+          marginRate.textContent = "Marge mise a jour";
+        }
+        if (cartCount) {
+          cartCount.textContent = addedCount + (addedCount > 1 ? " articles" : " article");
+        }
+
+        focusDevice("phone");
+        flashStats();
+        animateBars();
+      }
+
+      appButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          interacted = true;
+          renderAppPage(button.dataset.appPage);
+        });
+      });
+
+      sliderDots.forEach((dot) => {
+        dot.addEventListener("click", () => {
+          interacted = true;
+          focusDevice(dot.dataset.slideTarget);
+        });
+      });
+
+      if (sliderPrev) {
+        sliderPrev.addEventListener("click", () => {
+          interacted = true;
+          moveSlide(-1);
+        });
+      }
+
+      if (sliderNext) {
+        sliderNext.addEventListener("click", () => {
+          interacted = true;
+          moveSlide(1);
+        });
+      }
+
+      if (appPanelBody) {
+        appPanelBody.addEventListener("click", (event) => {
+          const target = event.target.closest("[data-demo-action]");
+          if (!target) {
+            return;
+          }
+          interacted = true;
+          runDemoAction(target.dataset.demoAction, target);
+        });
+      }
+
+      products.forEach((product) => {
+        product.addEventListener("click", () => {
+          interacted = true;
+          products.forEach((item) => item.classList.remove("added"));
+          product.classList.add("added");
+          addSale(Number(product.dataset.price || 0));
+        });
+      });
+
+      if (simulateSale) {
+        simulateSale.addEventListener("click", () => {
+          interacted = true;
+          addSale(850);
+        });
+      }
+
+      revealItems.forEach((item) => item.classList.add("reveal-prep"));
+
+      const revealObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            revealObserver.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+
+      revealItems.forEach((item) => revealObserver.observe(item));
+
+      [roiSales, roiLoss, roiDays].forEach((input) => {
+        if (input) {
+          input.addEventListener("input", updateRoi);
+        }
+      });
+
+      planCards.forEach((card) => {
+        card.addEventListener("click", () => selectPlan(card));
+      });
+
+      window.addEventListener("scroll", () => {
+        updateScrollProgress();
+        updateActiveNav();
+      }, { passive: true });
+
+      updateScrollProgress();
+      updateActiveNav();
+      updateRoi();
+      bindHeroShowcase();
+      renderAppPage("tableau");
+
+      window.setInterval(() => {
+        if (interacted) {
+          return;
+        }
+        cycleIndex = (cycleIndex + 1) % cycle.length;
+        renderAppPage(cycle[cycleIndex]);
+      }, 3600);
+    })();
+  </script>
+</body>
+</html>

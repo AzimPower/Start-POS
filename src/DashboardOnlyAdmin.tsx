@@ -4,6 +4,9 @@ import SuperAdminDashboard from "./pages/SuperAdminDashboard";
 import { Navigate } from "react-router-dom";
 export default function DashboardOnlyAdmin() {
     const { user } = useAuth();
+    if (user?.role === "ambassador") {
+        return <Navigate to="/ambassador-dashboard" replace/>;
+    }
     if (user?.role !== "admin" && user?.role !== "super_admin") {
         return <Navigate to="/pos" replace/>;
     }

@@ -265,7 +265,7 @@ export default function SubscriptionPayments() {
     }
     return (<div className="min-h-screen bg-background">
       {/* -- Header ----------------------------------------------------------- */}
-      <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 px-4 pt-6 pb-8">
+      <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-800 px-4 pt-6 pb-8">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-3">
             <div>
@@ -273,7 +273,7 @@ export default function SubscriptionPayments() {
                 <CreditCard size={22}/>
                 Encaissements
               </h1>
-              <p className="text-blue-200 text-sm mt-0.5">
+              <p className="text-blue-100 text-sm mt-0.5">
                 Suivi complet des paiements d'abonnements
               </p>
             </div>

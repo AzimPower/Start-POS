@@ -7,6 +7,7 @@ error_reporting(E_ALL);
 
 require_once './_bootstrap.php';
 init_api_headers();
+require_once './_ambassadors.php';
 //
 //
 //
@@ -23,6 +24,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once '../config.php';
 require_once '../store_metrics.php';
+ensure_ambassador_schema($pdo);
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -602,7 +604,7 @@ try {
                 echo json_encode(['error' => 'Only super admin can create stores']);
                 exit;
             }
-                $sql = 'INSERT INTO stores (id, name, address, logo, active, createdAt, subscriptionStart, subscriptionEnd, lastPayment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+                $sql = 'INSERT INTO stores (id, name, address, logo, active, createdAt, subscriptionStart, subscriptionEnd, lastPayment, ambassadorUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
                 $stmt = $pdo->prepare($sql);
                 $id = $data['id'] ?? uniqid();
                 $stmt->execute([
@@ -614,7 +616,8 @@ try {
                     $data['createdAt'] ?? time()*1000,
                     $data['subscriptionStart'] ?? null,
                     $data['subscriptionEnd'] ?? null,
-                    $data['lastPayment'] ?? null
+                    $data['lastPayment'] ?? null,
+                    !empty($data['ambassadorUserId']) ? $data['ambassadorUserId'] : null,
                 ]);
                 store_metrics_invalidate_cache($id);
 
@@ -677,7 +680,7 @@ try {
                 echo json_encode(['success' => false, 'error' => 'Magasin introuvable']);
                 exit;
             }
-            $sql = 'UPDATE stores SET name=?, address=?, logo=?, active=?, createdAt=?, subscriptionStart=?, subscriptionEnd=?, lastPayment=? WHERE id=?';
+            $sql = 'UPDATE stores SET name=?, address=?, logo=?, active=?, createdAt=?, subscriptionStart=?, subscriptionEnd=?, lastPayment=?, ambassadorUserId=? WHERE id=?';
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
                 array_key_exists('name', $data) ? $data['name'] : $existingStore['name'],
@@ -688,6 +691,7 @@ try {
                 array_key_exists('subscriptionStart', $data) ? $data['subscriptionStart'] : $existingStore['subscriptionStart'],
                 array_key_exists('subscriptionEnd', $data) ? $data['subscriptionEnd'] : $existingStore['subscriptionEnd'],
                 array_key_exists('lastPayment', $data) ? $data['lastPayment'] : $existingStore['lastPayment'],
+                array_key_exists('ambassadorUserId', $data) ? ($data['ambassadorUserId'] ?: null) : ($existingStore['ambassadorUserId'] ?? null),
                 $data['id']
             ]);
             store_metrics_invalidate_cache($data['id']);

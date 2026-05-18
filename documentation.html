@@ -1,21 +1,31 @@
-
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>START POS | Documentation</title>
+<link rel="icon" type="image/svg+xml" href="favicon/favicon.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="favicon/icon-32x32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="favicon/icon-16x16.png" />
+<link rel="shortcut icon" href="favicon/favicon-96x96.png" />
+<link rel="apple-touch-icon" href="favicon/apple-touch-icon.png" />
 <style>
 :root{
-  --doc-bg:#f4efe6;
-  --doc-surface:#fffdf9;
-  --doc-surface-alt:#f6f1e7;
-  --doc-ink:#1f2a2a;
-  --doc-muted:#62706c;
-  --doc-line:#d7d0c4;
-  --doc-accent:#003bdd;
-  --doc-accent-soft:#dff4ef;
-  --doc-accent-strong:#114e4a;
-  --doc-warm:#c96f3b;
-  --doc-warm-soft:#f8e5d8;
-  --doc-danger:#9b3d2f;
-  --doc-danger-soft:#f8dfd8;
-  --doc-info:#1e5f8c;
-  --doc-info-soft:#deedf8;
+  --doc-bg:#eef4fb;
+  --doc-surface:#ffffff;
+  --doc-surface-alt:#f1f6fd;
+  --doc-ink:#17212b;
+  --doc-muted:#5d6978;
+  --doc-line:#dce3ec;
+  --doc-accent:#3366e8;
+  --doc-accent-soft:#e7efff;
+  --doc-accent-strong:#2d5ee0;
+  --doc-warm:#ea580c;
+  --doc-warm-soft:#ffe9e1;
+  --doc-danger:#b42318;
+  --doc-danger-soft:#fde7e4;
+  --doc-info:#3366e8;
+  --doc-info-soft:#e7efff;
   --doc-shadow:0 18px 42px rgba(39,41,31,.12);
 }
 
@@ -24,9 +34,9 @@ body{
   font-family:"Aptos","Segoe UI","Trebuchet MS",sans-serif;
   color:var(--doc-ink);
   background:
-    radial-gradient(circle at top left, rgba(201,111,59,.16), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(15,118,110,.18), transparent 32%),
-    linear-gradient(180deg, #f7f1e8 0%, #efe7db 100%);
+    radial-gradient(circle at top left, rgba(51,102,232,.14), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(45,94,224,.16), transparent 32%),
+    linear-gradient(180deg, #f7fbff 0%, #edf3fb 100%);
 }
 
 body.doc-lock-scroll{
@@ -46,8 +56,8 @@ body.doc-lock-scroll{
 
 .sidebar{
   background:
-    linear-gradient(180deg, rgba(19,44,49,.98) 0%, rgba(17,63,66,.98) 100%),
-    linear-gradient(135deg, rgba(201,111,59,.18), transparent 45%);
+    linear-gradient(180deg, rgba(33,70,190,.98) 0%, rgba(51,102,232,.98) 100%),
+    linear-gradient(135deg, rgba(96,142,255,.20), transparent 45%);
   color:#eff8f6;
   padding:1.35rem 0 1.1rem;
   position:sticky;
@@ -62,7 +72,7 @@ body.doc-lock-scroll{
 
 .sidebar-topbar{
   padding:0 1.2rem 1rem;
-  border-bottom:1px solid rgba(239,248,246,.12);
+  border-bottom:1px solid rgba(255,255,255,.18);
   margin-bottom:.5rem;
 }
 
@@ -78,22 +88,26 @@ body.doc-lock-scroll{
 
 .sidebar-toggle{
   display:none;
-  width:100%;
+  width:36px;
+  height:36px;
   margin-top:.9rem;
   border:none;
-  border-radius:14px;
-  padding:.82rem .95rem;
-  background:rgba(255,255,255,.1);
+  border-radius:999px;
+  padding:0;
+  background:linear-gradient(135deg, #2d5ee0, #3366e8);
   color:#fff;
-  font-size:13px;
+  font-size:22px;
   font-weight:700;
-  text-align:center;
   cursor:pointer;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  line-height:1;
+  box-shadow:0 10px 24px rgba(51,102,232,.24);
 }
 
 .sidebar-toggle:hover{
-  background:rgba(255,255,255,.14);
+  background:linear-gradient(135deg, #244fc9, #2d5ee0);
 }
 
 .doc-toolbar{
@@ -104,12 +118,12 @@ body.doc-lock-scroll{
   border:none;
   border-radius:14px;
   padding:.82rem 1rem;
-  background:linear-gradient(135deg, #103b3d, #165b57);
+  background:linear-gradient(135deg, #2d5ee0, #3366e8);
   color:#fff;
   font-size:13px;
   font-weight:700;
   cursor:pointer;
-  box-shadow:0 10px 24px rgba(16,59,61,.18);
+  box-shadow:0 10px 24px rgba(51,102,232,.18);
 }
 
 .doc-toolbar-copy{
@@ -136,7 +150,7 @@ body.doc-lock-scroll{
   font-size:11px;
   letter-spacing:.14em;
   text-transform:uppercase;
-  color:rgba(239,248,246,.66);
+  color:rgba(255,255,255,.82);
   margin-bottom:.45rem;
 }
 
@@ -151,7 +165,7 @@ body.doc-lock-scroll{
 .brand-desc{
   font-size:12px;
   line-height:1.55;
-  color:rgba(239,248,246,.78);
+  color:rgba(255,255,255,.92);
 }
 
 .search-wrap{
@@ -191,11 +205,27 @@ body.doc-lock-scroll{
 }
 
 .search-input::placeholder{
-  color:rgba(239,248,246,.56);
+  color:rgba(255,255,255,.78);
 }
 
 .content-search .search-input::placeholder{
   color:var(--doc-muted);
+}
+
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration,
+.search-input::-webkit-search-results-button,
+.search-input::-webkit-search-results-decoration{
+  -webkit-appearance:none;
+  appearance:none;
+  display:none;
+}
+
+.search-input::-ms-clear,
+.search-input::-ms-reveal{
+  display:none;
+  width:0;
+  height:0;
 }
 
 .search-icon,
@@ -243,7 +273,7 @@ body.doc-lock-scroll{
   padding:.55rem .15rem 0;
   font-size:11px;
   line-height:1.5;
-  color:rgba(239,248,246,.6);
+  color:rgba(255,255,255,.82);
 }
 
 .content-search .search-meta{
@@ -334,7 +364,7 @@ body.doc-lock-scroll{
   font-weight:700;
   letter-spacing:.14em;
   text-transform:uppercase;
-  color:rgba(239,248,246,.46);
+  color:rgba(255,255,255,.72);
   padding:0 1.2rem .45rem;
 }
 
@@ -347,21 +377,21 @@ body.doc-lock-scroll{
   border-radius:14px;
   font-size:13px;
   line-height:1.35;
-  color:rgba(239,248,246,.82);
+  color:rgba(255,255,255,.96);
   cursor:pointer;
   transition:background .18s ease,color .18s ease,transform .18s ease;
 }
 
 .nav-item:hover{
-  background:rgba(255,255,255,.08);
+  background:rgba(255,255,255,.14);
   color:#fff;
   transform:translateX(2px);
 }
 
 .nav-item.active{
-  background:linear-gradient(135deg, rgba(201,111,59,.28), rgba(15,118,110,.24));
+  background:linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
   color:#fff;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);
 }
 
 .content{
@@ -387,7 +417,7 @@ body.doc-lock-scroll{
   margin-bottom:1.25rem;
   background:
     radial-gradient(circle at top right, rgba(255,255,255,.18), transparent 28%),
-    linear-gradient(135deg, #103b3d 0%, #165b57 48%, #c96f3b 100%);
+    linear-gradient(135deg, #2d5ee0 0%, #3366e8 52%, #4a7dff 100%);
   color:#f8fffd;
 }
 
@@ -808,11 +838,11 @@ h3{
   .sidebar-toggle{
     display:inline-flex;
     flex:0 0 auto;
-    width:auto;
-    min-width:148px;
+    width:36px;
+    min-width:36px;
+    height:36px;
     margin-top:0;
     align-self:flex-start;
-    justify-content:center;
   }
   .sidebar-inner{display:block;padding:0 0 .9rem}
   .nav-section{padding:0 1rem .45rem}
@@ -895,7 +925,7 @@ h3{
     border-radius:0 24px 24px 0;
   }
   .sidebar-topbar{padding:.95rem .9rem}
-  .sidebar-toggle{min-width:132px;padding:.78rem .9rem;font-size:12px}
+  .sidebar-toggle{min-width:34px;width:34px;height:34px;font-size:20px}
   .content{padding:.85rem}
   .doc-toolbar{gap:.7rem;margin-bottom:.85rem}
   .doc-toolbar-button{padding:.78rem .9rem}
@@ -919,16 +949,18 @@ h3{
   .process-card{border-radius:18px}
 }
 </style>
+</head>
+<body>
 
 <div class="doc-shell">
   <div class="sidebar">
     <div class="sidebar-topbar">
       <div class="brand">
         <div class="brand-kicker">Guide opérationnel</div>
-        <div class="brand-title">START POS<br>par rôle</div>
+        <div class="brand-title">START POS</div>
         <div class="brand-desc">Une seule documentation pour l'administrateur, le gestionnaire et le caissier, avec les différences d'accès là où elles comptent vraiment.</div>
       </div>
-      <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="sidebar-nav" aria-label="Fermer le menu">Fermer</button>
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="sidebar-nav" aria-label="Fermer le menu">×</button>
     </div>
 
     <div id="sidebar-nav" class="sidebar-inner">
@@ -1018,7 +1050,7 @@ h3{
           <div class="role-head">
             <div>
               <div class="role-name">Gestionnaire</div>
-              <div class="role-focus">Responsable du contrôle quotidien : équipes, shifts, qualité des données et anomalies.</div>
+              <div class="role-focus">Responsable du contrôle quotidien : équipes, services, qualité des données et anomalies.</div>
             </div>
             <span class="badge badge-manager">Supervision</span>
           </div>
@@ -1138,7 +1170,7 @@ h3{
         </div>
       </div>
 
-      <div class="alert alert-warn">Ne partagez ni votre mot de passe ni votre PIN. Une session caisse ouverte avec le mauvais compte fausse le suivi des ventes, des shifts et des responsabilités.</div>
+      <div class="alert alert-warn">Ne partagez ni votre mot de passe ni votre PIN. Une session caisse ouverte avec le mauvais compte fausse le suivi des ventes, des services et des responsabilités.</div>
 
       <h2>Réflexes selon le rôle</h2>
       <div class="tri-grid">
@@ -1223,7 +1255,7 @@ h3{
           <ul class="bullet-list">
             <li>Admin : vérifie le magasin actif, le statut global et les indicateurs de démarrage.</li>
             <li>Gestionnaire : confirme l'équipe présente, l'ouverture des services et le matériel d'impression.</li>
-            <li>Caissier : ouvre son shift, teste la caisse et signale immédiatement un produit ou une imprimante défaillante.</li>
+            <li>Caissier : ouvre son service, teste la caisse et signale immédiatement un produit ou une imprimante défaillante.</li>
           </ul>
         </div>
 
@@ -1265,7 +1297,7 @@ h3{
         <div class="kpi"><div class="kpi-label">Ventes brutes</div><div class="kpi-value">Total encaissé avant remboursements</div></div>
         <div class="kpi"><div class="kpi-label">Remboursements</div><div class="kpi-value">Volume et fréquence à surveiller</div></div>
         <div class="kpi"><div class="kpi-label">Ventes nettes</div><div class="kpi-value">Lecture réelle de la journée</div></div>
-        <div class="kpi"><div class="kpi-label">Surplus / manque</div><div class="kpi-value">Écarts de caisse issus des shifts</div></div>
+        <div class="kpi"><div class="kpi-label">Surplus / manque</div><div class="kpi-value">Écarts de caisse issus des services</div></div>
         <div class="kpi"><div class="kpi-label">Marge brute</div><div class="kpi-value">Ventes moins coûts observés</div></div>
       </div>
 
@@ -1288,7 +1320,7 @@ h3{
         <div class="panel">
           <h3>Lecture utile pour le gestionnaire</h3>
           <ul class="bullet-list">
-            <li>Suivi du jour, de l'équipe présente et des shifts fermés.</li>
+            <li>Suivi du jour, de l'équipe présente et des services fermés.</li>
             <li>Réaction immédiate si les chiffres du service dérivent.</li>
             <li>Préparation d'un retour clair à l'admin si l'anomalie se répète.</li>
           </ul>
@@ -1300,14 +1332,14 @@ h3{
       <h1>Faire une vente</h1>
       <p class="subtitle">Voici le flux concret de caisse, du produit recherché jusqu'au reçu imprimé ou synchronisé.</p>
 
-      <div class="alert alert-info">La vente se fait surtout côté caissier. Le gestionnaire ou l'administrateur peuvent intervenir au besoin, mais ils doivent suivre exactement la même logique de caisse et de shift.</div>
+      <div class="alert alert-info">La vente se fait surtout côté caissier. Le gestionnaire ou l'administrateur peuvent intervenir au besoin, mais ils doivent suivre exactement la même logique de caisse et de service.</div>
 
       <div class="split-grid">
         <div class="panel">
           <h3>Avant de commencer</h3>
           <ul class="bullet-list">
             <li>Vérifier que le bon magasin est actif.</li>
-            <li>Vérifier qu'un shift est bien ouvert avant la première vente.</li>
+            <li>Vérifier qu'un service est bien ouvert avant la première vente.</li>
             <li>Confirmer que les produits visibles et l'impression fonctionnent correctement.</li>
           </ul>
         </div>
@@ -1364,7 +1396,7 @@ h3{
       <div class="timeline">
         <div class="timeline-block">
           <div class="timeline-title">1. Ouverture du service</div>
-          <div class="timeline-desc">Le caissier ouvre son shift avec un montant d'ouverture cohérent. Le gestionnaire vérifie qu'au moins un service est bien actif si le point de vente doit encaisser.</div>
+          <div class="timeline-desc">Le caissier ouvre son service avec un montant d'ouverture cohérent. Le gestionnaire vérifie qu'au moins un service est bien actif si le point de vente doit encaisser.</div>
         </div>
         <div class="timeline-block">
           <div class="timeline-title">2. Encaissement pendant le service</div>
@@ -1376,7 +1408,7 @@ h3{
         </div>
       </div>
 
-      <h2>Ce qu'il faut vérifier sur un shift fermé</h2>
+      <h2>Ce qu'il faut vérifier sur un service fermé</h2>
       <ul class="bullet-list">
         <li>Montant d'ouverture crédible pour le poste concerné.</li>
         <li>Montant de fermeture cohérent avec les ventes du service.</li>
@@ -1638,7 +1670,7 @@ h3{
           <ul class="bullet-list">
             <li>Vérifier la période et les heures affichées.</li>
             <li>Vérifier le magasin actif.</li>
-            <li>Contrôler remboursements et écarts de shifts.</li>
+            <li>Contrôler remboursements et écarts de services.</li>
           </ul>
         </div>
         <div class="process-card">
@@ -1668,7 +1700,7 @@ h3{
         <div class="process-card">
           <h3>Des écarts de caisse se répètent</h3>
           <ul class="bullet-list">
-            <li>Reprendre les shifts concernés et les remboursements du même créneau.</li>
+            <li>Reprendre les services concernés et les remboursements du même créneau.</li>
             <li>Vérifier la procédure de comptage et de fermeture.</li>
             <li>Documenter le problème et remonter à l'admin si la répétition s'installe.</li>
           </ul>
@@ -1707,7 +1739,7 @@ h3{
             <span class="badge badge-manager">Gestionnaire</span>
           </div>
           <ul class="bullet-list">
-            <li>Confirmer les shifts ouverts, l'équipe présente et l'impression.</li>
+            <li>Confirmer les services ouverts, l'équipe présente et l'impression.</li>
             <li>Suivre les ventes, remboursements et écarts pendant le service.</li>
             <li>Corriger produits, clients ou dépenses quand une anomalie est claire.</li>
             <li>Contrôler les fermetures de service et documenter les incidents.</li>
@@ -1957,6 +1989,10 @@ function show(id, el, options) {
     }
 
     setSidebarState(false);
+    if (searchInput) {
+      searchInput.value = '';
+    }
+    searchDocumentation('');
   }
 
   function renderResults(results, query) {
@@ -2111,3 +2147,5 @@ function show(id, el, options) {
   syncSidebarState();
 })();
 </script>
+</body>
+</html>

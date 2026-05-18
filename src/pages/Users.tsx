@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { UserCircle, Edit, Trash2, Plus, Shield, RefreshCw,  User, Eye, EyeOff, Search } from 'lucide-react';
+import { UserCircle, Edit, Trash2, Plus, Shield, RefreshCw, User, Eye, EyeOff, Search, Gift } from 'lucide-react';
 import { toast } from 'sonner';
 import { showAppConfirm } from '@/contexts/AppDialogContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -58,6 +58,15 @@ function getRoleConfig(role: UserData['role']) {
                 iconWrapperClassName: 'bg-amber-100 text-amber-700',
                 headerClassName: 'from-amber-50 via-white to-orange-100/60',
                 cardClassName: 'border-amber-100/80 shadow-amber-100/50',
+            };
+        case 'ambassador':
+            return {
+                label: 'Ambassadeur',
+                Icon: Gift,
+                badgeClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+                iconWrapperClassName: 'bg-emerald-100 text-emerald-700',
+                headerClassName: 'from-emerald-50 via-white to-lime-100/60',
+                cardClassName: 'border-emerald-100/80 shadow-emerald-100/50',
             };
         default:
             return {
@@ -144,9 +153,12 @@ interface UserData {
     email?: string;
     password?: string;
     passwordHash?: string;
-    role: 'super_admin' | 'admin' | 'cashier' | 'manager';
+    role: 'super_admin' | 'admin' | 'cashier' | 'manager' | 'ambassador';
     storeId: string;
     storeIds?: string[];
+    promoCode?: string | null;
+    commissionRate?: number | null;
+    withdrawalPhone?: string | null;
     active?: boolean;
     createdAt: number;
     pin?: string;
@@ -193,8 +205,11 @@ export default function Users() {
         phone: '',
         email: '',
         password: '',
-        role: 'cashier' as 'admin' | 'cashier' | 'manager',
+        role: 'cashier' as 'admin' | 'cashier' | 'manager' | 'ambassador',
       storeIds: [] as string[],
+        promoCode: '',
+        commissionRate: '50',
+        withdrawalPhone: '',
         pin: '',
     });
     const [storePickerKey, setStorePickerKey] = useState(0);
@@ -326,10 +341,15 @@ export default function Users() {
         const requestedStoreIds = user?.role === 'admin'
             ? normalizeStoreIds(undefined, user.storeId)
             : normalizeStoreIds(formData.storeIds);
+        const isAmbassador = formData.role === 'ambassador';
 
         const requiresPassword = !editingUser;
-        if (!formData.username.trim() || !formData.phone.trim() || (requiresPassword && !formData.password.trim()) || requestedStoreIds.length === 0) {
+        if (!formData.username.trim() || !formData.phone.trim() || (requiresPassword && !formData.password.trim()) || (!isAmbassador && requestedStoreIds.length === 0)) {
             toast.error('Tous les champs sont requis');
+            return;
+        }
+        if (isAmbassador && !formData.promoCode.trim()) {
+            toast.error('Le code promo est requis');
             return;
         }
         if (!/^[0-9]{8}$/.test(formData.phone)) {
@@ -337,7 +357,7 @@ export default function Users() {
             return;
         }
         let finalRole = formData.role;
-        let finalStoreIds = requestedStoreIds;
+        let finalStoreIds = isAmbassador ? [] : requestedStoreIds;
         if (user?.role === 'admin') {
             if (!editingUser || editingUser.id !== user.id) {
                 // L'admin peut créer des caissiers et des gestionnaires, mais pas d'autres admins
@@ -367,6 +387,11 @@ export default function Users() {
                     role: finalRole,
                     storeIds: finalStoreIds,
                     storeId: finalStoreId,
+                    promoCode: finalRole === 'ambassador' ? formData.promoCode.trim().toUpperCase() : null,
+                    commissionRate: finalRole === 'ambassador' ? Number(formData.commissionRate || 50) : null,
+                    withdrawalPhone: finalRole === 'ambassador'
+                        ? `+226${formData.phone}`
+                        : null,
                     // Only overwrite pin if admin provided a new one
                     ...(formData.pin ? { pin: formData.pin } : {}),
                 };
@@ -403,11 +428,6 @@ export default function Users() {
             }
             else {
                 // Création
-                const existingUser = await db.getFromIndex('users', 'by-username', formData.username);
-                if (existingUser) {
-                    toast.error('Ce nom d\'utilisateur existe déjà');
-                    return;
-                }
                 const existingPhone = await db.getFromIndex('users', 'by-phone', `+226${formData.phone}`);
                 if (existingPhone) {
                     toast.error('Ce numéro de téléphone existe déjà');
@@ -429,6 +449,11 @@ export default function Users() {
                     role: finalRole,
                     storeIds: finalStoreIds,
                     storeId: finalStoreId,
+                    promoCode: finalRole === 'ambassador' ? formData.promoCode.trim().toUpperCase() : null,
+                    commissionRate: finalRole === 'ambassador' ? Number(formData.commissionRate || 50) : null,
+                    withdrawalPhone: finalRole === 'ambassador'
+                        ? `+226${formData.phone}`
+                        : null,
                     pin: formData.pin || '',
                     active: true,
                     createdAt: Date.now(),
@@ -468,7 +493,7 @@ export default function Users() {
             setEditingUser(null);
             setShowPassword(false);
             setShowPin(false);
-            setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeIds: [], pin: '' });
+            setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager' | 'ambassador', storeIds: [], promoCode: '', commissionRate: '50', withdrawalPhone: '', pin: '' });
         }
         catch (error) {
             const msg = (error as any)?.message || 'Erreur lors de l\'enregistrement';
@@ -486,8 +511,11 @@ export default function Users() {
             phone: phone8,
             email: editUser.email || '',
             password: '',
-            role: editUser.role === 'super_admin' ? 'admin' : editUser.role as 'admin' | 'cashier' | 'manager',
+            role: editUser.role === 'super_admin' ? 'admin' : editUser.role as 'admin' | 'cashier' | 'manager' | 'ambassador',
           storeIds: normalizeStoreIds(editUser.storeIds, editUser.storeId),
+            promoCode: editUser.promoCode || '',
+            commissionRate: String(editUser.commissionRate ?? 50),
+            withdrawalPhone: String(editUser.withdrawalPhone || '').replace(/[^0-9]/g, '').replace(/^226/, '').slice(-8),
             pin: editUser.pin || '',
         });
         setShowDialog(true);
@@ -532,7 +560,7 @@ export default function Users() {
         setUserFormStep(1);
         setShowPassword(false);
         setShowPin(false);
-        setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager', storeIds: [], pin: '' });
+        setFormData({ username: '', phone: '', email: '', password: '', role: 'cashier' as 'admin' | 'cashier' | 'manager' | 'ambassador', storeIds: [], promoCode: '', commissionRate: '50', withdrawalPhone: '', pin: '' });
         setStorePickerKey((current) => current + 1);
         setShowDialog(true);
     };
@@ -605,6 +633,7 @@ export default function Users() {
               <SelectItem value="cashier">Caissier</SelectItem>
               <SelectItem value="manager">Gestionnaire</SelectItem>
               <SelectItem value="admin">Administrateur</SelectItem>
+              <SelectItem value="ambassador">Ambassadeur</SelectItem>
             </SelectContent>
           </Select>)}
       </div>);
@@ -659,6 +688,17 @@ export default function Users() {
             </div>
           </>) : (<>
             {renderUserRoleField()}
+            {formData.role === 'ambassador' ? (<div className="space-y-4 rounded-md border border-border/60 p-3">
+                <div className="space-y-2">
+                  <Label htmlFor="promoCode">Code promo *</Label>
+                  <Input id="promoCode" value={formData.promoCode} onChange={(e) => setFormData({ ...formData, promoCode: e.target.value.toUpperCase().replace(/\s+/g, '') })} placeholder="Ex: START2500" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="commissionRate">Commission (%)</Label>
+                  <Input id="commissionRate" inputMode="numeric" value={formData.commissionRate} onChange={(e) => setFormData({ ...formData, commissionRate: e.target.value.replace(/[^0-9]/g, '') })} placeholder="50" />
+                </div>
+                <p className="text-xs text-muted-foreground">Cette commission n'est créditée qu'une seule fois, lors du premier abonnement payé du magasin.</p>
+              </div>) : null}
             {renderStoreSelection()}
           </>)}
 
@@ -674,7 +714,7 @@ export default function Users() {
         </div>
       </div>);
     const renderStoreSelection = () => {
-      if (user?.role === 'admin') {
+      if (user?.role === 'admin' || formData.role === 'ambassador') {
         return null;
       }
 
@@ -735,6 +775,7 @@ export default function Users() {
     const adminCount = users.filter(item => item.role === 'admin').length;
     const managerCount = users.filter(item => item.role === 'manager').length;
     const cashierCount = users.filter(item => item.role === 'cashier').length;
+    const ambassadorCount = users.filter(item => item.role === 'ambassador').length;
     if (user?.role !== 'super_admin') {
         return (<div className="p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -778,6 +819,7 @@ export default function Users() {
                     <SelectItem value="admin">Administrateur</SelectItem>
                     <SelectItem value="manager">Gestionnaire</SelectItem>
                     <SelectItem value="cashier">Caissier</SelectItem>
+                    <SelectItem value="ambassador">Ambassadeur</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -847,13 +889,13 @@ export default function Users() {
     </div>);
     }
     return (<div className="min-h-screen bg-background">
-      <div className="bg-gradient-to-r from-slate-900 via-violet-900 to-slate-800 px-4 pb-8 pt-6">
+      <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-800 px-4 pb-8 pt-6">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0 flex-1">
               
               <h1 className="text-2xl font-bold text-white sm:text-3xl">Utilisateurs</h1>
-              <p className="mt-1 hidden text-sm text-violet-100 sm:block sm:text-base">Administrez les comptes, roles et affectations magasin depuis une interface plus claire.</p>
+              <p className="mt-1 hidden text-sm text-blue-100 sm:block sm:text-base">Administrez les comptes, roles et affectations magasin depuis une interface plus claire.</p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
               <div className="flex w-full gap-2 sm:w-auto">
@@ -888,7 +930,7 @@ export default function Users() {
         <UserSummaryCard title="Utilisateurs" value={users.length} subtitle="Hors super admin" icon={UserCircle} color="bg-slate-800" />
         <UserSummaryCard title="Administrateurs" value={adminCount} subtitle="Acces complet magasin" icon={Shield} color="bg-violet-500" />
         <UserSummaryCard title="Gestionnaires" value={managerCount} subtitle="Supervision operationnelle" icon={User} color="bg-sky-500" />
-        <UserSummaryCard title="Caissiers" value={cashierCount} subtitle="Comptes de caisse" icon={User} color="bg-emerald-500" />
+        <UserSummaryCard title="Ambassadeurs" value={ambassadorCount} subtitle="Parrainage abonnement" icon={Gift} color="bg-lime-500" />
       </div>
 
       {/* Barre de recherche et filtres */}
@@ -917,6 +959,7 @@ export default function Users() {
                     <SelectItem value="admin">Administrateur</SelectItem>
                     <SelectItem value="manager">Gestionnaire</SelectItem>
                     <SelectItem value="cashier">Caissier</SelectItem>
+                    <SelectItem value="ambassador">Ambassadeur</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

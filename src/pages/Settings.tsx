@@ -1314,7 +1314,7 @@ export default function Settings() {
     }, [user]);
     if (!user)
         return null;
-    if (user.role !== 'admin' && user.role !== 'super_admin' && user.role !== 'cashier' && user.role !== 'manager') {
+    if (user.role !== 'admin' && user.role !== 'super_admin' && user.role !== 'cashier' && user.role !== 'manager' && user.role !== 'ambassador') {
         return (<div className="p-8">
         <Card>
           <CardHeader>

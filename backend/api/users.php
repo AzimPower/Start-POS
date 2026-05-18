@@ -1,8 +1,10 @@
 <?php
 require_once './_bootstrap.php';
 init_api_headers();
+require_once './_ambassadors.php';
 
 require_once '../config.php';
+ensure_ambassador_schema($pdo);
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -67,7 +69,7 @@ switch ($method) {
             : ensure_store_access($authClaims, $requestedStoreId);
         if ($scopedStoreId !== '') {
             $stmt = $pdo->prepare(
-                'SELECT DISTINCT u.id, u.username, u.phone, u.email, u.pinEnabled, u.role, u.storeId, u.active, u.createdAt
+                'SELECT DISTINCT u.id, u.username, u.phone, u.email, u.pinEnabled, u.role, u.storeId, u.active, u.createdAt, u.promoCode, u.commissionRate, u.withdrawalPhone
                  FROM users u
                  LEFT JOIN user_stores us ON us.userId = u.id
                  WHERE u.storeId = ? OR us.storeId = ?'
@@ -75,7 +77,7 @@ switch ($method) {
             $stmt->execute([$scopedStoreId, $scopedStoreId]);
             $users = $stmt->fetchAll();
         } else {
-            $stmt = $pdo->query('SELECT id, username, phone, email, pinEnabled, role, storeId, active, createdAt FROM users');
+            $stmt = $pdo->query('SELECT id, username, phone, email, pinEnabled, role, storeId, active, createdAt, promoCode, commissionRate, withdrawalPhone FROM users');
             $users = $stmt->fetchAll();
         }
 
@@ -115,11 +117,33 @@ switch ($method) {
             exit;
         }
 
-        $sql = 'INSERT INTO users (id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $sql = 'INSERT INTO users (id, username, phone, email, password, pin, pinEnabled, role, storeId, active, createdAt, promoCode, commissionRate, withdrawalPhone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
         $id = $data['id'] ?? uniqid();
         $storeIds = normalize_store_ids($data['storeIds'] ?? null, $data['storeId'] ?? null);
         $firstStore = $storeIds[0] ?? null;
+        $role = (string)($data['role'] ?? '');
+        $promoCode = isset($data['promoCode']) ? trim((string)$data['promoCode']) : null;
+        $withdrawalPhone = isset($data['withdrawalPhone']) ? trim((string)$data['withdrawalPhone']) : null;
+        if ($role === 'ambassador' && ($withdrawalPhone === null || $withdrawalPhone === '')) {
+            $withdrawalPhone = trim((string)($data['phone'] ?? ''));
+        }
+        $commissionRate = isset($data['commissionRate']) ? (float)$data['commissionRate'] : 50.0;
+        if ($role === 'ambassador' && $promoCode === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Promo code is required for ambassadors']);
+            exit;
+        }
+
+        if ($promoCode !== null && $promoCode !== '') {
+            $promoCheck = $pdo->prepare('SELECT id FROM users WHERE promoCode = ? LIMIT 1');
+            $promoCheck->execute([$promoCode]);
+            if ($promoCheck->fetch(PDO::FETCH_ASSOC)) {
+                http_response_code(409);
+                echo json_encode(['error' => 'Promo code already exists']);
+                exit;
+            }
+        }
         $stmt->execute([
             $id,
             $data['username'],
@@ -128,10 +152,13 @@ switch ($method) {
             $passwordValue,
             build_pin_value($data['pin'] ?? null, ''),
             isset($data['pinEnabled']) ? ($data['pinEnabled'] ? 1 : 0) : 0,
-            $data['role'],
+            $role,
             $firstStore,
             $data['active'] ?? true,
-            $data['createdAt'] ?? time() * 1000
+            $data['createdAt'] ?? time() * 1000,
+            $promoCode !== '' ? $promoCode : null,
+            $role === 'ambassador' ? $commissionRate : null,
+            $withdrawalPhone !== '' ? $withdrawalPhone : null,
         ]);
 
         if (!empty($storeIds)) {
@@ -169,7 +196,7 @@ switch ($method) {
             exit;
         }
 
-        $existingStmt = $pdo->prepare('SELECT password, pin FROM users WHERE id = ?');
+        $existingStmt = $pdo->prepare('SELECT password, pin, promoCode FROM users WHERE id = ?');
         $existingStmt->execute([$data['id']]);
         $existingUser = $existingStmt->fetch();
         if (!$existingUser) {
@@ -178,11 +205,38 @@ switch ($method) {
             exit;
         }
 
-        $sql = 'UPDATE users SET username=?, phone=?, email=?, password=?, pin=?, pinEnabled=?, role=?, storeId=?, active=?, createdAt=? WHERE id=?';
+        $sql = 'UPDATE users SET username=?, phone=?, email=?, password=?, pin=?, pinEnabled=?, role=?, storeId=?, active=?, createdAt=?, promoCode=?, commissionRate=?, withdrawalPhone=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
 
         $storeIds = normalize_store_ids($data['storeIds'] ?? null, $data['storeId'] ?? null);
         $firstStore = $storeIds[0] ?? null;
+        $role = (string)($data['role'] ?? '');
+        $promoCode = array_key_exists('promoCode', $data)
+            ? trim((string)$data['promoCode'])
+            : (string)($existingUser['promoCode'] ?? '');
+        $withdrawalPhone = array_key_exists('withdrawalPhone', $data)
+            ? trim((string)$data['withdrawalPhone'])
+            : null;
+        if ($role === 'ambassador' && ($withdrawalPhone === null || $withdrawalPhone === '')) {
+            $withdrawalPhone = trim((string)($data['phone'] ?? ''));
+        }
+        $commissionRate = isset($data['commissionRate']) ? (float)$data['commissionRate'] : 50.0;
+
+        if ($role === 'ambassador' && $promoCode === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Promo code is required for ambassadors']);
+            exit;
+        }
+
+        if ($promoCode !== '') {
+            $promoCheck = $pdo->prepare('SELECT id FROM users WHERE promoCode = ? AND id <> ? LIMIT 1');
+            $promoCheck->execute([$promoCode, $data['id']]);
+            if ($promoCheck->fetch(PDO::FETCH_ASSOC)) {
+                http_response_code(409);
+                echo json_encode(['error' => 'Promo code already exists']);
+                exit;
+            }
+        }
 
         $stmt->execute([
             $data['username'],
@@ -191,10 +245,13 @@ switch ($method) {
             build_password_value($data['password'] ?? null, $existingUser['password'] ?? null),
             build_pin_value($data['pin'] ?? null, $existingUser['pin'] ?? null),
             isset($data['pinEnabled']) ? ($data['pinEnabled'] ? 1 : 0) : 0,
-            $data['role'],
+            $role,
             $firstStore,
             $data['active'],
             $data['createdAt'],
+            $promoCode !== '' ? $promoCode : null,
+            $role === 'ambassador' ? $commissionRate : null,
+            $withdrawalPhone !== '' ? $withdrawalPhone : null,
             $data['id']
         ]);
 
