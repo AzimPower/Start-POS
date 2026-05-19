@@ -87,7 +87,6 @@ interface ImportProductRow {
         price: number;
     }>;
     unit: string;
-    taxRate?: number;
     stock?: number;
     minStock?: number;
     trackStock: boolean;
@@ -220,7 +219,6 @@ export default function Products() {
             price: string;
         }>,
         unit: 'pièce',
-        taxRate: '',
         stock: '',
         minStock: '',
         trackStock: false,
@@ -391,7 +389,6 @@ export default function Products() {
             const targetMargin = parseImportNumber(getCell(cells, ['targetmargin', 'marge', 'margecible', 'pourcentage de gain cible']));
             const stock = parseImportNumber(getCell(cells, ['stock', 'stockinitial', 'stock_initial', 'stock initial']));
             const minStock = parseImportNumber(getCell(cells, ['minstock', 'stockmin', 'stock_min', 'stockminimal', 'stock minimal']));
-            const taxRate = parseImportNumber(getCell(cells, ['taxrate', 'tva', 'taxe', 'tva %']));
             const trackStockCell = getCell(cells, ['trackstock', 'suivistock', 'suivi_stock', 'suivi de stock']);
             const explicitTrackStock = trackStockCell.trim().length > 0 ? parseImportBoolean(trackStockCell) : undefined;
             rows.push({
@@ -403,7 +400,6 @@ export default function Products() {
                 targetMargin,
                 variablePrices,
                 unit: getCell(cells, ['unit', 'unite', 'unité', 'unite']).trim() || 'pièce',
-                taxRate,
                 stock,
                 minStock,
                 trackStock: explicitTrackStock ?? (stock != null || minStock != null),
@@ -438,7 +434,6 @@ export default function Products() {
             const targetMargin = parseImportNumber(getValue('targetmargin', 'marge', 'margecible', 'pourcentage de gain cible'));
             const stock = parseImportNumber(getValue('stock', 'stockinitial', 'stock_initial', 'stock initial'));
             const minStock = parseImportNumber(getValue('minstock', 'stockmin', 'stock_min', 'stockminimal', 'stock minimal'));
-            const taxRate = parseImportNumber(getValue('taxrate', 'tva', 'taxe', 'tva %'));
             const trackStockCell = String(getValue('trackstock', 'suivistock', 'suivi_stock', 'suivi de stock') ?? '').trim();
             const explicitTrackStock = trackStockCell ? parseImportBoolean(trackStockCell) : undefined;
             rows.push({
@@ -450,7 +445,6 @@ export default function Products() {
                 targetMargin,
                 variablePrices,
                 unit: String(getValue('unit', 'unite', 'unité') ?? '').trim() || 'pièce',
-                taxRate,
                 stock,
                 minStock,
                 trackStock: explicitTrackStock ?? (stock != null || minStock != null),
@@ -599,7 +593,6 @@ export default function Products() {
                     targetMargin: row.targetMargin,
                     variablePrices: row.variablePrices,
                     unit: row.unit || 'pièce',
-                    taxRate: row.taxRate,
                     stock: row.trackStock ? { [user.storeId]: row.stock ?? 0 } : {},
                     minStock: row.trackStock ? row.minStock : undefined,
                     imageUrl: row.imageUrl || '',
@@ -675,7 +668,6 @@ export default function Products() {
                     'Prix de revient': product.costPrice ?? '',
                     'Pourcentage de gain cible': product.targetMargin ?? '',
                     'Unité': product.unit || 'pièce',
-                    'TVA %': product.taxRate ?? '',
                     'Stock initial': stockQty,
                     'Stock minimal': minStock,
                     'Suivi de stock': product.trackStock ? 'oui' : 'non',
@@ -1042,7 +1034,6 @@ export default function Products() {
                         ? formData.variablePrices.map(vp => ({ label: vp.label, price: parseFloat(vp.price) }))
                         : undefined,
                     unit: formData.unit,
-                    taxRate: formData.taxRate ? parseFloat(formData.taxRate) : undefined,
                     stock: formData.trackStock ? {
                         ...currentStock,
                         [user.storeId]: formData.stock ? parseFloat(formData.stock) : 0,
@@ -1079,7 +1070,6 @@ export default function Products() {
                         ? formData.variablePrices.map(vp => ({ label: vp.label, price: parseFloat(vp.price) }))
                         : undefined,
                     unit: formData.unit,
-                    taxRate: formData.taxRate ? parseFloat(formData.taxRate) : undefined,
                     stock: formData.trackStock ? {
                         [user.storeId]: formData.stock ? parseFloat(formData.stock) : 0,
                     } : {},
@@ -1173,7 +1163,6 @@ export default function Products() {
                 targetMargin: currentProduct.targetMargin?.toString() || '',
                 variablePrices: currentProduct.variablePrices?.map(vp => ({ label: vp.label, price: vp.price.toString() })) || [],
                 unit: currentProduct.unit,
-                taxRate: currentProduct.taxRate?.toString() || '',
                 stock: (currentProduct.stock?.[user.storeId] || 0).toString(),
                 minStock: currentProduct.minStock?.toString() || '',
                 trackStock: currentProduct.stock ? Object.keys(currentProduct.stock).length > 0 : false,
@@ -1417,7 +1406,6 @@ export default function Products() {
             targetMargin: '',
             variablePrices: [],
             unit: 'pièce',
-            taxRate: '',
             stock: '',
             minStock: '',
             trackStock: false,
@@ -1982,11 +1970,6 @@ export default function Products() {
                   <p className="text-xs text-muted-foreground">
                     Calculé sur le prix de vente (gain / prix de vente)
                   </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>TVA % (optionnel)</Label>
-                  <Input type="number" step="0.01" value={formData.taxRate} onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })} placeholder="Ex: 18"/>
                 </div>
                 </div>
               </div>)}

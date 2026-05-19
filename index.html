@@ -23,8 +23,17 @@
       (function () {
         var hash = window.location.hash || '';
         var isAppRoute = /^#\/.+/.test(hash);
+        var ua = navigator.userAgent || '';
+        var isCapacitorRuntime = !!(window.Capacitor && (!window.Capacitor.isNativePlatform || window.Capacitor.isNativePlatform()));
+        var isAndroidWebView = /Android/i.test(ua) && /\bwv\b/i.test(ua);
+        var isLikelyNativeApp =
+          isCapacitorRuntime ||
+          window.location.protocol === 'capacitor:' ||
+          window.location.protocol === 'file:' ||
+          (window.location.hostname === 'localhost' && isAndroidWebView);
+
         if (!isAppRoute) {
-          window.location.replace('accueil.html');
+          window.location.replace(isLikelyNativeApp ? '/#/login' : 'accueil.html');
         }
       })();
     </script>

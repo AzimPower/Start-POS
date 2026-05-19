@@ -55,7 +55,7 @@ export function getReceiptItemDisplayTotal(item: ReceiptItemLike, receipt?: Rece
     const receiptHasNoTax = Math.abs(receiptTax) < 0.5 && Math.abs(receiptTotal - receiptSubtotal) < 0.5;
 
     if (receiptHasNoTax) {
-        return baseTotal;
+        return rawTotal > 0 ? rawTotal : baseTotal;
     }
 
     return rawTotal > 0 ? rawTotal : baseTotal;

@@ -6,6 +6,7 @@ export type SaleReceiptLineItem = {
     quantity: number;
     unitPrice: number;
     displayTotal: number;
+    discountAmount?: number;
 };
 
 export type SaleReceiptPaymentDetail = {
@@ -22,6 +23,7 @@ export type SaleReceiptDocumentData = {
     subtotal: number;
     tax: number;
     total: number;
+    discountTotal?: number;
     paymentMethod: string;
     paymentDetails?: SaleReceiptPaymentDetail[];
     cashReceived?: number;
@@ -109,22 +111,34 @@ export function buildSaleReceiptItemLines(item: SaleReceiptLineItem, paper?: Rec
     const totalText = `${toRoundedAmount(item.displayTotal)} FCFA`;
 
     if (resolvedPaper === '58') {
-        return [
+        const lines = [
             NativePrinter.formatColumns(itemName, '', width),
             NativePrinter.formatColumns(quantityText, totalText, width),
         ];
+        if (Number(item.discountAmount || 0) > 0) {
+            lines.push(NativePrinter.formatColumns('  Remise', `-${toRoundedAmount(item.discountAmount)} FCFA`, width));
+        }
+        return lines;
     }
 
     const leftFull = `${itemName} ${quantityText}`.trim();
 
     if (leftFull.length + 1 + totalText.length <= width) {
-        return [NativePrinter.formatColumns(leftFull, totalText, width)];
+        const lines = [NativePrinter.formatColumns(leftFull, totalText, width)];
+        if (Number(item.discountAmount || 0) > 0) {
+            lines.push(NativePrinter.formatColumns('Remise', `-${toRoundedAmount(item.discountAmount)} FCFA`, width));
+        }
+        return lines;
     }
 
-    return [
+    const lines = [
         NativePrinter.formatColumns(itemName, totalText, width),
         NativePrinter.formatColumns(quantityText, '', width),
     ];
+    if (Number(item.discountAmount || 0) > 0) {
+        lines.push(NativePrinter.formatColumns('Remise', `-${toRoundedAmount(item.discountAmount)} FCFA`, width));
+    }
+    return lines;
 }
 
 export function buildSaleReceiptLines(data: SaleReceiptDocumentData) {
@@ -164,6 +178,9 @@ export function buildSaleReceiptLines(data: SaleReceiptDocumentData) {
 
     lines.push(separator);
     lines.push(NativePrinter.formatColumns('Sous-total:', `${toRoundedAmount(data.subtotal)} FCFA`, width));
+    if (Number(data.discountTotal || 0) > 0) {
+        lines.push(NativePrinter.formatColumns('Remise:', `-${toRoundedAmount(data.discountTotal)} FCFA`, width));
+    }
     lines.push(NativePrinter.formatColumns('TVA:', `${toRoundedAmount(data.tax)} FCFA`, width));
     lines.push(NativePrinter.formatColumns('TOTAL:', `${toRoundedAmount(data.total)} FCFA`, width));
     lines.push('');

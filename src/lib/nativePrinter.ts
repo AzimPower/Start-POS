@@ -179,6 +179,20 @@ function normalizeLogoSource(source?: string | null): string | null {
         : `${BACKEND_BASE}/${trimmed}`;
 }
 
+function isCrossOriginSource(source?: string | null): boolean {
+    if (!source) {
+        return false;
+    }
+
+    try {
+        const parsed = new URL(source, window.location.origin);
+        return parsed.origin !== window.location.origin;
+    }
+    catch (err) {
+        return false;
+    }
+}
+
 export async function resolvePrintableLogoSource(storeId?: string | null): Promise<string | null> {
     const cachedLogo = getStoredPrintableLogo();
     if (cachedLogo && cachedLogo.startsWith('data:')) {
@@ -202,6 +216,15 @@ export async function resolvePrintableLogoSource(storeId?: string | null): Promi
         try {
             if (candidateSource.startsWith('data:')) {
                 await cachePrintableLogo(candidateSource, candidateSource);
+            } else if (storeId && isCrossOriginSource(candidateSource)) {
+                const apiLogo = await fetchPrintableLogoDataFromApi(storeId);
+                if (apiLogo?.dataUrl) {
+                    const normalizedSource = normalizeLogoSource(apiLogo.source) || candidateSource;
+                    safeLocalStorageSet(STORE_LOGO_KEY, normalizedSource);
+                    await cachePrintableLogo(normalizedSource, apiLogo.dataUrl).catch(() => {
+                    });
+                    return getStoredPrintableLogo(normalizedSource) || apiLogo.dataUrl;
+                }
             } else {
                 await cachePrintableLogo(candidateSource);
             }

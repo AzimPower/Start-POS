@@ -35,12 +35,15 @@ interface Sale {
         name: string;
         quantity: number;
         price: number;
+        subtotal?: number;
         tax: number;
         total: number;
+        discountAmount?: number;
     }>;
     subtotal: number;
     tax: number;
     total: number;
+    discountTotal?: number;
     paymentMethod: 'cash' | 'mobile_money' | 'mixed';
     payments: Array<{
         method: 'cash' | 'mobile_money';
@@ -328,6 +331,7 @@ export default function Receipts() {
             subtotal: Number(s.subtotal) || 0,
             tax: Number(s.tax) || 0,
             total: Number(s.total) || 0,
+            discountTotal: Number(s.discountTotal) || 0,
             refunded: isSaleRefunded(s),
             cashAmount: s.cashAmount !== undefined ? Number(s.cashAmount) : undefined,
             mobileMoneyAmount: s.mobileMoneyAmount !== undefined ? Number(s.mobileMoneyAmount) : undefined,
@@ -342,8 +346,10 @@ export default function Receipts() {
                     ...item,
                     quantity: Number(item.quantity) || 0,
                     price: Number(item.price) || 0,
+                    subtotal: Number(item.subtotal) || 0,
                     tax: Number(item.tax) || 0,
-                    total: Number(item.total) || 0
+                    total: Number(item.total) || 0,
+                    discountAmount: Number(item.discountAmount) || 0,
                 }))
             } : {})
         }));
@@ -439,10 +445,12 @@ export default function Receipts() {
                     quantity: Number(it.quantity) || 0,
                     unitPrice: isNaN(Number(it.price)) ? 0 : Math.round(Number(it.price)),
                     displayTotal: Math.round(getReceiptItemDisplayTotal(it, sale)),
+                    discountAmount: Number(it.discountAmount || 0),
                 })),
                 subtotal: sale.subtotal || 0,
                 tax: sale.tax || 0,
                 total: sale.total || 0,
+                discountTotal: sale.discountTotal || 0,
                 paymentMethod: sale.paymentMethod || '',
                 paymentDetails: sale.payments?.map((p) => ({
                     label: p.method === 'cash' ? 'Espèces' : p.method === 'mobile_money' ? 'Mobile Money' : p.method,
@@ -829,8 +837,10 @@ export default function Receipts() {
                 name: item.name,
                 quantity: item.quantity,
                 price: item.price,
+                subtotal: item.subtotal,
                 total: item.total,
-            }))} subtotal={selectedSale.subtotal} tax={selectedSale.tax} total={selectedSale.total} paymentMethod={selectedSale.paymentMethod} cashReceived={(selectedSale.payments || []).find(p => p.method === 'cash')?.amount} change={(() => {
+                discountAmount: item.discountAmount || 0,
+            }))} subtotal={selectedSale.subtotal} tax={selectedSale.tax} total={selectedSale.total} discountTotal={selectedSale.discountTotal || 0} paymentMethod={selectedSale.paymentMethod} cashReceived={(selectedSale.payments || []).find(p => p.method === 'cash')?.amount} change={(() => {
                 const payments = selectedSale.payments || [];
                 if (selectedSale.paymentMethod === 'cash') {
                     return (payments[0]?.amount || 0) - selectedSale.total;

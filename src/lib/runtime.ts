@@ -15,6 +15,18 @@ export function isDesktopApp() {
   return window.__START_POS_DESKTOP__?.isDesktop === true;
 }
 
+export function isNativeApp() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  if (isDesktopApp()) {
+    return true;
+  }
+
+  return !!(window as any).Capacitor;
+}
+
 export function getRuntimeLabel() {
   if (isDesktopApp()) {
     return window.__START_POS_DESKTOP__?.runtime || 'desktop';

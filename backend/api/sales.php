@@ -1,6 +1,7 @@
 <?php
 require_once './_bootstrap.php';
 init_api_headers();
+require_once './_sales_discounts.php';
 //
 //
 //
@@ -13,6 +14,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once '../config.php';
 require_once '../store_metrics.php';
+ensure_sales_discount_schema($pdo);
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -310,7 +312,7 @@ switch ($method) {
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
         $id = $data['id'] ?? uniqid();
-        $sql = 'INSERT INTO sales (id, shiftId, userId, storeId, customerId, subtotal, tax, total, paymentMethod, cashAmount, mobileMoneyAmount, otherAmount, createdAt, refunded, refundedAt, draft, completedAt, receiptSequence, receiptNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $sql = 'INSERT INTO sales (id, shiftId, userId, storeId, customerId, subtotal, tax, total, discountTotal, globalDiscountType, globalDiscountValue, globalDiscountAmount, paymentMethod, cashAmount, mobileMoneyAmount, otherAmount, createdAt, refunded, refundedAt, draft, completedAt, receiptSequence, receiptNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
         $stmt = $pdo->prepare($sql);
 
         try {
@@ -333,6 +335,10 @@ switch ($method) {
                 $data['subtotal'],
                 $data['tax'],
                 $data['total'],
+                $data['discountTotal'] ?? 0,
+                $data['globalDiscountType'] ?? null,
+                $data['globalDiscountValue'] ?? null,
+                $data['globalDiscountAmount'] ?? 0,
                 $data['paymentMethod'],
                 $data['cashAmount'] ?? null,
                 $data['mobileMoneyAmount'] ?? null,
@@ -347,7 +353,7 @@ switch ($method) {
             ]);
 
             if (isset($data['items']) && is_array($data['items'])) {
-                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
+                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, subtotal, tax, total, discountAmount, lineDiscountType, lineDiscountValue, lineDiscountAmount, globalDiscountShare, originalSubtotal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
                 $itemStmt = $pdo->prepare($itemSql);
                 foreach ($data['items'] as $item) {
                     $itemStmt->execute([
@@ -356,8 +362,15 @@ switch ($method) {
                         $item['name'],
                         $item['quantity'],
                         $item['price'],
+                        $item['subtotal'] ?? null,
                         $item['tax'],
-                        $item['total']
+                        $item['total'],
+                        $item['discountAmount'] ?? 0,
+                        $item['lineDiscountType'] ?? null,
+                        $item['lineDiscountValue'] ?? null,
+                        $item['lineDiscountAmount'] ?? 0,
+                        $item['globalDiscountShare'] ?? 0,
+                        $item['originalSubtotal'] ?? null,
                     ]);
                 }
             }
@@ -397,7 +410,7 @@ switch ($method) {
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
         $data['storeId'] = ensure_store_access($authClaims, $data['storeId'] ?? null);
-        $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=?, receiptSequence=?, receiptNumber=? WHERE id=?';
+        $sql = 'UPDATE sales SET shiftId=?, userId=?, storeId=?, customerId=?, subtotal=?, tax=?, total=?, discountTotal=?, globalDiscountType=?, globalDiscountValue=?, globalDiscountAmount=?, paymentMethod=?, cashAmount=?, mobileMoneyAmount=?, otherAmount=?, createdAt=?, refunded=?, refundedAt=?, draft=?, completedAt=?, receiptSequence=?, receiptNumber=? WHERE id=?';
         $stmt = $pdo->prepare($sql);
         try {
             $pdo->beginTransaction();
@@ -425,6 +438,10 @@ switch ($method) {
                 $data['subtotal'],
                 $data['tax'],
                 $data['total'],
+                $data['discountTotal'] ?? 0,
+                $data['globalDiscountType'] ?? null,
+                $data['globalDiscountValue'] ?? null,
+                $data['globalDiscountAmount'] ?? 0,
                 $data['paymentMethod'],
                 $data['cashAmount'] ?? null,
                 $data['mobileMoneyAmount'] ?? null,
@@ -443,7 +460,7 @@ switch ($method) {
                 $deleteStmt = $pdo->prepare('DELETE FROM sale_items WHERE saleId = ?');
                 $deleteStmt->execute([$data['id']]);
 
-                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, tax, total) VALUES (?, ?, ?, ?, ?, ?, ?)';
+                $itemSql = 'INSERT INTO sale_items (saleId, productId, name, quantity, price, subtotal, tax, total, discountAmount, lineDiscountType, lineDiscountValue, lineDiscountAmount, globalDiscountShare, originalSubtotal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
                 $itemStmt = $pdo->prepare($itemSql);
                 foreach ($data['items'] as $item) {
                     $itemStmt->execute([
@@ -452,8 +469,15 @@ switch ($method) {
                         $item['name'],
                         $item['quantity'],
                         $item['price'],
+                        $item['subtotal'] ?? null,
                         $item['tax'],
-                        $item['total']
+                        $item['total'],
+                        $item['discountAmount'] ?? 0,
+                        $item['lineDiscountType'] ?? null,
+                        $item['lineDiscountValue'] ?? null,
+                        $item['lineDiscountAmount'] ?? 0,
+                        $item['globalDiscountShare'] ?? 0,
+                        $item['originalSubtotal'] ?? null,
                     ]);
                 }
             }

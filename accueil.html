@@ -8,11 +8,11 @@
     name="description"
     content="START POS est une application de point de vente pour boutiques, alimentations, pharmacies et commerces: caisse, stock, recus, depenses, clients, rapports et mode hors ligne."
   />
-  <link rel="icon" type="image/svg+xml" href="favicon/favicon.svg" />
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon/icon-32x32.png" />
-  <link rel="icon" type="image/png" sizes="16x16" href="favicon/icon-16x16.png" />
-  <link rel="shortcut icon" href="favicon/favicon-96x96.png" />
-  <link rel="apple-touch-icon" href="favicon/apple-touch-icon.png" />
+  <link rel="icon" type="image/svg+xml" href="public/favicon/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="public/favicon/icon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="public/favicon/icon-16x16.png" />
+  <link rel="shortcut icon" href="public/favicon/favicon-96x96.png" />
+  <link rel="apple-touch-icon" href="public/favicon/apple-touch-icon.png" />
   <style>
     :root {
       --ink: #17212b;
@@ -1791,9 +1791,13 @@
 
       .section-head,
       .conversion-grid,
-      .final-cta-row,
       .roi-grid {
         grid-template-columns: 1fr;
+      }
+
+      .final-cta-row {
+        flex-direction: column;
+        align-items: flex-start;
       }
 
       .strip-grid,
@@ -1932,6 +1936,22 @@
         width: 100%;
       }
 
+      .conversion-grid > div:first-child {
+        padding: 0 10px;
+      }
+
+      .footer-links {
+        width: 100%;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: nowrap;
+        font-size: 0.72rem;
+      }
+
+      .footer-links a {
+        white-space: nowrap;
+      }
+
       section {
         padding: 54px 0;
       }
@@ -1976,7 +1996,7 @@
   <header class="topbar">
     <div class="container nav">
       <a class="brand" href="#accueil" aria-label="START POS">
-        <img class="brand-logo" src="favicon/favicon-96x96.png" alt="Logo START POS" />
+        <img class="brand-logo" src="public/favicon/favicon-96x96.png" alt="Logo START POS" />
         <span class="brand-name">START POS</span>
       </a>
 
@@ -1990,7 +2010,7 @@
 
       <div class="nav-actions">
         <a class="btn btn-login" href="/#/login">Connexion</a>
-        <a class="btn btn-primary" href="#demo">Demander une d&eacute;mo</a>
+        <a class="btn btn-primary" href="#demo">Essai Gratuit</a>
       </div>
     </div>
   </header>
@@ -1999,7 +2019,7 @@
     <section class="hero" aria-label="Presentation START POS">
       <div class="hero-media" aria-hidden="true">
         <video autoplay muted loop playsinline preload="metadata">
-          <source src="slide.mp4" type="video/mp4" />
+          <source src="public/slide.mp4" type="video/mp4" />
         </video>
       </div>
       <div class="container">
@@ -2037,7 +2057,7 @@
 
         <div class="hero-video-card" aria-label="Apercu video START POS">
           <video autoplay muted loop playsinline preload="metadata">
-            <source src="slide.mp4" type="video/mp4" />
+            <source src="public/slide.mp4" type="video/mp4" />
           </video>
         </div>
       </div>
@@ -2077,7 +2097,7 @@
         <div class="device-stage product-visual-only" data-focus="desktop" aria-label="Apercu visuel de START POS">
           <figure class="hero-showcase" id="hero-showcase">
             <span class="hero-badge top-left">Vue multi-ecrans</span>
-            <img src="hero-pos-preview.png" alt="Presentation START POS sur ordinateur, tablette et mobile." loading="lazy" />
+            <img src="public/hero-pos-preview.png" alt="Presentation START POS sur ordinateur, tablette et mobile." loading="lazy" />
           </figure>
         </div>
       </div>

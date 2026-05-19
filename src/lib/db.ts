@@ -181,6 +181,8 @@ interface POSDB extends DBSchema {
             id: string;
             name: string;
             address: string;
+            allowSalesDiscounts?: boolean;
+            vatRate?: number | null;
             trackIndirectExpenses?: boolean;
             trackIndirectExpensesEnabledAt?: number | null;
             active?: boolean;
@@ -293,12 +295,24 @@ interface POSDB extends DBSchema {
                 name: string;
                 quantity: number;
                 price: number;
+                priceLabel?: string;
+                subtotal?: number;
                 tax: number;
                 total: number;
+                discountAmount?: number;
+                lineDiscountType?: 'percent' | 'fixed' | null;
+                lineDiscountValue?: number | null;
+                lineDiscountAmount?: number;
+                globalDiscountShare?: number;
+                originalSubtotal?: number;
             }>;
             subtotal: number;
             tax: number;
             total: number;
+            discountTotal?: number;
+            globalDiscountType?: 'percent' | 'fixed' | null;
+            globalDiscountValue?: number | null;
+            globalDiscountAmount?: number;
             paymentMethod: 'cash' | 'mobile_money' | 'mixed';
             cashAmount?: number; // Montant payé en espèces
             mobileMoneyAmount?: number; // Montant payé via mobile money

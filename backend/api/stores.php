@@ -8,6 +8,7 @@ error_reporting(E_ALL);
 require_once './_bootstrap.php';
 init_api_headers();
 require_once './_ambassadors.php';
+require_once './_sales_discounts.php';
 //
 //
 //
@@ -25,6 +26,7 @@ if (false && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 require_once '../config.php';
 require_once '../store_metrics.php';
 ensure_ambassador_schema($pdo);
+ensure_sales_discount_schema($pdo);
 
 $method = $_SERVER['REQUEST_METHOD'];
 $authClaims = require_auth();
@@ -64,6 +66,34 @@ function resolve_track_indirect_enabled_at($nextTracking, $requestedEnabledAt, $
 try {
     switch ($method) {
         case 'GET':
+            $requestedStoreId = isset($_GET['id']) ? trim((string)$_GET['id']) : '';
+            if ($requestedStoreId !== '') {
+                if (is_super_admin_claims($authClaims)) {
+                    $stmt = $pdo->prepare('SELECT * FROM stores WHERE id = ? LIMIT 1');
+                    $stmt->execute([$requestedStoreId]);
+                } else {
+                    $allowedStoreIdsFast = get_claim_store_ids($authClaims);
+                    if (empty($allowedStoreIdsFast) || !in_array($requestedStoreId, $allowedStoreIdsFast, true)) {
+                        http_response_code(404);
+                        echo json_encode(['error' => 'Store not found']);
+                        break;
+                    }
+                    $stmt = $pdo->prepare('SELECT * FROM stores WHERE active = 1 AND id = ? LIMIT 1');
+                    $stmt->execute([$requestedStoreId]);
+                }
+
+                $store = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$store) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Store not found']);
+                    break;
+                }
+
+                $stores = store_metrics_build_for_stores($pdo, [$store]);
+                echo json_encode($stores[0] ?? $store);
+                break;
+            }
+
             $includeInactiveFast = isset($_GET['include_inactive']) && $_GET['include_inactive'] === '1' && is_super_admin_claims($authClaims);
             if (is_super_admin_claims($authClaims)) {
                 if ($includeInactiveFast) {
@@ -118,6 +148,8 @@ try {
                     // Preference boutique pour StockSignals (par defaut: activee)
                     $store['trackIndirectExpenses'] = true;
                     $store['trackIndirectExpensesEnabledAt'] = null;
+                    $store['allowSalesDiscounts'] = false;
+                    $store['vatRate'] = 0.0;
                     // Solde calculé (comme avant)
                     $ovStmt = $pdo->prepare('SELECT * FROM store_balance_overrides WHERE storeId = ? ORDER BY appliedAt DESC, createdAt DESC LIMIT 1');
                     $ovStmt->execute([$store['id']]);
@@ -142,6 +174,12 @@ try {
                         if (isset($settings['trackIndirectExpenses'])) {
                             $store['trackIndirectExpenses'] = ((int)$settings['trackIndirectExpenses'] === 1);
                         }
+                        if (isset($settings['allowSalesDiscounts'])) {
+                            $store['allowSalesDiscounts'] = ((int)$settings['allowSalesDiscounts'] === 1);
+                        }
+                        if (isset($settings['vatRate'])) {
+                            $store['vatRate'] = (float)$settings['vatRate'];
+                        }
                         $store['trackIndirectExpensesEnabledAt'] = normalize_optional_timestamp($settings['trackIndirectExpensesEnabledAt'] ?? null);
                         // expose configured categories to the API consumer
                         $store['fondCategories'] = $fondCats;
@@ -151,7 +189,7 @@ try {
                     // margins are calculated per product (price - costPrice).
                     if ($appliedAt) {
                         // total revenue (excluding tax) since appliedAt - only from closed shifts
-                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                         $revStmt->execute([$store['id'], $appliedAt]);
                         $salesRevenue = (float)$revStmt->fetchColumn();
 
@@ -205,7 +243,7 @@ try {
                         $expOpStmt->execute([$store['id'], $appliedAt]);
                         $expensesOperational = (float)$expOpStmt->fetchColumn();
                     } else {
-                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND (s.shiftId IS NULL OR sh.status = "closed")');
+                        $revStmt = $pdo->prepare('SELECT IFNULL(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND (s.shiftId IS NULL OR sh.status = "closed")');
                         $revStmt->execute([$store['id']]);
                         $salesRevenue = (float)$revStmt->fetchColumn();
 
@@ -361,7 +399,7 @@ try {
                         $benAppliedAt = $benRow['appliedAt'] ? (int)$benRow['appliedAt'] : null;
                         if ($benAppliedAt) {
                             // revenue since appliedAt - only from closed shifts
-                            $revSinceStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
+                            $revSinceStmt = $pdo->prepare('SELECT IFNULL(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND s.createdAt >= ? AND (s.shiftId IS NULL OR sh.status = "closed")');
                             $revSinceStmt->execute([$store['id'], $benAppliedAt]);
                             $salesSince = (float)$revSinceStmt->fetchColumn();
                             // cogs since appliedAt - only from closed shifts
@@ -404,7 +442,7 @@ try {
                             $store['benefice'] = round($benBase + $margeSince - $expensesOperationalSince, 2);
                         } else {
                             // No appliedAt -> treat override value as base and include all transactions from closed shifts
-                            $revAllStmt = $pdo->prepare('SELECT IFNULL(SUM(si.price * si.quantity),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND (s.shiftId IS NULL OR sh.status = "closed")');
+                            $revAllStmt = $pdo->prepare('SELECT IFNULL(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)),0) FROM sales s JOIN sale_items si ON s.id = si.saleId LEFT JOIN shifts sh ON s.shiftId = sh.id WHERE s.storeId = ? AND s.refunded = 0 AND (s.shiftId IS NULL OR sh.status = "closed")');
                             $revAllStmt->execute([$store['id']]);
                             $salesAll = (float)$revAllStmt->fetchColumn();
                             $cogsAllStmt = $pdo->prepare('SELECT IFNULL(SUM(
@@ -533,6 +571,10 @@ try {
                     $fondCats = isset($data['fondCategories']) && is_array($data['fondCategories']) ? json_encode($data['fondCategories']) : null;
                     $benCats = isset($data['beneficeCategories']) && is_array($data['beneficeCategories']) ? json_encode($data['beneficeCategories']) : null;
                     $trackIndirectExpenses = isset($data['trackIndirectExpenses']) ? ((int)!!$data['trackIndirectExpenses']) : null;
+                    $allowSalesDiscounts = isset($data['allowSalesDiscounts']) ? ((int)!!$data['allowSalesDiscounts']) : null;
+                    $vatRate = array_key_exists('vatRate', $data) && $data['vatRate'] !== '' && $data['vatRate'] !== null
+                        ? (float)$data['vatRate']
+                        : null;
                     $requestedEnabledAt = normalize_optional_timestamp($data['trackIndirectExpensesEnabledAt'] ?? null);
                     try {
                         // upsert logic: if exists update else insert
@@ -543,17 +585,32 @@ try {
                         $trackIndirectExpensesEnabledAt = resolve_track_indirect_enabled_at($trackIndirectExpenses, $requestedEnabledAt, $existing, $now);
                         if (!$existing) {
                             $id = $data['id'] ?? uniqid();
-                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-                            $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $now]);
+                            $ins = $pdo->prepare('INSERT INTO store_balance_settings (id, storeId, fondCategories, beneficeCategories, trackIndirectExpenses, trackIndirectExpensesEnabledAt, allowSalesDiscounts, vatRate, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                            $ins->execute([$id, $storeId, $fondCats, $benCats, $trackIndirectExpenses === null ? 1 : $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $allowSalesDiscounts === null ? 0 : $allowSalesDiscounts, $vatRate === null ? 0 : $vatRate, $now, $now]);
                             store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true, 'id' => $id]);
                         } else {
-                            if ($trackIndirectExpenses === null) {
+                            if ($trackIndirectExpenses === null && $allowSalesDiscounts === null && $vatRate === null) {
                                 $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, updatedAt = ? WHERE storeId = ?');
                                 $upd->execute([$fondCats, $benCats, $now, $storeId]);
-                            } else {
+                            } else if ($trackIndirectExpenses === null && $vatRate === null) {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, allowSalesDiscounts = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $allowSalesDiscounts, $now, $storeId]);
+                            } else if ($allowSalesDiscounts === null && $vatRate === null) {
                                 $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, updatedAt = ? WHERE storeId = ?');
                                 $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $now, $storeId]);
+                            } else if ($trackIndirectExpenses === null && $allowSalesDiscounts === null) {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, vatRate = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $vatRate, $now, $storeId]);
+                            } else if ($trackIndirectExpenses === null) {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, allowSalesDiscounts = ?, vatRate = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $allowSalesDiscounts, $vatRate, $now, $storeId]);
+                            } else if ($allowSalesDiscounts === null) {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, vatRate = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $vatRate, $now, $storeId]);
+                            } else {
+                                $upd = $pdo->prepare('UPDATE store_balance_settings SET fondCategories = ?, beneficeCategories = ?, trackIndirectExpenses = ?, trackIndirectExpensesEnabledAt = ?, allowSalesDiscounts = ?, vatRate = ?, updatedAt = ? WHERE storeId = ?');
+                                $upd->execute([$fondCats, $benCats, $trackIndirectExpenses, $trackIndirectExpensesEnabledAt, $allowSalesDiscounts, $vatRate, $now, $storeId]);
                             }
                             store_metrics_invalidate_cache($storeId);
                             echo json_encode(['success' => true]);

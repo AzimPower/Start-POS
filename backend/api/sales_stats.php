@@ -1,10 +1,12 @@
 <?php
 require_once '../config.php';
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/_sales_discounts.php';
 
 init_api_headers(['GET', 'OPTIONS']);
 $claims = require_auth();
 $currentUserId = trim((string)($claims['sub'] ?? ''));
+ensure_sales_discount_schema($pdo);
 
 $start = isset($_GET['start']) ? intval($_GET['start']) : null; // timestamps in ms
 $end = isset($_GET['end']) ? intval($_GET['end']) : null;
@@ -106,7 +108,7 @@ $rembRow = $rembStmt->fetch(PDO::FETCH_ASSOC);
 $remboursements = (float)($rembRow['remboursements'] ?? 0);
 
 // Build marge query with hour filtering
-$margeSql = "SELECT SUM( (CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrute FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
+$margeSql = "SELECT SUM( ((CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0)) - COALESCE(si.discountAmount,0) ) as margeBrute FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
 
 // Add hour filtering for marge calculation
 if ($startHour && $endHour) {
@@ -134,7 +136,7 @@ $margeRow = $margeStmt->fetch(PDO::FETCH_ASSOC);
 $margeBrute = (float)($margeRow['margeBrute'] ?? 0);
 
 // Sales by product
-$productsSql = "SELECT p.name as productName, SUM(COALESCE(si.quantity,0)) as quantity, SUM(CAST(si.price AS DECIMAL(20,2)) * COALESCE(si.quantity,0)) as total FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
+$productsSql = "SELECT p.name as productName, SUM(COALESCE(si.quantity,0)) as quantity, SUM((CAST(si.price AS DECIMAL(20,2)) * COALESCE(si.quantity,0)) - COALESCE(si.discountAmount,0)) as total FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
 
 // Add hour filtering for products
 if ($startHour && $endHour) {
@@ -246,7 +248,7 @@ $evolSurplus = $surplus - $prevSurplus;
 $evolManque = $manque - $prevManque;
 
 // Calcul marge brute pour la période précédente
-$prevMargeSql = "SELECT SUM( (CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0) ) as margeBrutePrev FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
+$prevMargeSql = "SELECT SUM( ((CASE WHEN p.targetMargin IS NOT NULL AND p.targetMargin <> 0 THEN (COALESCE(si.price,0) * (p.targetMargin/100.0)) WHEN p.costPrice IS NOT NULL AND p.costPrice <> 0 THEN (COALESCE(si.price,0) - p.costPrice) ELSE (COALESCE(si.price,0) - COALESCE(p.costPrice,0)) END) * COALESCE(si.quantity,0)) - COALESCE(si.discountAmount,0) ) as margeBrutePrev FROM sale_items si JOIN sales s ON si.saleId = s.id LEFT JOIN products p ON si.productId = p.id WHERE s.createdAt >= ? AND s.createdAt <= ? AND s.refunded = 0";
 
 if ($startHour && $endHour) {
     $prevMargeSql .= ' AND (HOUR(FROM_UNIXTIME(s.createdAt/1000)) * 60 + MINUTE(FROM_UNIXTIME(s.createdAt/1000))) >= ? AND (HOUR(FROM_UNIXTIME(s.createdAt/1000)) * 60 + MINUTE(FROM_UNIXTIME(s.createdAt/1000))) <= ?';

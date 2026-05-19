@@ -32,12 +32,15 @@ interface Sale {
         name: string;
         quantity: number;
         price: number;
+        subtotal?: number;
         tax: number;
         total: number;
+        discountAmount?: number;
     }>;
     subtotal: number;
     tax: number;
     total: number;
+    discountTotal?: number;
     paymentMethod: 'cash' | 'mobile_money' | 'mixed';
     payments: Array<{
         method: 'cash' | 'mobile_money';
@@ -290,6 +293,7 @@ export default function CustomerReceipts() {
             subtotal: Number(sale.subtotal) || 0,
             tax: Number(sale.tax) || 0,
             total: Number(sale.total) || 0,
+            discountTotal: Number(sale.discountTotal) || 0,
             refunded: isSaleRefunded(sale),
             createdAt: Number(sale.createdAt) || Date.now(),
             refundedAt: sale.refundedAt ? Number(sale.refundedAt) : null,
@@ -298,8 +302,10 @@ export default function CustomerReceipts() {
                     ...item,
                     quantity: Number(item.quantity) || 0,
                     price: Number(item.price) || 0,
+                    subtotal: Number(item.subtotal) || 0,
                     tax: Number(item.tax) || 0,
                     total: Number(item.total) || 0,
+                    discountAmount: Number(item.discountAmount) || 0,
                 }))
                 : [],
         }));
@@ -384,10 +390,12 @@ export default function CustomerReceipts() {
                     quantity: Number(item.quantity) || 0,
                     unitPrice: Number.isNaN(Number(item.price)) ? 0 : Math.round(Number(item.price)),
                     displayTotal: Math.round(getReceiptItemDisplayTotal(item, sale)),
+                    discountAmount: Number(item.discountAmount || 0),
                 })),
                 subtotal: sale.subtotal || 0,
                 tax: sale.tax || 0,
                 total: sale.total || 0,
+                discountTotal: sale.discountTotal || 0,
                 paymentMethod: sale.paymentMethod || '',
                 paymentDetails: sale.payments?.map((payment) => ({
                     label: payment.method === 'cash' ? 'Espèces' : payment.method === 'mobile_money' ? 'Mobile Money' : payment.method,
@@ -827,11 +835,14 @@ export default function CustomerReceipts() {
                         name: item.name,
                         quantity: item.quantity,
                         price: item.price,
+                        subtotal: item.subtotal,
                         total: item.total,
+                        discountAmount: item.discountAmount || 0,
                     }))}
                     subtotal={selectedSale.subtotal}
                     tax={selectedSale.tax}
                     total={selectedSale.total}
+                    discountTotal={selectedSale.discountTotal || 0}
                     paymentMethod={selectedSale.paymentMethod}
                     cashReceived={(selectedSale.payments || []).find((payment) => payment.method === 'cash')?.amount}
                     change={(() => {

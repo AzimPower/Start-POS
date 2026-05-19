@@ -235,14 +235,15 @@ export default function Dashboard() {
             for (const item of saleItems) {
                 const quantity = Number(item?.quantity) || 0;
                 const price = Number(item?.price) || 0;
-                const total = price * quantity;
+                const discountAmount = Number(item?.discountAmount) || 0;
+                const total = (price * quantity) - discountAmount;
                 const product = productById.get(String(item?.productId || ''));
                 const targetMargin = Number(product?.targetMargin);
                 const costPrice = Number(product?.costPrice);
                 const unitMargin = Number.isFinite(targetMargin) && targetMargin !== 0
                     ? price * (targetMargin / 100)
                     : (Number.isFinite(costPrice) && costPrice !== 0 ? price - costPrice : price - (Number.isFinite(costPrice) ? costPrice : 0));
-                margeBrute += unitMargin * quantity;
+                margeBrute += (unitMargin * quantity) - discountAmount;
                 const key = String(item?.productId || item?.name || 'unknown');
                 const current = productTotals.get(key) || { name: String(item?.name || product?.name || 'Unknown'), quantity: 0, total: 0 };
                 current.quantity += quantity;

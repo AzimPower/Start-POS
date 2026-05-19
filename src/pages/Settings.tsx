@@ -278,6 +278,17 @@ export default function Settings() {
             if (!myStore) {
                 setStoreError('Aucun magasin correspondant à votre compte trouvé dans la base de données.');
             }
+            if (myStore?.id) {
+                try {
+                    const db = await getDB();
+                    await db.put('stores', myStore);
+                    window.dispatchEvent(new CustomEvent('pos:store-updated', {
+                        detail: { store: myStore }
+                    }));
+                }
+                catch (e) {
+                }
+            }
             setStore(myStore);
             if (myStore) {
                 setFondValue(String(typeof myStore.fond_roulement !== 'undefined' && myStore.fond_roulement !== null ? myStore.fond_roulement : 0));
@@ -522,6 +533,87 @@ export default function Settings() {
             toast.error('Erreur réseau');
         }
         finally {
+            setLoadingStore(false);
+        }
+    };
+    const handleToggleSalesDiscounts = async (checked: boolean) => {
+        if (!store) {
+            return;
+        }
+        try {
+            setLoadingStore(true);
+            const body = {
+                action: 'set_balance_settings',
+                storeId: store.id,
+                fondCategories: selectedFondCats,
+                beneficeCategories: selectedBenefCats,
+                allowSalesDiscounts: checked,
+            };
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const resp = await res.json();
+            if (resp && resp.success) {
+                const db = await getDB();
+                const updatedStore = store ? { ...store, allowSalesDiscounts: checked } : store;
+                if (updatedStore?.id) {
+                    await db.put('stores', updatedStore);
+                    window.dispatchEvent(new CustomEvent('pos:store-updated', {
+                        detail: { store: updatedStore }
+                    }));
+                }
+                setStore(updatedStore);
+                toast.success(checked
+                    ? 'Remises en caisse activées'
+                    : 'Remises en caisse désactivées');
+            } else {
+                toast.error(resp?.error || 'Erreur lors de la sauvegarde');
+            }
+        } catch (e) {
+            toast.error('Erreur réseau');
+        } finally {
+            setLoadingStore(false);
+        }
+    };
+    const handleToggleVatRate = async (checked: boolean) => {
+        if (!store) {
+            return;
+        }
+        const vatRate = checked ? 18 : 0;
+        try {
+            setLoadingStore(true);
+            const body = {
+                action: 'set_balance_settings',
+                storeId: store.id,
+                fondCategories: selectedFondCats,
+                beneficeCategories: selectedBenefCats,
+                vatRate,
+            };
+            const res = await fetch(`${BACKEND_BASE}/api/stores.php`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const resp = await res.json();
+            if (resp && resp.success) {
+                const db = await getDB();
+                const updatedStore = { ...store, vatRate };
+                if (updatedStore?.id) {
+                    await db.put('stores', updatedStore);
+                    window.dispatchEvent(new CustomEvent('pos:store-updated', {
+                        detail: { store: updatedStore }
+                    }));
+                }
+                setStore(updatedStore);
+                toast.success('TVA du magasin mise à jour');
+            } else {
+                toast.error(resp?.error || 'Erreur lors de la sauvegarde');
+            }
+        } catch (e) {
+            toast.error('Erreur réseau');
+        } finally {
             setLoadingStore(false);
         }
     };
@@ -1784,6 +1876,24 @@ export default function Settings() {
                               </div>
                             </CardContent>
                           </Card>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background/80 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium">Remises en caisse</p>
+                            <p className="text-xs text-muted-foreground">Affiche l&apos;option de remise par article ou globale pendant une vente.</p>
+                          </div>
+                          <Switch checked={!!store.allowSalesDiscounts} onCheckedChange={(checked) => void handleToggleSalesDiscounts(checked)} disabled={loadingStore}/>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background/80 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium">TVA 18%</p>
+                            <p className="text-xs text-muted-foreground">Active ou désactive la TVA fixe de 18% pour toutes les ventes du magasin.</p>
+                          </div>
+                          <Switch checked={Number(store.vatRate ?? 0) === 18} onCheckedChange={(checked) => void handleToggleVatRate(checked)} disabled={loadingStore}/>
                         </div>
                       </div>
                       {store.solde_manual_note && (<p className="text-xs text-muted-foreground">Dernière note : {store.solde_manual_note}</p>)}

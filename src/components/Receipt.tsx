@@ -14,7 +14,10 @@ interface ReceiptItem {
     name: string;
     quantity: number;
     price: number;
+    subtotal?: number;
+    tax?: number;
     total: number;
+    discountAmount?: number;
 }
 
 interface ReceiptProps {
@@ -26,6 +29,7 @@ interface ReceiptProps {
     subtotal: number;
     tax: number;
     total: number;
+    discountTotal?: number;
     paymentMethod: string;
     cashReceived?: number;
     change?: number;
@@ -49,6 +53,7 @@ export default function Receipt({
     subtotal,
     tax,
     total,
+    discountTotal,
     paymentMethod,
     cashReceived,
     change,
@@ -134,10 +139,12 @@ export default function Receipt({
                     quantity: item.quantity,
                     unitPrice: Number.isNaN(item.price) ? 0 : Number(item.price),
                     displayTotal: getReceiptItemDisplayTotal(item, { subtotal, tax, total }),
+                    discountAmount: Number(item.discountAmount || 0),
                 })),
                 subtotal,
                 tax,
                 total,
+                discountTotal,
                 paymentMethod,
                 paymentDetails,
                 cashReceived,
@@ -196,6 +203,9 @@ export default function Receipt({
                                     <span>{item.quantity} x {Number.isNaN(item.price) ? 0 : item.price.toFixed(0)} FCFA</span>
                                     <span>{getReceiptItemDisplayTotal(item, { subtotal, tax, total }).toFixed(0)} FCFA</span>
                                 </div>
+                                {Number(item.discountAmount || 0) > 0 ? (
+                                    <div className="text-[11px] text-muted-foreground">Remise: -{Number(item.discountAmount || 0).toFixed(0)} FCFA</div>
+                                ) : null}
                             </div>
                         ))}
                     </div>
@@ -205,6 +215,12 @@ export default function Receipt({
                             <span>Sous-total:</span>
                             <span>{subtotal.toFixed(0)} FCFA</span>
                         </div>
+                        {Number(discountTotal || 0) > 0 ? (
+                            <div className="total-row flex justify-between mb-2">
+                                <span>Remise:</span>
+                                <span>-{Number(discountTotal || 0).toFixed(0)} FCFA</span>
+                            </div>
+                        ) : null}
                         <div className="total-row flex justify-between mb-2">
                             <span>TVA:</span>
                             <span>{tax.toFixed(0)} FCFA</span>

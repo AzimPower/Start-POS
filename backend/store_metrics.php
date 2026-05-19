@@ -1,8 +1,13 @@
 <?php
 require_once __DIR__ . '/cache.php';
+require_once __DIR__ . '/api/_sales_discounts.php';
 
 const STORE_METRICS_CACHE_NAMESPACE = 'store_metrics';
 const STORE_METRICS_CACHE_TTL_SECONDS = 45;
+
+function store_metrics_ensure_discount_schema(PDO $pdo): void {
+    ensure_sales_discount_schema($pdo);
+}
 
 function store_metrics_day_start_ms(int $timestamp): int {
     if ($timestamp <= 0) {
@@ -59,6 +64,7 @@ function store_metrics_delete_store_summaries(PDO $pdo, string $storeId): void {
 }
 
 function store_metrics_refresh_sales_summary_for_timestamp(PDO $pdo, ?string $storeId, ?int $timestamp): void {
+    store_metrics_ensure_discount_schema($pdo);
     $storeId = trim((string)$storeId);
     $timestamp = (int)$timestamp;
     if ($storeId === '' || $timestamp <= 0 || !store_metrics_has_summary_tables($pdo)) {
@@ -70,9 +76,10 @@ function store_metrics_refresh_sales_summary_for_timestamp(PDO $pdo, ?string $st
 
     $salesStmt = $pdo->prepare(
         'SELECT
-            COUNT(*) AS transactions,
-            COALESCE(SUM(CAST(s.total AS DECIMAL(20,2))), 0) AS revenue
+            COUNT(DISTINCT s.id) AS transactions,
+            COALESCE(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)), 0) AS revenue
          FROM sales s
+         JOIN sale_items si ON s.id = si.saleId
          LEFT JOIN shifts sh ON s.shiftId = sh.id
          WHERE s.storeId = ?
            AND s.createdAt >= ?
@@ -291,6 +298,7 @@ function store_metrics_fetch_latest_indicator_overrides_map(PDO $pdo, array $sto
 }
 
 function store_metrics_fetch_all_time_sales_map(PDO $pdo, array $storeIds): array {
+    store_metrics_ensure_discount_schema($pdo);
     if (empty($storeIds)) {
         return [];
     }
@@ -326,7 +334,7 @@ function store_metrics_fetch_all_time_sales_map(PDO $pdo, array $storeIds): arra
     $revenueStmt = $pdo->prepare(
         "SELECT
             s.storeId,
-            COALESCE(SUM(si.price * si.quantity), 0) AS revenue
+            COALESCE(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)), 0) AS revenue
          FROM sales s
          JOIN sale_items si ON s.id = si.saleId
          LEFT JOIN shifts sh ON s.shiftId = sh.id
@@ -513,6 +521,7 @@ function store_metrics_sum_categories(array $categoryTotals, array $categoryIds)
 }
 
 function store_metrics_fetch_window_metrics(PDO $pdo, string $storeId, int $sinceTimestamp): array {
+    store_metrics_ensure_discount_schema($pdo);
     static $requestCache = [];
     $cacheKey = $storeId . '|' . $sinceTimestamp;
     if (isset($requestCache[$cacheKey])) {
@@ -530,7 +539,7 @@ function store_metrics_fetch_window_metrics(PDO $pdo, string $storeId, int $sinc
     ];
 
     $revenueStmt = $pdo->prepare(
-        'SELECT COALESCE(SUM(si.price * si.quantity), 0)
+        'SELECT COALESCE(SUM((si.price * si.quantity) - COALESCE(si.discountAmount, 0)), 0)
          FROM sales s
          JOIN sale_items si ON s.id = si.saleId
          LEFT JOIN shifts sh ON s.shiftId = sh.id
@@ -628,6 +637,8 @@ function store_metrics_compute_for_stores_uncached(PDO $pdo, array $stores): arr
         $benefCats = [];
         $trackIndirectExpenses = true;
         $trackIndirectExpensesEnabledAt = null;
+        $allowSalesDiscounts = false;
+        $vatRate = 0.0;
 
         if ($settings) {
             $fondCats = isset($settings['fondCategories']) && $settings['fondCategories']
@@ -645,6 +656,12 @@ function store_metrics_compute_for_stores_uncached(PDO $pdo, array $stores): arr
             if (isset($settings['trackIndirectExpenses'])) {
                 $trackIndirectExpenses = (int)$settings['trackIndirectExpenses'] === 1;
             }
+            if (isset($settings['allowSalesDiscounts'])) {
+                $allowSalesDiscounts = (int)$settings['allowSalesDiscounts'] === 1;
+            }
+            if (isset($settings['vatRate'])) {
+                $vatRate = (float)$settings['vatRate'];
+            }
             $trackIndirectExpensesEnabledAt = isset($settings['trackIndirectExpensesEnabledAt']) && $settings['trackIndirectExpensesEnabledAt'] !== null
                 ? (int)$settings['trackIndirectExpensesEnabledAt']
                 : null;
@@ -652,6 +669,8 @@ function store_metrics_compute_for_stores_uncached(PDO $pdo, array $stores): arr
 
         $store['trackIndirectExpenses'] = $trackIndirectExpenses;
         $store['trackIndirectExpensesEnabledAt'] = $trackIndirectExpensesEnabledAt;
+        $store['allowSalesDiscounts'] = $allowSalesDiscounts;
+        $store['vatRate'] = $vatRate;
         $store['fondCategories'] = $fondCats;
         $store['beneficeCategories'] = $benefCats;
 

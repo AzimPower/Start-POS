@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plus, Receipt, Package, Settings, Trash2, Eye, Edit, Wifi, WifiOff } from 'lucide-react';
+import { Plus, Receipt, Package, Settings, Trash2, Eye, Edit, Wifi, WifiOff, FileSpreadsheet, FileText } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import './expenses.css';
 import { toast } from 'sonner';
@@ -1049,6 +1049,203 @@ export default function Expenses() {
         return filtered;
     }, [filteredExpenses, debouncedSearchQuery, typeFilter, products, expenseCategories]);
     // Liste paginée réellement affichée (slice des résultats filtrés)
+    const formatDateForFilename = useCallback((value?: string) => {
+        if (!value) {
+            return '';
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return '';
+        }
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = String(date.getFullYear());
+        return `${day}-${month}-${year}`;
+    }, []);
+    const getPeriodLabel = useCallback(() => {
+        switch (filterOption) {
+            case 'today':
+                return "Aujourd'hui";
+            case 'yesterday':
+                return 'Hier';
+            case 'thisWeek':
+                return 'Cette semaine';
+            case 'thisMonth':
+                return 'Ce mois';
+            case 'thisYear':
+                return 'Cette année';
+            case 'custom':
+                if (customStart && customEnd) {
+                    return `${new Date(customStart).toLocaleDateString('fr-FR')} - ${new Date(customEnd).toLocaleDateString('fr-FR')}`;
+                }
+                return 'Période personnalisée';
+            default:
+                return 'Période sélectionnée';
+        }
+    }, [filterOption, customStart, customEnd]);
+    const getExportFilenamePart = useCallback(() => {
+        if (filterOption === 'custom' && customStart && customEnd) {
+            return `${formatDateForFilename(customStart)}_${formatDateForFilename(customEnd)}`;
+        }
+        return filterOption;
+    }, [filterOption, customStart, customEnd, formatDateForFilename]);
+    const getStoreNameForExport = useCallback(async () => {
+        if (!user?.storeId) {
+            return '';
+        }
+        try {
+            const db = await getDB();
+            const store = await db.get('stores', user.storeId);
+            return store?.name ? String(store.name) : '';
+        }
+        catch (error) {
+            return '';
+        }
+    }, [user?.storeId]);
+    const getExpenseStatusLabel = useCallback((status: ExpenseAdvanced['status']) => {
+        switch (status) {
+            case 'approved':
+                return 'Approuvée';
+            case 'pending':
+                return 'En attente';
+            case 'rejected':
+                return 'Rejetée';
+            default:
+                return status;
+        }
+    }, []);
+    const exportExpensesToExcel = useCallback(async () => {
+        try {
+            const storeName = await getStoreNameForExport();
+            const sanitize = (value: string) => value.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+            const storePart = storeName ? sanitize(storeName) : (user?.storeId ? `store-${user.storeId}` : 'all_stores');
+            const headers = ['Nom', 'Type', 'Produit/Categorie', 'Montant', 'Date', 'Statut', 'Description'];
+            const csvRows = [
+                headers.join(';'),
+                ...getFilteredExpenses.map((expense) => {
+                    const detail = expense.type === 'direct'
+                        ? (expense.directProduct ? `${getProductName(expense.directProduct.productId)}${expense.directProduct.quantity ? ` (x${expense.directProduct.quantity})` : ''}` : '')
+                        : (expense.categoryId ? getCategoryName(expense.categoryId) : '');
+                    return [
+                        expense.name,
+                        getExpenseTypeLabel(expense.type),
+                        detail,
+                        Number(expense.amount || 0),
+                        new Date(expense.date).toLocaleString('fr-FR'),
+                        getExpenseStatusLabel(expense.status),
+                        expense.description || '',
+                    ].map((cell) => String(cell).replace(/;/g, ',').replace(/"/g, '')).join(';');
+                }),
+            ];
+            const csvContent = csvRows.join('\r\n');
+            const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `depenses_${storePart}_${getExportFilenamePart()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+        catch (error) {
+            toast.error("Erreur lors de l'export Excel des dépenses");
+        }
+    }, [getStoreNameForExport, user?.storeId, getFilteredExpenses, getProductName, getCategoryName, getExpenseStatusLabel, getExportFilenamePart]);
+    const exportExpensesToPDF = useCallback(async () => {
+        try {
+            const storeName = await getStoreNameForExport();
+            const totalAmount = getFilteredExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0);
+            const directCount = getFilteredExpenses.filter((expense) => expense.type === 'direct').length;
+            const indirectCount = getFilteredExpenses.filter((expense) => expense.type === 'indirect').length;
+            const operationalCount = getFilteredExpenses.filter((expense) => expense.type === 'operational').length;
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                toast.error("Impossible d'ouvrir la fenêtre d'impression");
+                return;
+            }
+            const rows = getFilteredExpenses.map((expense) => {
+                const detail = expense.type === 'direct'
+                    ? (expense.directProduct ? `${getProductName(expense.directProduct.productId)}${expense.directProduct.quantity ? ` (x${expense.directProduct.quantity})` : ''}` : '-')
+                    : (expense.categoryId ? getCategoryName(expense.categoryId) : '-');
+                return `
+                    <tr>
+                      <td>${expense.name}</td>
+                      <td>${getExpenseTypeLabel(expense.type)}</td>
+                      <td>${detail}</td>
+                      <td class="amount">${Number(expense.amount || 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 })} FCFA</td>
+                      <td>${new Date(expense.date).toLocaleString('fr-FR')}</td>
+                      <td>${getExpenseStatusLabel(expense.status)}</td>
+                      <td>${expense.description || '-'}</td>
+                    </tr>
+                `;
+            }).join('');
+            printWindow.document.write(`
+                <html>
+                  <head>
+                    <title>Rapport des dépenses${storeName ? ` - ${storeName}` : ''}</title>
+                    <style>
+                      body { font-family: Arial, sans-serif; margin: 20px; font-size: 12px; color: #0f172a; }
+                      .header { text-align: center; margin-bottom: 20px; }
+                      .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 20px; }
+                      .summary-card { border: 1px solid #ddd; padding: 8px; border-radius: 5px; text-align: center; }
+                      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                      th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; font-size: 11px; }
+                      th { background-color: #f2f2f2; font-weight: bold; }
+                      .amount { text-align: right; white-space: nowrap; }
+                    </style>
+                  </head>
+                  <body>
+                    <div class="header">
+                      ${storeName ? `<div style="font-weight:700; margin-bottom:4px;">${storeName}</div>` : ''}
+                      <h1>Rapport des dépenses</h1>
+                      <p>Période: ${getPeriodLabel()}</p>
+                      <p>Total des dépenses: ${getFilteredExpenses.length}</p>
+                    </div>
+                    <div class="summary">
+                      <div class="summary-card">
+                        <h3>Total</h3>
+                        <p>${totalAmount.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} FCFA</p>
+                      </div>
+                      <div class="summary-card">
+                        <h3>Directes</h3>
+                        <p>${directCount}</p>
+                      </div>
+                      <div class="summary-card">
+                        <h3>Indirectes</h3>
+                        <p>${indirectCount}</p>
+                      </div>
+                      <div class="summary-card">
+                        <h3>Opérationnelles</h3>
+                        <p>${operationalCount}</p>
+                      </div>
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Nom</th>
+                          <th>Type</th>
+                          <th>Produit/Catégorie</th>
+                          <th>Montant</th>
+                          <th>Date</th>
+                          <th>Statut</th>
+                          <th>Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>${rows}</tbody>
+                    </table>
+                  </body>
+                </html>
+            `);
+            printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
+        }
+        catch (error) {
+            toast.error("Erreur lors de l'export PDF des dépenses");
+        }
+    }, [getStoreNameForExport, getFilteredExpenses, getProductName, getCategoryName, getExpenseStatusLabel, getPeriodLabel]);
     const displayedExpenses = useMemo(() => {
         return getFilteredExpenses.slice(0, loadedCount);
     }, [getFilteredExpenses, loadedCount]);
@@ -1289,6 +1486,17 @@ export default function Expenses() {
             Suivi des dépenses avec calcul automatique des marges
           </p>
         </div>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+        <div className="flex gap-2 sm:order-1">
+          <Button variant="outline" size="sm" onClick={() => void exportExpensesToExcel()} className="flex-1 items-center gap-1.5 text-[11px] sm:flex-none sm:text-xs">
+            <FileSpreadsheet className="w-3.5 h-3.5"/>
+            Exporter Excel
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void exportExpensesToPDF()} className="flex-1 items-center gap-1.5 text-[11px] sm:flex-none sm:text-xs">
+            <FileText className="w-3.5 h-3.5"/>
+            Exporter PDF
+          </Button>
+        </div>
         <Dialog open={showAddDialog} onOpenChange={(open) => {
             setShowAddDialog(open);
             if (!open) {
@@ -1296,7 +1504,7 @@ export default function Expenses() {
             }
         }}>
           <DialogTrigger asChild>
-            <Button className="w-full sm:w-auto" onClick={resetExpenseForm}>
+            <Button className="w-full sm:w-auto sm:order-2" onClick={resetExpenseForm}>
               <Plus className="w-4 h-4 mr-2"/>
               Nouvelle Dépense
             </Button>
@@ -1453,6 +1661,7 @@ export default function Expenses() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* Range selector & total (admin only). Cashiers see today's total only. */}
@@ -1490,7 +1699,7 @@ export default function Expenses() {
                 <div className="text-sm text-muted-foreground">Total sélection</div>
                 {isRangeLoading ? (<div className="mt-1 flex justify-center sm:justify-end">
                     <Skeleton className="h-9 w-40 rounded-md"/>
-                  </div>) : (<div className="text-2xl sm:text-3xl font-extrabold text-orange-600">{Number(rangeTotal).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</div>)}
+                  </div>) : (<div className="whitespace-nowrap text-2xl sm:text-3xl font-extrabold text-orange-600">{Number(rangeTotal).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: true })} FCFA</div>)}
               </div>
             </div>
           </div>

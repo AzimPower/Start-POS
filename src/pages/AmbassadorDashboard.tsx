@@ -70,7 +70,7 @@ function getWithdrawalStatusLabel(status: WithdrawalItem['status']) {
     case 'pending':
       return 'En attente';
     case 'approved':
-      return 'Approuve';
+      return 'Paye';
     case 'rejected':
       return 'Rejete';
     case 'paid':
@@ -282,7 +282,7 @@ export default function AmbassadorDashboard() {
                     </div>
                     {item.note ? <div className="mt-1 text-sm text-muted-foreground">{item.note}</div> : null}
                   </div>
-                  <Badge variant={item.status === 'paid' ? 'default' : 'outline'}>{getWithdrawalStatusLabel(item.status)}</Badge>
+                  <Badge variant={item.status === 'paid' || item.status === 'approved' ? 'default' : 'outline'}>{getWithdrawalStatusLabel(item.status)}</Badge>
                 </div>
               </div>
             ))}

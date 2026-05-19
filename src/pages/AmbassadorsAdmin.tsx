@@ -68,7 +68,7 @@ function getWithdrawalStatusLabel(status: AdminWithdrawal['status']) {
     case 'pending':
       return 'En attente';
     case 'approved':
-      return 'Approuve';
+      return 'Paye';
     case 'rejected':
       return 'Rejete';
     case 'paid':
@@ -84,7 +84,7 @@ export default function AmbassadorsAdmin() {
   const [isLoading, setIsLoading] = useState(true);
   const [payload, setPayload] = useState<AdminResponse | null>(null);
   const [selectedWithdrawal, setSelectedWithdrawal] = useState<AdminWithdrawal | null>(null);
-  const [nextStatus, setNextStatus] = useState<'approved' | 'rejected' | 'paid'>('approved');
+  const [nextStatus, setNextStatus] = useState<'rejected' | 'paid'>('paid');
   const [adminNote, setAdminNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -152,7 +152,7 @@ export default function AmbassadorsAdmin() {
       toast.success('Retrait mis a jour');
       setSelectedWithdrawal(null);
       setAdminNote('');
-      setNextStatus('approved');
+      setNextStatus('paid');
       await loadData();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erreur lors de la mise a jour');
@@ -253,9 +253,9 @@ export default function AmbassadorsAdmin() {
                     </div>
                   </div>
                   <div className="mt-3 flex gap-2">
-                    <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => { setSelectedWithdrawal(item); setNextStatus('approved'); setAdminNote(item.note || ''); }}>
+                    <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => { setSelectedWithdrawal(item); setNextStatus('paid'); setAdminNote(item.note || ''); }}>
                       <CheckCircle2 className="mr-2 h-4 w-4" />
-                      Approuver
+                      Marquer payé
                     </Button>
                     <Button size="sm" variant="outline" className="flex-1 border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => { setSelectedWithdrawal(item); setNextStatus('rejected'); setAdminNote(item.note || ''); }}>
                       <XCircle className="mr-2 h-4 w-4" />
@@ -282,12 +282,7 @@ export default function AmbassadorsAdmin() {
                     {item.note ? <div className="mt-1 text-sm text-muted-foreground">{item.note}</div> : null}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={item.status === 'paid' ? 'default' : 'outline'}>{getWithdrawalStatusLabel(item.status)}</Badge>
-                    {item.status === 'approved' ? (
-                      <Button size="sm" onClick={() => { setSelectedWithdrawal(item); setNextStatus('paid'); setAdminNote(item.note || ''); }}>
-                        Marquer payé
-                      </Button>
-                    ) : null}
+                    <Badge variant={item.status === 'paid' || item.status === 'approved' ? 'default' : 'outline'}>{getWithdrawalStatusLabel(item.status)}</Badge>
                   </div>
                 </div>
               </div>
@@ -296,7 +291,7 @@ export default function AmbassadorsAdmin() {
         </Card>
       </div>
 
-      <Dialog open={!!selectedWithdrawal} onOpenChange={(open) => { if (!open) { setSelectedWithdrawal(null); setAdminNote(''); setNextStatus('approved'); } }}>
+      <Dialog open={!!selectedWithdrawal} onOpenChange={(open) => { if (!open) { setSelectedWithdrawal(null); setAdminNote(''); setNextStatus('paid'); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Traiter le retrait</DialogTitle>
@@ -318,7 +313,7 @@ export default function AmbassadorsAdmin() {
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setSelectedWithdrawal(null)}>Annuler</Button>
               <Button className="flex-1" onClick={() => void updateWithdrawalStatus()} disabled={isSubmitting}>
-                {isSubmitting ? 'Enregistrement...' : nextStatus === 'approved' ? 'Approuver' : nextStatus === 'rejected' ? 'Rejeter' : 'Marquer payé'}
+                {isSubmitting ? 'Enregistrement...' : nextStatus === 'rejected' ? 'Rejeter' : 'Marquer payé'}
               </Button>
             </div>
           </div>

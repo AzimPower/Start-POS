@@ -99,7 +99,7 @@ export default function Layout({ children }: LayoutProps) {
 
     const handleLogout = () => {
         logout();
-        window.location.href = '/accueil.html';
+        window.location.href = '/#/login';
         setMenuOpen(false);
     };
     const NavContent = () => (<nav className="flex flex-col h-full overflow-y-auto">

@@ -22,7 +22,7 @@ import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
 import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
 import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
-import { calculateReceiptLineAmounts, getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
+import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
 import { getReceiptFooterLines, getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
 import { buildSaleReceiptHeaderLines, buildSaleReceiptItemLines } from '@/lib/saleReceiptDocument';
 import * as secureStorage from '@/lib/secureStorage';
@@ -59,6 +59,147 @@ interface CartItem {
     product: Product;
     quantity: number;
     priceLabel?: string; // Pour identifier le prix variable sÃ©lectionnÃ©
+    lineDiscountType?: 'percent' | 'fixed' | null;
+    lineDiscountValue?: number | null;
+}
+type DiscountType = 'none' | 'percent' | 'fixed';
+type DiscountedCartLine = {
+    productId: string;
+    name: string;
+    quantity: number;
+    price: number;
+    subtotal: number;
+    tax: number;
+    total: number;
+    discountAmount: number;
+    lineDiscountType?: 'percent' | 'fixed' | null;
+    lineDiscountValue?: number | null;
+    lineDiscountAmount: number;
+    globalDiscountShare: number;
+    originalSubtotal: number;
+    priceLabel?: string;
+};
+
+function normalizeDiscountValue(value: unknown) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function calculateDiscountAmount(baseAmount: number, discountType: DiscountType, discountValue: unknown) {
+    if (baseAmount <= 0 || discountType === 'none') {
+        return 0;
+    }
+    const normalizedValue = normalizeDiscountValue(discountValue);
+    if (normalizedValue <= 0) {
+        return 0;
+    }
+    if (discountType === 'percent') {
+        return Math.min(baseAmount, baseAmount * (Math.min(normalizedValue, 100) / 100));
+    }
+    return Math.min(baseAmount, normalizedValue);
+}
+
+function clampDiscountInputValue(baseAmount: number, discountType: DiscountType, rawValue: unknown) {
+    const normalizedValue = normalizeDiscountValue(
+        typeof rawValue === 'string' ? rawValue.replace(',', '.') : rawValue
+    );
+    if (discountType === 'none' || normalizedValue <= 0) {
+        return null;
+    }
+    if (discountType === 'percent') {
+        return Math.min(normalizedValue, 100);
+    }
+    return Math.min(normalizedValue, Math.max(0, baseAmount));
+}
+
+function getCartItemUnitPrice(item: CartItem) {
+    return Number(item.product.salePrice) || 0;
+}
+
+function getCartItemBaseAmount(item: CartItem) {
+    return getCartItemUnitPrice(item) * (Number(item.quantity) || 0);
+}
+
+function buildCartCalculations(
+    cart: CartItem[],
+    globalDiscountType: DiscountType,
+    globalDiscountValue: unknown,
+    storeVatRate: unknown
+) {
+    const normalizedStoreVatRate = Number.isFinite(Number(storeVatRate)) ? Math.max(0, Number(storeVatRate)) : 0;
+    const preparedLines = cart.map((item) => {
+        const price = Number(item.product.salePrice) || 0;
+        const quantity = Number(item.quantity) || 0;
+        const originalSubtotal = price * quantity;
+        const lineDiscountAmount = calculateDiscountAmount(
+            originalSubtotal,
+            item.lineDiscountType ?? 'none',
+            item.lineDiscountValue
+        );
+        return {
+            item,
+            price,
+            quantity,
+            taxRate: normalizedStoreVatRate,
+            originalSubtotal,
+            lineDiscountAmount,
+            subtotalAfterLineDiscount: Math.max(0, originalSubtotal - lineDiscountAmount),
+        };
+    });
+
+    const subtotalBeforeGlobalDiscount = preparedLines.reduce((sum, line) => sum + line.subtotalAfterLineDiscount, 0);
+    const globalDiscountAmount = calculateDiscountAmount(
+        subtotalBeforeGlobalDiscount,
+        globalDiscountType,
+        globalDiscountValue
+    );
+
+    let allocatedGlobalDiscount = 0;
+    const lines: DiscountedCartLine[] = preparedLines.map((line, index) => {
+        const isLastLine = index === preparedLines.length - 1;
+        const globalDiscountShare = subtotalBeforeGlobalDiscount > 0
+            ? (isLastLine
+                ? Math.max(0, globalDiscountAmount - allocatedGlobalDiscount)
+                : globalDiscountAmount * (line.subtotalAfterLineDiscount / subtotalBeforeGlobalDiscount))
+            : 0;
+        allocatedGlobalDiscount += globalDiscountShare;
+        const subtotal = Math.max(0, line.subtotalAfterLineDiscount - globalDiscountShare);
+        const tax = subtotal * (line.taxRate / 100);
+        return {
+            productId: line.item.product.id,
+            name: line.item.product.name,
+            quantity: line.quantity,
+            price: line.price,
+            subtotal,
+            tax,
+            total: subtotal + tax,
+            discountAmount: line.lineDiscountAmount + globalDiscountShare,
+            lineDiscountType: line.item.lineDiscountType ?? null,
+            lineDiscountValue: line.item.lineDiscountValue ?? null,
+            lineDiscountAmount: line.lineDiscountAmount,
+            globalDiscountShare,
+            originalSubtotal: line.originalSubtotal,
+            priceLabel: line.item.priceLabel,
+        };
+    });
+
+    const grossSubtotal = preparedLines.reduce((sum, line) => sum + line.originalSubtotal, 0);
+    const netSubtotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
+    const tax = lines.reduce((sum, line) => sum + line.tax, 0);
+    const total = lines.reduce((sum, line) => sum + line.total, 0);
+
+    return {
+        lines,
+        subtotal: grossSubtotal,
+        netSubtotal,
+        tax,
+        total,
+        lineDiscountTotal: preparedLines.reduce((sum, line) => sum + line.lineDiscountAmount, 0),
+        globalDiscountAmount,
+        discountTotal: preparedLines.reduce((sum, line) => sum + line.lineDiscountAmount, 0) + globalDiscountAmount,
+        globalDiscountType,
+        globalDiscountValue: normalizeDiscountValue(globalDiscountValue),
+    };
 }
 type PosViewSnapshot = {
     storeId: string;
@@ -142,6 +283,8 @@ export default function POS() {
     const { isBackendReachable, manualSync } = useNetwork();
     const [products, setProducts] = useState<Product[]>(() => hasSnapshotForCurrentStore ? (lastPosViewSnapshot?.products || []) : []);
     const [cart, setCart] = useState<CartItem[]>([]);
+    const [globalDiscountType, setGlobalDiscountType] = useState<DiscountType>('none');
+    const [globalDiscountValue, setGlobalDiscountValue] = useState('');
     const [search, setSearch] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [clientSearch, setClientSearch] = useState('');
@@ -168,6 +311,19 @@ export default function POS() {
     const [isLoadingMoreProducts, setIsLoadingMoreProducts] = useState(false);
     const [productOffset, setProductOffset] = useState(0);
     const PRODUCTS_PER_PAGE = 20;
+    const refreshCurrentStore = useCallback(async () => {
+        if (!user?.storeId) {
+            setCurrentStore(null);
+            return;
+        }
+        try {
+            const db = await getDB();
+            const store = await db.get('stores', user.storeId);
+            setCurrentStore(store || null);
+        }
+        catch (error) {
+        }
+    }, [user?.storeId]);
     // SystÃ¨me de favoris
     const [favorites, setFavorites] = useState<{
         [productId: string]: number;
@@ -200,17 +356,27 @@ export default function POS() {
             shiftsChecked,
         };
     }, [user?.storeId, products, categories, customers, draftSales, activeShift, currentStore, productSalesCount, pendingSyncCount, shiftsChecked]);
+    useEffect(() => {
+        void refreshCurrentStore();
+    }, [refreshCurrentStore]);
+    useEffect(() => {
+        const handleStoreUpdated = (event: Event) => {
+            const detail = (event as CustomEvent<{ store?: any }>).detail;
+            const updatedStore = detail?.store;
+            if (!updatedStore || String(updatedStore.id || '') !== String(user?.storeId || '')) {
+                return;
+            }
+            setCurrentStore(updatedStore);
+        };
+        window.addEventListener('pos:store-updated', handleStoreUpdated);
+        return () => {
+            window.removeEventListener('pos:store-updated', handleStoreUpdated);
+        };
+    }, [user?.storeId]);
     // MÃ©moriser les calculs du panier pour optimiser les performances
     const cartCalculations = useMemo(() => {
-        const subtotal = cart.reduce((sum, item) => {
-            return sum + calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate).subtotal;
-        }, 0);
-        const tax = cart.reduce((sum, item) => {
-            return sum + calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate).tax;
-        }, 0);
-        const total = subtotal + tax;
-        return { subtotal, tax, total };
-    }, [cart]);
+        return buildCartCalculations(cart, globalDiscountType, globalDiscountValue, currentStore?.vatRate);
+    }, [cart, globalDiscountType, globalDiscountValue, currentStore?.vatRate]);
     const calculateTotal = useCallback(() => cartCalculations.total, [cartCalculations]);
     const calculateSubtotal = useCallback(() => cartCalculations.subtotal, [cartCalculations]);
     const calculateTax = useCallback(() => cartCalculations.tax, [cartCalculations]);
@@ -253,6 +419,12 @@ export default function POS() {
             setMobileAmount('');
         }
     }, [showPayment, paymentMethod, cartCalculations.total]);
+    useEffect(() => {
+        if (cart.length === 0) {
+            setGlobalDiscountType('none');
+            setGlobalDiscountValue('');
+        }
+    }, [cart.length]);
     useEffect(() => {
         if (!user)
             return;
@@ -729,11 +901,30 @@ export default function POS() {
             return item;
         }).filter(item => item.quantity > 0));
     };
+    const updateLineDiscount = (productId: string, priceLabel: string | undefined, discountType: DiscountType, rawValue: string) => {
+        setCart(cart.map((item) => {
+            if (item.product.id !== productId || item.priceLabel !== priceLabel) {
+                return item;
+            }
+            if (discountType === 'none') {
+                return { ...item, lineDiscountType: null, lineDiscountValue: null };
+            }
+            const baseAmount = getCartItemBaseAmount(item);
+            const clampedValue = clampDiscountInputValue(baseAmount, discountType, rawValue);
+            return {
+                ...item,
+                lineDiscountType: discountType,
+                lineDiscountValue: clampedValue,
+            };
+        }));
+    };
     const removeFromCart = (productId: string, priceLabel: string | undefined) => {
         setCart(cart.filter(item => !(item.product.id === productId && item.priceLabel === priceLabel)));
     };
     const clearCart = () => {
         setCart([]);
+        setGlobalDiscountType('none');
+        setGlobalDiscountValue('');
         toast.success('Panier vidé');
         try {
             closeAllModals();
@@ -806,20 +997,29 @@ export default function POS() {
                 userId: user!.id,
                 storeId: user!.storeId,
                 customerId: selectedCustomerId === 'none' ? null : selectedCustomerId,
-                items: cart.map(item => {
-                    const lineAmounts = calculateReceiptLineAmounts(item.product.salePrice, item.quantity, item.product.taxRate);
-                    return {
-                        productId: item.product.id,
-                        name: item.product.name,
-                        quantity: item.quantity,
-                        price: Number(item.product.salePrice) || 0,
-                        tax: lineAmounts.tax,
-                        total: lineAmounts.total,
-                    };
-                }),
+                items: cartCalculations.lines.map((line) => ({
+                    productId: line.productId,
+                    name: line.name,
+                    quantity: line.quantity,
+                    price: line.price,
+                    priceLabel: line.priceLabel,
+                    subtotal: line.subtotal,
+                    tax: line.tax,
+                    total: line.total,
+                    discountAmount: line.discountAmount,
+                    lineDiscountType: line.lineDiscountType,
+                    lineDiscountValue: line.lineDiscountValue,
+                    lineDiscountAmount: line.lineDiscountAmount,
+                    globalDiscountShare: line.globalDiscountShare,
+                    originalSubtotal: line.originalSubtotal,
+                })),
                 subtotal: calculateSubtotal(),
                 tax: calculateTax(),
                 total: total,
+                discountTotal: cartCalculations.discountTotal,
+                globalDiscountType: cartCalculations.globalDiscountType === 'none' ? null : cartCalculations.globalDiscountType,
+                globalDiscountValue: cartCalculations.globalDiscountType === 'none' ? null : cartCalculations.globalDiscountValue,
+                globalDiscountAmount: cartCalculations.globalDiscountAmount,
                 paymentMethod,
                 cashAmount: paymentMethod === 'cash' ? paidAmount :
                     paymentMethod === 'mixed' ? (parseFloat(cashAmount) || 0) : 0,
@@ -933,8 +1133,13 @@ export default function POS() {
                     name: item.name,
                     quantity: item.quantity,
                     price: item.price,
+                    subtotal: item.subtotal,
+                    tax: item.tax,
                     total: item.total,
+                    discountAmount: item.discountAmount || 0,
                 })),
+                discountTotal: sale.discountTotal || 0,
+                globalDiscountAmount: sale.globalDiscountAmount || 0,
                 paymentDetails,
                 cashReceived: paidAmount,
                 change: paidAmount - total,
@@ -944,6 +1149,8 @@ export default function POS() {
             };
             setLastSale(receiptData);
             setCart([]);
+            setGlobalDiscountType('none');
+            setGlobalDiscountValue('');
             setCashAmount('');
             setMobileAmount('');
             setPaymentMethod('cash');
@@ -1004,10 +1211,14 @@ export default function POS() {
                                     quantity: it.quantity || 0,
                                     unitPrice: isNaN(it.price) ? 0 : Math.round(it.price),
                                     displayTotal: Math.round(getReceiptItemDisplayTotal(it, receiptData)),
+                                    discountAmount: Number(it.discountAmount || 0),
                                 }, paper === '58' ? '58' : '80'));
                             }
                             lines.push('--------------------------------');
                             lines.push(NativePrinter.formatColumns('Sous-total:', Math.round(receiptData.subtotal || 0) + ' FCFA', width));
+                            if (Number(receiptData.discountTotal || 0) > 0) {
+                                lines.push(NativePrinter.formatColumns('Remise:', '-' + Math.round(receiptData.discountTotal || 0) + ' FCFA', width));
+                            }
                             lines.push(NativePrinter.formatColumns('TVA:', Math.round(receiptData.tax || 0) + ' FCFA', width));
                             const totalLine = NativePrinter.formatColumns('TOTAL:', Math.round(receiptData.total || 0) + ' FCFA', width);
                             lines.push('\x1bE\x01' + totalLine + '\x1bE\x00');
@@ -1084,6 +1295,7 @@ export default function POS() {
             ? (parseFloat(cashAmount) || 0)
             : (parseFloat(mobileAmount) || 0);
     const paymentChange = Math.max(0, paymentTotalEntered - cartCalculations.total);
+    const discountsEnabled = !!currentStore?.allowSalesDiscounts;
     // If we haven't finished checking shifts yet, don't render the "no shift"
     // card â€” return a neutral placeholder to avoid flashing the message. Once
     // shiftsChecked is true we can show the card if there's indeed no active shift.
@@ -1283,7 +1495,7 @@ export default function POS() {
 
         <ScrollArea className="flex-1 p-4">
           {cart.length === 0 ? (<p className="text-center text-muted-foreground py-8">Panier vide</p>) : (<div className="space-y-3">
-              {cart.map((item, index) => (<Card key={`${item.product.id}-${item.priceLabel || 'default'}-${index}`}>
+              {cart.map((item, index) => (<Card key={`${item.product.id}-${item.priceLabel || 'default'}-${index}`} className="overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-sm shadow-slate-200/70">
                   <CardContent className="p-3">
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -1309,23 +1521,97 @@ export default function POS() {
                           <Plus className="w-3 h-3"/>
                         </Button>
                       </div>
-                      <p className="font-bold text-primary">
-                        {item.product.salePrice !== undefined && item.product.salePrice !== null && !isNaN(Number(item.product.salePrice)) && Number(item.product.salePrice) > 0
-                    ? (Number(item.product.salePrice) * item.quantity).toFixed(0) + ' FCFA'
-                    : <span className="text-red-500">Prix Ã  dÃ©finir</span>}
-                      </p>
+                      <div className="text-right">
+                        {(() => {
+                const line = cartCalculations.lines.find((entry) => entry.productId === item.product.id && entry.priceLabel === item.priceLabel);
+                if (!line) {
+                    return <span className="text-red-500">Prix à définir</span>;
+                }
+                return (<>
+                              <p className="font-bold text-primary">{formatMoneyDisplay(line.total)} FCFA</p>
+                              {line.discountAmount > 0 ? <p className="text-[11px] text-muted-foreground line-through">{formatMoneyDisplay(line.originalSubtotal)} FCFA</p> : null}
+                            </>);
+            })()}
+                      </div>
                     </div>
+                    {discountsEnabled ? (<div className="mt-3 rounded-xl border border-dashed border-border/70 p-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <Label className="text-xs text-muted-foreground">Remise article</Label>
+                          <Select value={item.lineDiscountType ?? 'none'} onValueChange={(value: DiscountType) => {
+                    updateLineDiscount(item.product.id, item.priceLabel, value, item.lineDiscountValue ? String(item.lineDiscountValue) : '');
+                }}>
+                            <SelectTrigger className="h-8 w-[120px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Aucune</SelectItem>
+                              <SelectItem value="percent">Pourcentage</SelectItem>
+                              <SelectItem value="fixed">Montant</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {item.lineDiscountType ? (<div className="mt-2 flex items-center gap-2">
+                            {(() => {
+                    const maxLineDiscountValue = item.lineDiscountType === 'percent'
+                        ? 100
+                        : getCartItemBaseAmount(item);
+                    return (
+                            <Input
+                              type="number"
+                              min={0}
+                              max={maxLineDiscountValue}
+                              value={item.lineDiscountValue ?? ''}
+                              onChange={(e) => updateLineDiscount(item.product.id, item.priceLabel, item.lineDiscountType ?? 'none', e.target.value)}
+                              placeholder={item.lineDiscountType === 'percent' ? '0 - 100' : 'Montant'}
+                              className="h-8"
+                            />
+                    );
+                })()}
+                            <span className="text-xs text-muted-foreground">{item.lineDiscountType === 'percent' ? '%' : 'FCFA'}</span>
+                          </div>) : null}
+                      </div>) : null}
                   </CardContent>
                 </Card>))}
             </div>)}
         </ScrollArea>
 
         <div className="p-4 border-t space-y-3">
+          {discountsEnabled ? (<div className="rounded-2xl border border-border/70 bg-muted/20 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label className="text-sm">Remise globale</Label>
+                <Select value={globalDiscountType} onValueChange={(value: DiscountType) => setGlobalDiscountType(value)}>
+                  <SelectTrigger className="h-8 w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Aucune</SelectItem>
+                    <SelectItem value="percent">Pourcentage</SelectItem>
+                    <SelectItem value="fixed">Montant</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {globalDiscountType !== 'none' ? (<div className="flex items-center gap-2">
+                  <Input type="number" min={0} value={globalDiscountValue} onChange={(e) => {
+                    const nextValue = e.target.value;
+                    if (!nextValue) {
+                        setGlobalDiscountValue('');
+                        return;
+                    }
+                    const clampedValue = clampDiscountInputValue(cartCalculations.subtotal, globalDiscountType, nextValue);
+                    setGlobalDiscountValue(clampedValue === null ? '' : String(clampedValue));
+                }} placeholder={globalDiscountType === 'percent' ? '0 - 100' : 'Montant'} className="h-8"/>
+                  <span className="text-xs text-muted-foreground">{globalDiscountType === 'percent' ? '%' : 'FCFA'}</span>
+                </div>) : null}
+            </div>) : null}
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Sous-total</span>
               <span>{formatMoneyDisplay(cartCalculations.subtotal)} FCFA</span>
             </div>
+            {cartCalculations.discountTotal > 0 ? (<div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Remise</span>
+                <span className="text-emerald-600">- {formatMoneyDisplay(cartCalculations.discountTotal)} FCFA</span>
+              </div>) : null}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">TVA</span>
               <span>{isNaN(cartCalculations.tax) ? '0' : formatMoneyDisplay(cartCalculations.tax)} FCFA</span>
@@ -1352,6 +1638,7 @@ export default function POS() {
             <div className="p-4 bg-muted rounded-lg">
               <p className="text-sm text-muted-foreground">{'Total \u00e0 payer'}</p>
               <p className="text-2xl font-bold text-primary">{formatMoneyDisplay(cartCalculations.total)} FCFA</p>
+              {cartCalculations.discountTotal > 0 ? <p className="mt-1 text-xs text-emerald-600">Remise appliquée: {formatMoneyDisplay(cartCalculations.discountTotal)} FCFA</p> : null}
             </div>
 
             <div className="space-y-2">
@@ -1580,9 +1867,17 @@ export default function POS() {
                     if (typeof i.price === 'number' && !isNaN(i.price)) {
                         prod = { ...prod, salePrice: i.price };
                     }
-                    newCart.push({ product: prod, quantity: i.quantity });
+                    newCart.push({
+                        product: prod,
+                        quantity: i.quantity,
+                        priceLabel: i.priceLabel,
+                        lineDiscountType: i.lineDiscountType || null,
+                        lineDiscountValue: i.lineDiscountValue ?? null,
+                    });
                 }
                 setCart(newCart);
+                setGlobalDiscountType(draft.globalDiscountType || 'none');
+                setGlobalDiscountValue(draft.globalDiscountValue ? String(draft.globalDiscountValue) : '');
                 setSelectedCustomerId(draft.customerId || 'none');
                 setPaymentMethod(draft.paymentMethod);
                 setCashAmount(draft.payments?.find((p: any) => p.method === 'cash')?.amount?.toString() || '');
@@ -1646,7 +1941,7 @@ export default function POS() {
         </DialogContent>
       </Dialog>
       {/* Receipt Dialog */}
-      {lastSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeId={lastSale.storeId} storeName={lastSale.storeName} storeAddress={lastSale.storeAddress} items={lastSale.items} subtotal={lastSale.subtotal} tax={lastSale.tax} total={lastSale.total} paymentMethod={lastSale.paymentMethod} cashReceived={lastSale.cashReceived} change={lastSale.change} receiptNumber={lastSale.receiptNumber} date={lastSale.date} paymentDetails={lastSale.paymentDetails} printLogo={lastSale.printLogo} thankYouMessage={lastSale.thankYouMessage}/>)}
+      {lastSale && (<Receipt open={showReceipt} onOpenChange={setShowReceipt} storeId={lastSale.storeId} storeName={lastSale.storeName} storeAddress={lastSale.storeAddress} items={lastSale.items} subtotal={lastSale.subtotal} tax={lastSale.tax} total={lastSale.total} discountTotal={lastSale.discountTotal} paymentMethod={lastSale.paymentMethod} cashReceived={lastSale.cashReceived} change={lastSale.change} receiptNumber={lastSale.receiptNumber} date={lastSale.date} paymentDetails={lastSale.paymentDetails} printLogo={lastSale.printLogo} thankYouMessage={lastSale.thankYouMessage}/>)}
       {/* Stock Warning Dialog */}
       <Dialog open={stockWarning.open} onOpenChange={open => setStockWarning({ ...stockWarning, open })}>
         <DialogContent>

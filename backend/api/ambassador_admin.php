@@ -128,6 +128,9 @@ try {
             echo json_encode(['success' => false, 'error' => 'Invalid withdrawal status']);
             exit;
         }
+        if ($nextStatus === 'approved') {
+            $nextStatus = 'paid';
+        }
 
         $note = trim((string)($data['note'] ?? ''));
         $now = (int)(microtime(true) * 1000);
