@@ -9,6 +9,15 @@ import { getStoreAccessState, isActiveFlag } from '@/lib/status';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { hashPasswordForCache } from '@/lib/auth';
 import { clearAuthToken, getAuthToken, setAuthToken } from '@/lib/apiAuth';
+
+const markDeviceHasLoggedIn = () => {
+    try {
+        localStorage.setItem('pos-has-logged-in', '1');
+    }
+    catch (e) {
+    }
+};
+
 function normalizePhoneDigits(phone?: string | null): string {
     return String(phone || '').replace(/\D/g, '');
 }
@@ -515,6 +524,7 @@ export function AuthProvider({ children }: {
                         // ensure localStorage mirror exists for PIN/visibility flows
                         try {
                             localStorage.setItem('pos-user', JSON.stringify(parsed));
+                            markDeviceHasLoggedIn();
                         }
                         catch (e) {
                             // ignore
@@ -655,6 +665,7 @@ export function AuthProvider({ children }: {
                             }
                             setPinFailState({ userId: userData.id, count: 0 });
                             localStorage.removeItem('pos-login-last-error');
+                            markDeviceHasLoggedIn();
                             // Mise en cache de l'admin pour les futurs emails
                             try {
                                 const cacheResult = await cacheAdminData(userData.storeId);
@@ -752,6 +763,7 @@ export function AuthProvider({ children }: {
                         }
                         setPinFailState({ userId: userData.id, count: 0 });
                         localStorage.removeItem('pos-login-last-error');
+                        markDeviceHasLoggedIn();
                         // Mise en cache de l'admin pour les futurs emails (offline)
                         try {
                             await cleanupAdminCache();
@@ -834,6 +846,7 @@ export function AuthProvider({ children }: {
                             }
                             setPinFailState({ userId: userData.id, count: 0 });
                             localStorage.removeItem('pos-login-last-error');
+                            markDeviceHasLoggedIn();
                             try {
                                 await cleanupAdminCache();
                             }

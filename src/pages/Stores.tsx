@@ -255,6 +255,10 @@ export default function Stores() {
     const [selectedAmbassadorId, setSelectedAmbassadorId] = useState<string>('none');
     const [linkedAdmins, setLinkedAdmins] = useState<Array<any>>([]);
     const [storeFormStep, setStoreFormStep] = useState(1);
+    const isNewStoreAdminMissing = user?.role === 'super_admin' && !editingStore && !selectedAdminId && !isCreatingAdmin;
+    const isNewAdminFormIncomplete = user?.role === 'super_admin' && !editingStore && isCreatingAdmin
+      && (!adminForm.username.trim() || adminForm.phone.trim().length !== 8 || !adminForm.password.trim());
+    const isStoreFinalActionDisabled = isNewStoreAdminMissing || isNewAdminFormIncomplete;
     // Renouvellement abonnement
     const PRICE_PER_MONTH = 5000;
     const [renewalDialog, setRenewalDialog] = useState<{
@@ -542,13 +546,25 @@ export default function Stores() {
                 return;
             }
             if (isCreatingAdmin) {
-                if (!adminForm.phone.trim() || !adminForm.password.trim()) {
+                if (!adminForm.username.trim()) {
+                    toast.error('Le nom de l admin est requis');
+                    return;
+                }
+                if (adminForm.phone.trim().length !== 8 || !adminForm.password.trim()) {
                     toast.error('Téléphone et mot de passe sont requis pour créer un nouvel admin');
                     return;
                 }
             }
         }
         const db = await getDB();
+        if (user?.role === 'super_admin' && !editingStore && isCreatingAdmin) {
+            const normalizedAdminPhone = adminForm.phone.startsWith('+226') ? adminForm.phone : '+226' + adminForm.phone;
+            const existingUser = await db.getFromIndex('users', 'by-phone', normalizedAdminPhone);
+            if (existingUser) {
+                toast.error('Ce numéro de téléphone est déjà utilisé');
+                return;
+            }
+        }
         try {
             let storeId = editingStore ? editingStore.id : generateId();
             // Ajout automatique du préfixe +226 au téléphone admin avant enregistrement
@@ -562,7 +578,6 @@ export default function Stores() {
                     ...editingStore,
                     name: formData.name,
                     address: formData.address,
-                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 };
                 if (selectedAdminId)
                     putData.adminId = selectedAdminId;
@@ -575,7 +590,6 @@ export default function Stores() {
                     ...editingStore,
                     name: formData.name,
                     address: formData.address,
-                    ambassadorUserId: selectedAmbassadorId === 'none' ? null : selectedAmbassadorId,
                 });
                 // If assigned an existing admin during edit, create local mapping and update user
                 let mappingAlreadyExisted = false;
@@ -634,7 +648,7 @@ export default function Stores() {
                     if (isCreatingAdmin) {
                         storePayload.admin = {
                             id: generateId(),
-                            username: adminForm.username && adminForm.username.trim() ? adminForm.username : (adminLookup || 'admin'),
+                            username: adminForm.username.trim(),
                             phone: adminPhone,
                             password: adminForm.password,
                             role: 'admin',
@@ -673,7 +687,7 @@ export default function Stores() {
                         }
                         // Création en local (persist localement)
                         await createUser({
-                            username: adminForm.username && adminForm.username.trim() ? adminForm.username : (adminLookup || 'admin'),
+                            username: adminForm.username.trim(),
                             phone: adminPhone,
                             password: adminForm.password,
                             role: 'admin',
@@ -1033,8 +1047,8 @@ export default function Stores() {
                     </div>)))}
             </div>
           </div>)}
-        {user?.role === 'super_admin' && (<div className="space-y-2">
-            <Label htmlFor="admin-lookup">Associer un admin</Label>
+        {user?.role === 'super_admin' && (<div className="space-y-2 border-t border-border/60 pt-4">
+            <Label htmlFor="admin-lookup">Associer un admin *</Label>
             <div>
               <div className="flex items-start gap-3">
                 <div style={{ flex: 1 }}>
@@ -1069,11 +1083,13 @@ export default function Stores() {
                 <div className="shrink-0 flex flex-col items-end gap-2">
                   {selectedAdminId ? (<>
                       <div className="text-sm">Admin sélectionné <strong>{admins.find(a => a.id === selectedAdminId)?.username || ''}</strong></div>
-                      <Button variant="ghost" size="sm" onClick={() => { setSelectedAdminId(null); setAdminLookup(''); }}>Effacer</Button>
-                    </>) : (<Button variant="outline" size="sm" onClick={() => { setIsCreatingAdmin(true); setAdminForm(prev => ({ ...prev, username: adminLookup })); }}>Créer un nouvel admin</Button>)}
+                      <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedAdminId(null); setAdminLookup(''); }}>Effacer</Button>
+                    </>) : (<Button type="button" variant="outline" size="sm" onClick={() => { setIsCreatingAdmin(true); setAdminForm(prev => ({ ...prev, username: adminLookup })); }}>Créer un nouvel admin</Button>)}
                 </div>
               </div>
               {isCreatingAdmin && (<div className="mt-3 space-y-2">
+                  <Label htmlFor="admin-username">Nom admin *</Label>
+                  <Input id="admin-username" value={adminForm.username} onChange={(e) => setAdminForm({ ...adminForm, username: e.target.value })} placeholder="Nom de l'administrateur" required />
                   <Label htmlFor="admin-phone">Téléphone admin *</Label>
                   <div className="flex items-center gap-2">
                     <span className="rounded bg-gray-100 px-2 py-1 text-gray-700">+226</span>
@@ -1087,8 +1103,8 @@ export default function Stores() {
                 </div>)}
             </div>
           </div>)}
-        {user?.role === 'super_admin' && (<div className="space-y-2">
-            <Label htmlFor="ambassador-select">Ambassadeur lié</Label>
+        {user?.role === 'super_admin' && !editingStore && (<div className="space-y-2 border-t border-border/60 pt-4">
+            <Label htmlFor="ambassador-select">Ambassadeur lié (optionnel)</Label>
             <Select value={selectedAmbassadorId} onValueChange={setSelectedAmbassadorId}>
               <SelectTrigger id="ambassador-select">
                 <SelectValue placeholder="Aucun ambassadeur" />
@@ -1100,7 +1116,7 @@ export default function Stores() {
                   </SelectItem>))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">La commission ambassadeur est déclenchée une seule fois lors du premier abonnement payé du magasin.</p>
+            <p className="text-xs text-muted-foreground">Optionnel : laissez "Aucun ambassadeur" si le magasin n'est pas parrainé. La commission est déclenchée une seule fois lors du premier abonnement payé.</p>
           </div>)}
       </>);
     const renderStoreDialogForm = () => (<div className="space-y-4">
@@ -1123,7 +1139,7 @@ export default function Stores() {
             </Button>)}
           {storeFormStep < storeFormTotalSteps ? (<Button type="button" className="flex-1" onClick={goToNextStoreStep}>
               Suivant
-            </Button>) : (<Button onClick={handleSubmit} className="flex-1">
+            </Button>) : (<Button onClick={handleSubmit} className="flex-1" disabled={isStoreFinalActionDisabled}>
               {editingStore ? 'Modifier' : 'Créer'}
             </Button>)}
         </div>
@@ -1182,7 +1198,7 @@ export default function Stores() {
           <div className="flex flex-col gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"/>
-              <Input placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+              <Input name="stores-search-filter" autoComplete="off" placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
             </div>
             <div className="flex flex-col gap-4 sm:flex-row">
               <div className="flex-1">
@@ -1411,7 +1427,7 @@ export default function Stores() {
             {/* Barre de recherche */}
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4"/>
-              <Input placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 pl-10"/>
+              <Input name="stores-search-filter" autoComplete="off" placeholder="Rechercher par nom ou adresse..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 pl-10"/>
             </div>
             
             {/* Filtres */}

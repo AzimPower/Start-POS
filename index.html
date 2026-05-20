@@ -31,9 +31,17 @@
           window.location.protocol === 'capacitor:' ||
           window.location.protocol === 'file:' ||
           (window.location.hostname === 'localhost' && isAndroidWebView);
+        var hasOpenedAppBefore = false;
+        try {
+          hasOpenedAppBefore =
+            localStorage.getItem('pos-has-logged-in') === '1' ||
+            !!localStorage.getItem('pos-user');
+        } catch (e) {
+          hasOpenedAppBefore = false;
+        }
 
         if (!isAppRoute) {
-          window.location.replace(isLikelyNativeApp ? '/#/login' : 'accueil.html');
+          window.location.replace((isLikelyNativeApp || hasOpenedAppBefore) ? '/#/login' : 'accueil.html');
         }
       })();
     </script>

@@ -661,6 +661,40 @@ try {
                 echo json_encode(['error' => 'Only super admin can create stores']);
                 exit;
             }
+                $hasAdminId = !empty($data['adminId']);
+                $hasAdminPayload = !empty($data['admin']) && is_array($data['admin']);
+                if (!$hasAdminId && !$hasAdminPayload) {
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Un administrateur est obligatoire pour creer un magasin']);
+                    exit;
+                }
+                if ($hasAdminId) {
+                    $adminCheck = $pdo->prepare('SELECT id FROM users WHERE id = ? AND role = "admin" LIMIT 1');
+                    $adminCheck->execute([$data['adminId']]);
+                    if (!$adminCheck->fetchColumn()) {
+                        http_response_code(400);
+                        echo json_encode(['success' => false, 'error' => 'Administrateur introuvable']);
+                        exit;
+                    }
+                }
+                if ($hasAdminPayload) {
+                    $admin = $data['admin'];
+                    $adminUsername = isset($admin['username']) ? trim((string)$admin['username']) : '';
+                    $adminPhone = isset($admin['phone']) ? trim((string)$admin['phone']) : '';
+                    $adminPassword = isset($admin['password']) ? trim((string)$admin['password']) : '';
+                    if ($adminUsername === '' || $adminPhone === '' || $adminPassword === '') {
+                        http_response_code(400);
+                        echo json_encode(['success' => false, 'error' => 'Nom, telephone et mot de passe admin requis']);
+                        exit;
+                    }
+                    $phoneCheck = $pdo->prepare('SELECT id FROM users WHERE phone = ? LIMIT 1');
+                    $phoneCheck->execute([$adminPhone]);
+                    if ($phoneCheck->fetchColumn()) {
+                        http_response_code(400);
+                        echo json_encode(['success' => false, 'error' => 'Ce telephone admin est deja utilise']);
+                        exit;
+                    }
+                }
                 $sql = 'INSERT INTO stores (id, name, address, logo, active, createdAt, subscriptionStart, subscriptionEnd, lastPayment, ambassadorUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
                 $stmt = $pdo->prepare($sql);
                 $id = $data['id'] ?? uniqid();
@@ -713,8 +747,16 @@ try {
                             $ins->execute([$linkId, $uid, $id]);
                         }
                     } catch (Exception $e) {
-                        // don't fail store creation for mapping errors
                         error_log('store admin link/create error: '.$e->getMessage());
+                        try {
+                            $cleanup = $pdo->prepare('DELETE FROM stores WHERE id = ?');
+                            $cleanup->execute([$id]);
+                        } catch (Exception $cleanupError) {
+                            error_log('store cleanup after admin link/create error: '.$cleanupError->getMessage());
+                        }
+                        http_response_code(500);
+                        echo json_encode(['success' => false, 'error' => 'Impossible d associer l administrateur au magasin']);
+                        exit;
                     }
                 }
 

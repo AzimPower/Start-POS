@@ -669,13 +669,14 @@ export default function Users() {
               <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="utilisateur@exemple.com" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Mot de passe *</Label>
+              <Label htmlFor="password">{editingUser ? 'Nouveau mot de passe' : 'Mot de passe *'}</Label>
               <div className="relative">
-                <Input id="password" type={showPassword ? 'text' : 'password'} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="••••••••" className="pr-10" />
+                <Input id="password" name={editingUser ? 'new-user-password' : 'password'} type={showPassword ? 'text' : 'password'} autoComplete={editingUser ? 'new-password' : 'current-password'} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder={editingUser ? 'Laisser vide pour conserver le mot de passe actuel' : '••••••••'} className="pr-10" />
                 <button type="button" className="absolute inset-y-0 right-0 flex items-center pr-3" onClick={() => setShowPassword(!showPassword)}>
                   {showPassword ? (<EyeOff className="h-4 w-4 text-gray-400" />) : (<Eye className="h-4 w-4 text-gray-400" />)}
                 </button>
               </div>
+              {editingUser && (<p className="text-xs text-muted-foreground">L'ancien mot de passe est conserve si ce champ reste vide.</p>)}
             </div>
             <div className="space-y-2">
               <Label htmlFor="pin">PIN (4-8 chiffres)</Label>
@@ -805,7 +806,7 @@ export default function Users() {
           <div className="flex flex-col gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"/>
-              <Input placeholder="Rechercher par nom, téléphone ou email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+              <Input name="users-search-filter" autoComplete="off" placeholder="Rechercher par nom, téléphone ou email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
             </div>
             <div className="flex flex-col gap-4 sm:flex-row">
               <div className="flex-1">
@@ -943,7 +944,7 @@ export default function Users() {
             {/* Barre de recherche */}
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4"/>
-              <Input placeholder="Rechercher par nom, téléphone ou email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 pl-10"/>
+              <Input name="users-search-filter" autoComplete="off" placeholder="Rechercher par nom, téléphone ou email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 pl-10"/>
             </div>
             
             {/* Filtres */}
