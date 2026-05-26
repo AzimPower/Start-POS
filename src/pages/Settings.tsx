@@ -56,7 +56,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
-import { Printer, ImageIcon, Trash, RefreshCw, BellRing, Palette, Shield, LogOut } from 'lucide-react';
+import { Printer, ImageIcon, Trash, RefreshCw, BellRing, Palette, Shield, LogOut, BadgePercent } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDB, performSyncOp } from '@/lib/db';
 import { DEFAULT_STORE_ALERT_SETTINGS, getEmailSettings, invalidateEmailSettingsCache, type StoreAlertSettings } from '@/lib/emailSettingsCache';
@@ -105,6 +105,7 @@ export default function Settings() {
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [printerOpen, setPrinterOpen] = useState(false);
     const [notificationsOpen, setNotificationsOpen] = useState(false);
+    const [checkoutSettingsOpen, setCheckoutSettingsOpen] = useState(false);
     const [pinSectionOpen, setPinSectionOpen] = useState(false);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     // Email notification settings
@@ -1878,24 +1879,6 @@ export default function Settings() {
                           </Card>
                         </div>
                       </div>
-                      <div className="rounded-2xl border border-border/60 bg-background/80 p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-1">
-                            <p className="text-sm font-medium">Remises en caisse</p>
-                            <p className="text-xs text-muted-foreground">Affiche l&apos;option de remise par article ou globale pendant une vente.</p>
-                          </div>
-                          <Switch checked={!!store.allowSalesDiscounts} onCheckedChange={(checked) => void handleToggleSalesDiscounts(checked)} disabled={loadingStore}/>
-                        </div>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background/80 p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-1">
-                            <p className="text-sm font-medium">TVA 18%</p>
-                            <p className="text-xs text-muted-foreground">Active ou désactive la TVA fixe de 18% pour toutes les ventes du magasin.</p>
-                          </div>
-                          <Switch checked={Number(store.vatRate ?? 0) === 18} onCheckedChange={(checked) => void handleToggleVatRate(checked)} disabled={loadingStore}/>
-                        </div>
-                      </div>
                       {store.solde_manual_note && (<p className="text-xs text-muted-foreground">Dernière note : {store.solde_manual_note}</p>)}
                       <p className="text-xs text-muted-foreground">L'ajustement manuel devient la base — les ventes/dépenses postérieures seront prises en compte automatiquement.</p>
                     </div>)}
@@ -1904,9 +1887,33 @@ export default function Settings() {
             </div>
           </div>)}
 
-
-
-
+          {canManageStoreBalance && store ? (<Card className={elevatedCardClassName}>
+            <CardHeader className="space-y-4 pb-4">
+              <SettingsSectionHeading icon={BadgePercent} title="Remises en caisse" description="Gerez les remises et la TVA appliquees pendant les ventes du magasin." action={<SectionToggleButton open={checkoutSettingsOpen} onClick={() => setCheckoutSettingsOpen((current) => !current)}/>}/>
+            </CardHeader>
+            <Collapsible open={checkoutSettingsOpen} onOpenChange={setCheckoutSettingsOpen}>
+              <CollapsibleContent>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-4 rounded-2xl border border-border/60 bg-muted/25 p-4">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">Remises en caisse</p>
+                        <p className="text-xs text-muted-foreground">Affiche l&apos;option de remise par article ou globale pendant une vente.</p>
+                      </div>
+                      <Switch checked={!!store.allowSalesDiscounts} onCheckedChange={(checked) => void handleToggleSalesDiscounts(checked)} disabled={loadingStore}/>
+                    </div>
+                    <div className="flex items-start justify-between gap-4 rounded-2xl border border-border/60 bg-muted/25 p-4">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">TVA 18%</p>
+                        <p className="text-xs text-muted-foreground">Active ou desactive la TVA fixe de 18% pour toutes les ventes du magasin.</p>
+                      </div>
+                      <Switch checked={Number(store.vatRate ?? 0) === 18} onCheckedChange={(checked) => void handleToggleVatRate(checked)} disabled={loadingStore}/>
+                    </div>
+                  </div>
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>) : null}
 
                 <div className="grid grid-cols-1 gap-5 2xl:grid-cols-12">
           {/* Printer card */}

@@ -1234,6 +1234,23 @@ export async function fetchAndMerge(endpoint: string, storeName: string, tableNa
                 if (pendingIds.has(id)) {
                     mergedMap.set(id, local);
                 }
+                else if (currentTable === 'sales') {
+                    mergedMap.set(id, local);
+                    pendingIds.add(id);
+                    await queueSyncOp({
+                        url: `${API_BASE}/sales.php`,
+                        method: 'POST',
+                        table: 'sales',
+                        storeId: local?.storeId,
+                        data: local,
+                    });
+                    writeSyncLog({
+                        level: 'warn',
+                        message: 'Vente locale absente du serveur remise en file de synchronisation',
+                        entity: 'sales',
+                        details: { id, storeId: local?.storeId },
+                    });
+                }
             }
             else {
                 if (currentTable === 'sales') {

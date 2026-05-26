@@ -22,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import ShiftReceiptDetails from './ShiftReceiptDetails';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerFooter, DrawerTrigger, DrawerClose } from '@/components/ui/drawer';
-import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistActiveShiftCache, persistClosedShiftMarker, persistInactiveShiftCache, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
+import { fetchAndMerge, forceSyncNow, mergeBackendShifts, mergeOverlappingShiftsForUserStore, persistActiveShiftCache, persistClosedShiftMarker, persistInactiveShiftCache, queueSyncOp, reconcileSalesToLastClosedShift, resolveUserOpenShift } from '@/lib/sync';
 import { sendStoreAdminNotification } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 import { getStoreReceiptSettings } from '@/lib/storeReceiptSettings';
@@ -371,7 +371,7 @@ export default function Shifts() {
         finally {
             salesRefreshInFlight.current = false;
         }
-    }, [isOnline, isBackendReachable, user?.storeId]);
+    }, [isOnline, isBackendReachable, user?.role, user?.storeId]);
     const refreshLocalSalesCache = useCallback(async (db?: any) => {
         try {
             const localDb = db || await getDB();
@@ -542,25 +542,17 @@ export default function Shifts() {
                     loadCashiers(),
                     loadFromLocal(db)
                 ]);
+                await refreshLocalSalesCache(db);
                 if (cancelled)
                     return;
                 setDataLoaded(true);
-                // 2. Charger les ventes en arriÃ¨re-plan seulement si un shift ouvert est visible
-                if (Array.isArray(initialShifts) && initialShifts.some((shift: Shift) => shift.status === 'open')) {
-                    db.getAll('sales').then((allSales: any[]) => {
-                        if (cancelled || !allSales)
-                            return;
-                        salesCache.current = allSales;
-                        salesCacheTimestamp.current = Date.now();
-                    }).catch(() => { });
-                }
-                // 3. Sync backend immÃ©diatement si en ligne (non bloquant)
+                // 2. Sync backend immÃ©diatement si en ligne (non bloquant)
                 if (isOnline) {
                     loadCashiers({ syncFromBackend: true }).catch(() => { });
                     loadShifts().catch(() => { });
-                    refreshSalesFromBackend(Array.isArray(initialShifts) && initialShifts.some((shift: Shift) => shift.status === 'open')).catch(() => { });
+                    refreshSalesFromBackend(true).catch(() => { });
                 }
-                // 4. Nettoyage en arriÃ¨re-plan diffÃ©rÃ© (correction dÃ©sactivÃ©e : shift.difference est immuable)
+                // 3. Nettoyage en arriÃ¨re-plan diffÃ©rÃ© (correction dÃ©sactivÃ©e : shift.difference est immuable)
                 requestIdleCallback(() => {
                     if (cancelled)
                         return;
@@ -574,7 +566,7 @@ export default function Shifts() {
         };
         initializeData();
         return () => { cancelled = true; };
-    }, [loadCashiers, isOnline, refreshSalesFromBackend]);
+    }, [loadCashiers, isOnline, refreshSalesFromBackend, refreshLocalSalesCache]);
     // Map de lookup caissiers par ID (O(1) au lieu de O(N))
     const cashierById = useMemo(() => {
         const m = new Map<string, any>();
@@ -642,10 +634,10 @@ export default function Shifts() {
                 difference: number | null;
             }> = {};
             const encaissesResults: Record<string, number> = {};
-            // Pour les shifts ouverts, lire les ventes fraîches depuis IndexedDB afin
-            // d'éviter qu'un cache de page ne garde un total obsolète.
-            let allSales = hasOpenShifts ? [] : [];
-            if (hasOpenShifts) {
+            // Lire les ventes fraîches depuis le cache alimenté à l'ouverture de la page.
+            // Si le cache n'est pas encore prêt, tomber sur IndexedDB pour éviter les montants vides.
+            let allSales = salesCache.current || [];
+            if (hasOpenShifts || !salesCacheTimestamp.current) {
                 const db = await getDB();
                 allSales = await db.getAll('sales');
                 salesCache.current = allSales;
@@ -1178,9 +1170,9 @@ export default function Shifts() {
     };
     const updatePendingSyncCount = async (db: any) => {
         try {
-            const syncQueue = await db.getAll('syncQueue');
-            const shiftsPendingOps = syncQueue.filter(op => op.table === 'shifts' && op.storeId === user?.storeId);
-            setPendingSyncCount(shiftsPendingOps.length);
+            const { getPendingSyncCount } = await import('@/lib/sync');
+            const count = await getPendingSyncCount();
+            setPendingSyncCount(count || 0);
         }
         catch (error) {
             setPendingSyncCount(0);
@@ -1499,6 +1491,14 @@ export default function Shifts() {
             }
             // Sauvegarder localement d'abord
             await db.put('shifts', updatedShift);
+            await queueSyncOp({
+                url: `${BACKEND_BASE}/api/shifts.php`,
+                method: 'PUT',
+                table: 'shifts',
+                storeId: updatedShift.storeId,
+                data: updatedShift,
+            });
+            const shiftSyncPromise = forceSyncNow().catch(() => ({ success: false }));
             persistClosedShiftMarker(updatedShift);
             persistInactiveShiftCache(updatedShift.userId, updatedShift.storeId, updatedShift);
             // Mettre à jour l'état UI immédiatement — ne pas attendre email/sync
@@ -1667,37 +1667,8 @@ export default function Shifts() {
                 }
                 catch (e) {
                 }
-                // Si en ligne, synchroniser immÃ©diatement avec le backend
-                if (isOnline) {
-                    try {
-                        const response = await fetch(`${BACKEND_BASE}/api/shifts.php`, {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(updatedShift)
-                        });
-                        if (!response.ok) {
-                            throw new Error(`Erreur backend: ${response.status}`);
-                        }
-                    }
-                    catch (error) {
-                        // Mettre en file via performSyncOp (gÃ¨re mise en file si offline)
-                        await performSyncOp({
-                            url: `${BACKEND_BASE}/api/shifts.php`,
-                            method: 'PUT',
-                            data: updatedShift
-                        });
-                    }
-                }
-                else {
-                    // Hors ligne : mettre en file via performSyncOp
-                    await performSyncOp({
-                        url: `${BACKEND_BASE}/api/shifts.php`,
-                        method: 'PUT',
-                        data: updatedShift
-                    });
-                }
+                await shiftSyncPromise;
+                await updatePendingSyncCount(db);
             })();
             return;
         }

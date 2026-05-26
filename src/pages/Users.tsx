@@ -603,7 +603,8 @@ export default function Users() {
         return names; // return array of names; rendering will handle empty case
     };
     const goToNextUserStep = () => {
-        if (!formData.username.trim() || !formData.phone.trim() || !formData.password.trim()) {
+        const requiresPassword = !editingUser;
+        if (!formData.username.trim() || !formData.phone.trim() || (requiresPassword && !formData.password.trim())) {
             toast.error('Complétez les champs obligatoires avant de continuer');
             return;
         }

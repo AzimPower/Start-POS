@@ -19,7 +19,7 @@ import * as NativePrinter from '@/lib/nativePrinter';
 import { getStoredReceiptPaper } from '@/lib/receiptPaper';
 import { assignReceiptMetadata, formatReceiptNumber } from '@/lib/receiptNumber';
 import { buildBypassUrl, mergeBackendSalesIntoLocalDb } from '@/lib/salesSync';
-import { hasPendingStockOperations, mergeBackendShifts, resolveUserOpenShift } from '@/lib/sync';
+import { forceSyncNow, hasPendingStockOperations, mergeBackendShifts, queueSyncOp, resolveUserOpenShift } from '@/lib/sync';
 import { notifyStockThresholdChange } from '@/lib/storeAdminNotifications';
 import { BACKEND_BASE } from '@/lib/backend';
 import { getReceiptItemDisplayTotal } from '@/lib/receiptAmounts';
@@ -1104,6 +1104,16 @@ export default function POS() {
             else {
                 await db.put('sales', sale);
             }
+            const saleSyncOp = {
+                url: `${BACKEND_BASE}/api/sales.php`,
+                method: 'POST',
+                table: 'sales',
+                storeId: sale.storeId,
+                data: sale,
+            };
+            await queueSyncOp(saleSyncOp);
+            await updatePendingSyncCount();
+            const saleSyncPromise = forceSyncNow().catch(() => ({ success: false }));
             // 3. Affichage immédiat du reçu et reset UI
             let paymentDetails = [];
             if (sale.paymentMethod === 'mixed') {
@@ -1269,14 +1279,14 @@ export default function POS() {
                 }
                 catch (err) {
                 }
-                const syncResult = await performSyncOp({
-                    url: `${BACKEND_BASE}/api/sales.php`,
-                    method: 'POST',
-                    data: sale,
-                });
+                const syncResult = await saleSyncPromise;
+                const pendingAfterSync = await import('@/lib/sync')
+                    .then(({ getPendingSyncCount }) => getPendingSyncCount())
+                    .catch(() => 0);
+                setPendingSyncCount(pendingAfterSync || 0);
                 toast.success(opts?.draft
                     ? 'Brouillon enregistré'
-                    : syncResult.success
+                    : syncResult.success && (pendingAfterSync || 0) === 0
                         ? 'Vente validée et synchronisée'
                         : 'Vente validée (synchronisation en attente)');
             })();

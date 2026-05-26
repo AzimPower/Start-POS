@@ -5,6 +5,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import NotificationBell from '@/components/NotificationBell';
 import { refreshAllFromBackend, forceSyncNow } from '@/lib/sync';
+import { getDB } from '@/lib/db';
+import { BACKEND_BASE } from '@/lib/backend';
 import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, Clock, Store, UserCircle, FileText, DollarSign, AlertTriangle, Bell, Wifi, ChevronDown, CreditCard, Gift, Wallet } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
@@ -16,6 +18,7 @@ export default function Layout({ children }: LayoutProps) {
     const { user, logout } = useAuth();
     const network = useNetwork({ notifyOnStatusChange: true });
     const [isFullSyncing, setIsFullSyncing] = useState(false);
+    const [storeLogo, setStoreLogo] = useState<string | null>(null);
 
     // Handler pour synchronisation complete (queue + refresh)
     const handleFullSync = async () => {
@@ -36,6 +39,51 @@ export default function Layout({ children }: LayoutProps) {
 
     const navigate = useNavigate();
     const location = useLocation();
+
+    const resolveLogoUrl = (logo?: string | null) => {
+        if (!logo)
+            return null;
+        if (/^(https?:|data:|blob:)/i.test(logo))
+            return logo;
+        return `${BACKEND_BASE}/${String(logo).replace(/^\/+/, '')}`;
+    };
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadStoreLogo = async () => {
+            if (!user?.storeId) {
+                setStoreLogo(null);
+                return;
+            }
+            try {
+                const db = await getDB();
+                const store = await db.get('stores', user.storeId);
+                if (!cancelled) {
+                    setStoreLogo(resolveLogoUrl(store?.logo));
+                }
+            }
+            catch (e) {
+                if (!cancelled) {
+                    setStoreLogo(null);
+                }
+            }
+        };
+        const handleStoreUpdated = (event: Event) => {
+            const updatedStore = (event as CustomEvent<{ store?: any }>).detail?.store;
+            if (!updatedStore || updatedStore.id === user.storeId) {
+                setStoreLogo(resolveLogoUrl(updatedStore?.logo));
+                if (!updatedStore) {
+                    void loadStoreLogo();
+                }
+            }
+        };
+        void loadStoreLogo();
+        window.addEventListener('pos:store-updated', handleStoreUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener('pos:store-updated', handleStoreUpdated);
+        };
+    }, [user?.storeId]);
 
     // Save the last active path so we can restore it after PIN unlock.
     useEffect(() => {
@@ -102,12 +150,19 @@ export default function Layout({ children }: LayoutProps) {
         window.location.href = '/#/login';
         setMenuOpen(false);
     };
+    const StoreLogoMark = ({ className = 'w-10 h-10', iconClassName = 'w-5 h-5' }: { className?: string; iconClassName?: string }) => (
+        <div className={`${className} bg-gradient-primary rounded-xl flex items-center justify-center overflow-hidden shadow-md ring-1 ring-white/10`}>
+          {storeLogo ? (
+            <img src={storeLogo} alt="Logo magasin" className="h-full w-full object-cover" onError={() => setStoreLogo(null)}/>
+          ) : (
+            <ShoppingCart className={`${iconClassName} text-primary-foreground`}/>
+          )}
+        </div>
+    );
     const NavContent = () => (<nav className="flex flex-col h-full overflow-y-auto">
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center shadow-md ring-1 ring-white/10">
-            <ShoppingCart className="w-5 h-5 text-primary-foreground"/>
-          </div>
+          <StoreLogoMark />
           <div>
             <h2 className="font-bold text-sidebar-foreground">START POS</h2>
             <p className="text-xs text-sidebar-foreground/60">
@@ -199,9 +254,7 @@ export default function Layout({ children }: LayoutProps) {
 
             {/* Center: App title */}
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
-                <ShoppingCart className="w-4 h-4 text-white"/>
-              </div>
+              <StoreLogoMark className="w-7 h-7 rounded-lg bg-white/20 shadow-none" iconClassName="w-4 h-4"/>
               <span className="font-bold text-white text-base tracking-wide">Systeme POS</span>
             </div>
 
